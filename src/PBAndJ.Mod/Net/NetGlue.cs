@@ -134,6 +134,37 @@ namespace PBAndJ.Mod.Net
             return "[pb-and-j] local ready posted";
         }
 
+        // --- hooks used by the execution patches ---
+
+        internal static bool HasSession => runtime != null && !killed;
+
+        internal static void PostLocalReady()
+        {
+            runtime?.Post(new LocalReadyEvent());
+        }
+
+        internal static void PostLocalTurnComplete()
+        {
+            if (runtime == null)
+            {
+                return;
+            }
+            runtime.Post(new LocalTurnCompleteEvent(new CombatGameBridge().ComputeStateDigest()));
+        }
+
+        /// <summary>
+        /// A turn advanced without going through the barrier — scenario content
+        /// calling CombatForceExecution, or the debug console. The host treats
+        /// it as authoritative rather than fighting it.
+        /// </summary>
+        internal static void NotifyExternalTurnAdvance(int from, int to)
+        {
+            if (runtime?.Session is HostSession)
+            {
+                Debug.Log($"[pb-and-j] turn advanced outside the barrier ({from} -> {to}) — scenario or console");
+            }
+        }
+
         // --- the pump ---
 
         internal static void Pump()

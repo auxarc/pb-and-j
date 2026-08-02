@@ -64,14 +64,35 @@ namespace PBAndJ.Mod.Net
 
         public IReadOnlyList<OrderPayload> CaptureLocalOrders()
         {
-            // 4e: OrderMapper turns ActionEntity components into OrderPayload.
-            return new List<OrderPayload>();
+            var orders = new List<OrderPayload>();
+            if (!InCombat)
+            {
+                return orders;
+            }
+
+            // Same group query and skip predicate as the M2 action dump.
+            var group = Contexts.sharedInstance.action.GetGroup(ActionMatcher
+                .AllOf(ActionMatcher.ActionOwner, ActionMatcher.Duration, ActionMatcher.StartTime)
+                .NoneOf(ActionMatcher.Destroyed));
+
+            foreach (var action in group.GetEntities())
+            {
+                if (action.CompletedAction || action.isDisposed || action.AIAction)
+                {
+                    continue;
+                }
+                var order = OrderMapper.Capture(action);
+                if (order != null)
+                {
+                    orders.Add(order);
+                }
+            }
+            return orders;
         }
 
         public OrderApplyResult ApplyOrder(OrderPayload order)
         {
-            // 4e: transcription of DataManagerSave.LoadToECSCombat.
-            return OrderApplyResult.UnknownUnit;
+            return InCombat ? OrderMapper.Apply(order) : OrderApplyResult.UnknownUnit;
         }
 
         public bool CommitTurn()
