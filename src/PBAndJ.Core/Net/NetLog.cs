@@ -354,6 +354,74 @@ namespace PBAndJ.Core.Net
                 captured, cap);
         }
 
+        /// <summary>
+        /// Announces that the listener is reachable from off this machine.
+        /// </summary>
+        /// <remarks>
+        /// A warning, not an info line, and worded so it cannot be mistaken for
+        /// routine. Everything before M7 bound loopback only; nobody should
+        /// discover after the fact that their game was accepting connections
+        /// from the network.
+        /// </remarks>
+        public static string HostListeningOpenly(string bindAddress, int port)
+        {
+            RequireText(bindAddress, nameof(bindAddress));
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "OPEN LISTENER on {0}:{1} — reachable from outside this machine. "
+                + "A passphrase is required, but it travels in the clear over plain TCP. "
+                + "Stop it with pbj.net-stop when you are done.",
+                bindAddress, port);
+        }
+
+        public static string HandshakeTimedOut(int peerId, double seconds)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "socket #{0} connected but never handshook within {1:F0}s — dropping", peerId, seconds);
+        }
+
+        // --- keyframes (M6) ---
+
+        public static string KeyframesSent(
+            int turn, int trackCount, int keyCount, float windowStart, float windowEnd, int peerCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} keyframes | {1} tracks, {2} keys | {3:F2}s-{4:F2}s | broadcast to {5} peer{6}",
+                turn, trackCount, keyCount, windowStart, windowEnd, peerCount, Plural(peerCount));
+        }
+
+        public static string KeyframesReceived(
+            int turn, int trackCount, int keyCount, float windowStart, float windowEnd)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} keyframes received | {1} tracks, {2} keys | {3:F2}s of motion",
+                turn, trackCount, keyCount, windowEnd - windowStart);
+        }
+
+        /// <summary>
+        /// The recorder had nothing. Informational, not a warning.
+        /// </summary>
+        /// <remarks>
+        /// Expected whenever the scenario runs with prediction disabled, since
+        /// the game only starts its replay recorder when prediction is on. The
+        /// turn still completes and snapshot correction still lands.
+        /// </remarks>
+        public static string KeyframesUnavailable()
+        {
+            return Prefix + "no keyframes recorded this turn — snapshot correction only";
+        }
+
+        public static string KeyframesClamped(int captured, int cap, int thinned)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "keyframes clamped: {0} tracks captured, only {1} fit; {2} track(s) thinned",
+                captured, cap, thinned);
+        }
+
         // --- keepalive ---
 
         public static string PeerTimedOut(int peerId, string? name, double silentSeconds)

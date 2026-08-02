@@ -268,6 +268,16 @@ namespace PBAndJ.Core.Net
                     bridge.ClearLocalOrders();
                     break;
 
+                case PlayKeyframesEffect play:
+                    // Nothing comes back, unlike the snapshot above: playback is
+                    // presentation and there is no correctness claim to verify.
+                    bridge.PlayKeyframes(play.Turn, play.Capture);
+                    break;
+
+                case StopKeyframesEffect:
+                    bridge.StopKeyframes();
+                    break;
+
                 case SetExecutionLockEffect setLock:
                     bridge.SetExecutionLocked(setLock.Locked);
                     break;

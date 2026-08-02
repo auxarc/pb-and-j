@@ -11,7 +11,7 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void Hello_RetainsFields()
         {
-            var m = new HelloMessage(PbjProtocol.Magic, 1, "0.2.0", "ally");
+            var m = new HelloMessage(PbjProtocol.Magic, 1, "0.2.0", "ally", null, null);
             Assert.Equal(PbjMessageType.Hello, m.Type);
             Assert.Equal(PbjProtocol.Magic, m.Magic);
             Assert.Equal(1, m.ProtocolVersion);
@@ -24,7 +24,7 @@ namespace PBAndJ.Core.Tests.Net
         {
             // A guard here would turn "peer sent an empty name" into a decode
             // failure and a disconnect, instead of a Reject{InvalidName}.
-            var m = new HelloMessage(0, 0, null, "   ");
+            var m = new HelloMessage(0, 0, null, "   ", null, null);
             Assert.Null(m.ModVersion);
             Assert.Equal("   ", m.PlayerName);
         }

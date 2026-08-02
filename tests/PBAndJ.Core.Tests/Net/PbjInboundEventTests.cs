@@ -147,15 +147,26 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void LocalTurnComplete_RetainsFields()
         {
-            var e = new LocalTurnCompleteEvent("3f9c1a04", null);
+            var e = new LocalTurnCompleteEvent("3f9c1a04", null,
+                new KeyframeCapture(15f, 20f, new[] { new UnitTrack("unit_a", null) }));
             Assert.Equal(PbjInboundEventKind.LocalTurnComplete, e.Kind);
             Assert.Equal("3f9c1a04", e.Digest);
+            Assert.Equal(15f, e.Keyframes.WindowStart);
+            Assert.Single(e.Keyframes.Tracks);
         }
 
         [Fact]
         public void LocalTurnComplete_WithNullDigest_IsAccepted()
         {
-            Assert.Null(new LocalTurnCompleteEvent(null, null).Digest);
+            Assert.Null(new LocalTurnCompleteEvent(null, null, null).Digest);
+        }
+
+        // A turn with nothing recorded is normal, not an error — the snapshot
+        // still travels and still corrects.
+        [Fact]
+        public void LocalTurnComplete_WithNoKeyframes_ReportsAnEmptyCapture()
+        {
+            Assert.Empty(new LocalTurnCompleteEvent("d", null, null).Keyframes.Tracks);
         }
     }
 }

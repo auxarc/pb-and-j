@@ -23,7 +23,7 @@ namespace PBAndJ.Core.Tests.Net
 
         public static IEnumerable<object[]> AllMessages()
         {
-            yield return new object[] { new HelloMessage(PbjProtocol.Magic, 1, "0.2.0", "ally") };
+            yield return new object[] { new HelloMessage(PbjProtocol.Magic, 1, "0.2.0", "ally", null, null) };
             yield return new object[] { new WelcomeMessage(1, "s", 1, "host", new[] { new PeerInfo(0, "host") }, 3, "tok") };
             yield return new object[] { new RejectMessage(RejectReason.SessionFull, "full") };
             yield return new object[] { new PeerJoinedMessage(2, "ally2") };
@@ -48,13 +48,28 @@ namespace PBAndJ.Core.Tests.Net
             yield return new object[] { new SnapshotMessage(3, "3f9c1a04", new[] { Snapshot("unit_a") }) };
             yield return new object[]
             {
-                new RejoinMessage(PbjProtocol.Magic, 2, "0.2.0", "ally", "7f3a91", 1, "tok"),
+                new RejoinMessage(PbjProtocol.Magic, 2, "0.2.0", "ally", "7f3a91", 1, "tok", null, null),
+            };
+            yield return new object[]
+            {
+                new KeyframesMessage(3, 15f, 20f, new[] { Track("unit_a", 2) }),
             };
         }
 
         private static UnitSnapshot Snapshot(string name) =>
             new UnitSnapshot(name, new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
                 new Vec3(0f, 0f, 1f), 0.75f, false, 0f);
+
+        private static UnitTrack Track(string name, int keys)
+        {
+            var frames = new TransformKey[keys];
+            for (var i = 0; i < keys; i++)
+            {
+                frames[i] = new TransformKey(
+                    i * 0.1f, new Vec3(i, 0f, 0f), new Vec4(0f, 0f, 0f, 1f));
+            }
+            return new UnitTrack(name, frames);
+        }
 
         [Theory]
         [MemberData(nameof(AllMessages))]
@@ -75,7 +90,7 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void Encode_Hello_ProducesExactBytes()
         {
-            var bytes = PbjMessageCodec.Encode(new HelloMessage(PbjProtocol.Magic, 1, "a", "b"));
+            var bytes = PbjMessageCodec.Encode(new HelloMessage(PbjProtocol.Magic, 1, "a", "b", "c", "d"));
             var expected = new byte[]
             {
                 0x01,                               // type Hello
@@ -83,14 +98,44 @@ namespace PBAndJ.Core.Tests.Net
                 0x01, 0x00, 0x00, 0x00,             // protocolVersion 1
                 0x01, 0x00, 0x00, 0x00, 0x61,       // modVersion "a"
                 0x01, 0x00, 0x00, 0x00, 0x62,       // playerName "b"
+                0x01, 0x00, 0x00, 0x00, 0x63,       // gameBuild "c"
+                0x01, 0x00, 0x00, 0x00, 0x64,       // passphrase "d"
             };
             Assert.Equal(expected, bytes);
         }
 
         [Fact]
+        public void RoundTrip_Hello_PreservesTheBuildAndPassphrase()
+        {
+            var m = RoundTrip(new HelloMessage(
+                PbjProtocol.Magic, PbjProtocol.Version, "0.3.0", "ally", "2.2.2-b8339", "hunter2"));
+            Assert.Equal("2.2.2-b8339", m.GameBuild);
+            Assert.Equal("hunter2", m.Passphrase);
+        }
+
+        // The harness has no game and sets no passphrase against a local host.
+        [Fact]
+        public void RoundTrip_Hello_WithNoBuildOrPassphrase_KeepsThemNull()
+        {
+            var m = RoundTrip(new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.3.0", "ally", null, null));
+            Assert.Null(m.GameBuild);
+            Assert.Null(m.Passphrase);
+        }
+
+        [Fact]
+        public void RoundTrip_Rejoin_PreservesTheBuildAndPassphrase()
+        {
+            var m = RoundTrip(new RejoinMessage(
+                PbjProtocol.Magic, PbjProtocol.Version, "0.3.0", "ally", "7f3a91", 1, "tok",
+                "2.2.2-b8339", "hunter2"));
+            Assert.Equal("2.2.2-b8339", m.GameBuild);
+            Assert.Equal("hunter2", m.Passphrase);
+        }
+
+        [Fact]
         public void RoundTrip_Hello_PreservesFields()
         {
-            var m = RoundTrip(new HelloMessage(PbjProtocol.Magic, 1, "0.2.0", "ally"));
+            var m = RoundTrip(new HelloMessage(PbjProtocol.Magic, 1, "0.2.0", "ally", null, null));
             Assert.Equal(PbjProtocol.Magic, m.Magic);
             Assert.Equal(1, m.ProtocolVersion);
             Assert.Equal("0.2.0", m.ModVersion);
@@ -397,6 +442,126 @@ namespace PBAndJ.Core.Tests.Net
                 $"a full snapshot was {bytes.Length} bytes, more than 1/16th of the frame limit");
         }
 
+        // --- keyframes (M6) ---
+
+        [Fact]
+        public void Encode_Keyframes_ProducesExactBytes()
+        {
+            var bytes = PbjMessageCodec.Encode(new KeyframesMessage(1, 0f, 2f, new[]
+            {
+                new UnitTrack("a", new[]
+                {
+                    new TransformKey(0f, new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f)),
+                }),
+            }));
+
+            var expected = new byte[]
+            {
+                0x13,                               // type Keyframes (19)
+                0x01, 0x00, 0x00, 0x00,             // turn 1
+                0x00, 0x00, 0x00, 0x00,             // windowStart 0
+                0x00, 0x00, 0x00, 0x40,             // windowEnd 2
+                0x01, 0x00, 0x00, 0x00,             // one track
+                0x01, 0x00, 0x00, 0x00, 0x61,       // name "a"
+                0x01, 0x00, 0x00, 0x00,             // one key
+                0x00, 0x00, 0x00, 0x00,             // time 0
+                0x00, 0x00, 0x80, 0x3F,             // position.x 1
+                0x00, 0x00, 0x00, 0x40,             // position.y 2
+                0x00, 0x00, 0x40, 0x40,             // position.z 3
+                0x00, 0x00, 0x00, 0x00,             // rotation.x 0
+                0x00, 0x00, 0x00, 0x00,             // rotation.y 0
+                0x00, 0x00, 0x00, 0x00,             // rotation.z 0
+                0x00, 0x00, 0x80, 0x3F,             // rotation.w 1
+            };
+            Assert.Equal(expected, bytes);
+        }
+
+        [Fact]
+        public void RoundTrip_Keyframes_PreservesEveryKeyOfEveryTrack()
+        {
+            var m = RoundTrip(new KeyframesMessage(4, 15f, 20f, new[]
+            {
+                new UnitTrack("pb_mech_01", new[]
+                {
+                    new TransformKey(15f, new Vec3(1.5f, -2.25f, 3f), new Vec4(0.1f, 0.2f, 0.3f, 0.4f)),
+                    new TransformKey(15.1f, new Vec3(-9f, 0f, 0.125f), new Vec4(1f, 0f, 0f, 0f)),
+                }),
+                new UnitTrack("pb_mech_02", new TransformKey[0]),
+            }));
+
+            Assert.Equal(4, m.Turn);
+            Assert.Equal(15f, m.WindowStart);
+            Assert.Equal(20f, m.WindowEnd);
+            Assert.Equal(2, m.Tracks.Count);
+
+            var moving = m.Tracks[0];
+            Assert.Equal("pb_mech_01", moving.Name);
+            Assert.Equal(2, moving.Transforms.Count);
+            Assert.Equal(15f, moving.Transforms[0].Time);
+            Assert.Equal(1.5f, moving.Transforms[0].Position.X);
+            Assert.Equal(-2.25f, moving.Transforms[0].Position.Y);
+            Assert.Equal(3f, moving.Transforms[0].Position.Z);
+            Assert.Equal(0.1f, moving.Transforms[0].Rotation.X);
+            Assert.Equal(0.4f, moving.Transforms[0].Rotation.W);
+            Assert.Equal(15.1f, moving.Transforms[1].Time);
+            Assert.Equal(0.125f, moving.Transforms[1].Position.Z);
+            Assert.Equal(1f, moving.Transforms[1].Rotation.X);
+
+            // A unit with nothing recorded still travels, so the client can tell
+            // "no motion" from "not in this combat".
+            Assert.Equal("pb_mech_02", m.Tracks[1].Name);
+            Assert.Empty(m.Tracks[1].Transforms);
+        }
+
+        [Fact]
+        public void RoundTrip_KeyframesWithNoTracks_Survives()
+        {
+            Assert.Empty(RoundTrip(new KeyframesMessage(1, 0f, 5f, null)).Tracks);
+        }
+
+        [Fact]
+        public void Decode_KeyframesWithTooManyTracks_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.Keyframes);
+            writer.WriteInt32(1);
+            writer.WriteSingle(0f);
+            writer.WriteSingle(5f);
+            writer.WriteInt32(PbjMessageCodec.MaxTracksPerKeyframes + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        [Fact]
+        public void Decode_TrackWithTooManyKeys_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.Keyframes);
+            writer.WriteInt32(1);
+            writer.WriteSingle(0f);
+            writer.WriteSingle(5f);
+            writer.WriteInt32(1);
+            writer.WriteString("a");
+            writer.WriteInt32(PbjMessageCodec.MaxKeysPerTrack + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        // The size claim the wire budget rests on: keyframes are two orders of
+        // magnitude heavier than a snapshot, so the caps have to be shown to fit
+        // rather than assumed to.
+        [Fact]
+        public void Encode_KeyframesAtBothCaps_StaysUnderTheFrameLimit()
+        {
+            var tracks = new UnitTrack[PbjMessageCodec.MaxTracksPerKeyframes];
+            for (var i = 0; i < tracks.Length; i++)
+            {
+                tracks[i] = Track("pb_mech_" + i.ToString("00"), PbjMessageCodec.MaxKeysPerTrack);
+            }
+
+            var bytes = PbjMessageCodec.Encode(new KeyframesMessage(1, 0f, 5f, tracks));
+            Assert.True(bytes.Length < PbjRuntime.MaxFrameLength,
+                $"a full keyframe message was {bytes.Length} bytes, over the frame limit");
+        }
+
         [Fact]
         public void RoundTrip_Welcome_PreservesTheResumeToken()
         {
@@ -407,7 +572,7 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void RoundTrip_Rejoin_PreservesEveryField()
         {
-            var m = RoundTrip(new RejoinMessage(PbjProtocol.Magic, 2, "0.2.0", "ally", "7f3a91", 4, "tok"));
+            var m = RoundTrip(new RejoinMessage(PbjProtocol.Magic, 2, "0.2.0", "ally", "7f3a91", 4, "tok", null, null));
             Assert.Equal(PbjProtocol.Magic, m.Magic);
             Assert.Equal(2, m.ProtocolVersion);
             Assert.Equal("0.2.0", m.ModVersion);

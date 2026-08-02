@@ -38,6 +38,8 @@ namespace PBAndJ.Peer
                 ("send order", RunSendOrder),
                 ("backpressure", RunBackpressure),
                 ("reconnect", RunReconnect),
+                ("keyframe stream", RunKeyframeStream),
+                ("remote guards", RunRemoteGuards),
             };
 
             foreach (var scenario in scenarios)
@@ -63,7 +65,7 @@ namespace PBAndJ.Peer
             var hostMailbox = new PbjMailbox(4096);
             var hostTransport = new TcpHostTransport(hostMailbox, IPAddress.Loopback, 0);
             hostTransport.Start();
-            var hostSession = new HostSession("host", "selftest", 3, hostBridge, "secret");
+            var hostSession = new HostSession("host", "selftest", 3, hostBridge, "secret", SessionRequirements.None);
             var host = new PbjRuntime(hostTransport, hostBridge, new PrefixedLog("host"), hostMailbox, hostSession);
             Console.WriteLine($"[selftest] host listening on 127.0.0.1:{hostTransport.Port}");
 
@@ -205,7 +207,7 @@ namespace PBAndJ.Peer
                     return 1;
                 }
 
-                host.Post(new LocalTurnCompleteEvent(hostDigest, hostBridge.CaptureSnapshot()));
+                host.Post(new LocalTurnCompleteEvent(hostDigest, hostBridge.CaptureSnapshot(), hostBridge.CaptureKeyframes()));
 
                 if (!WaitFor("turn completed and client back to planning",
                         () => clientSession.State == ClientSessionState.Planning && clientSession.Turn == 4))
@@ -332,6 +334,401 @@ namespace PBAndJ.Peer
         }
 
         /// <summary>
+        /// The guards that only matter once a peer is not on this machine.
+        /// </summary>
+        /// <remarks>
+        /// Every rejection here would otherwise surface as a session that
+        /// connects fine and then diverges on every turn — the single worst thing
+        /// to debug with a friend waiting at the other end of the country. Each
+        /// one is checked over real sockets against the real host session.
+        /// </remarks>
+        private static int RunRemoteGuards()
+        {
+            var bridge = new ScriptedGameBridge();
+            var mailbox = new PbjMailbox(4096);
+            var transport = new TcpHostTransport(mailbox, IPAddress.Loopback, 0);
+            transport.Start();
+            var session = new HostSession(
+                "host", "guards", 3, bridge, "secret",
+                new SessionRequirements("0.3.0", "b8339", "hunter2"));
+            var host = new PbjRuntime(transport, bridge, new PrefixedLog("host"), mailbox, session);
+
+            var clock = Stopwatch.StartNew();
+            var skew = 0.0;
+            double Now() => clock.Elapsed.TotalSeconds + skew;
+
+            // One connection attempt, pumped to completion, reporting whatever
+            // the host said back.
+            RejectReason? Attempt(string label, HelloMessage hello)
+            {
+                using var peer = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
+                {
+                    NoDelay = true,
+                };
+                peer.Connect(IPAddress.Loopback, transport.Port);
+                var frame = FrameEncoder.Encode(PbjMessageCodec.Encode(hello));
+                peer.Send(frame);
+
+                var decoder = new FrameDecoder(PbjRuntime.MaxFrameLength);
+                var buffer = new byte[4096];
+                var deadline = clock.Elapsed.TotalSeconds + TimeoutSeconds;
+                while (clock.Elapsed.TotalSeconds < deadline)
+                {
+                    host.Pump(Now());
+                    if (peer.Available > 0)
+                    {
+                        var read = peer.Receive(buffer);
+                        foreach (var payload in decoder.Feed(buffer, 0, read))
+                        {
+                            switch (PbjMessageCodec.Decode(payload))
+                            {
+                                case RejectMessage reject:
+                                    Console.WriteLine($"[selftest] OK   {label}: {reject.Reason}");
+                                    return reject.Reason;
+                                case WelcomeMessage:
+                                    Console.WriteLine($"[selftest] OK   {label}: welcomed");
+                                    return null;
+                            }
+                        }
+                    }
+                    Thread.Sleep(5);
+                }
+                Console.WriteLine($"[selftest] FAIL {label}: host never answered");
+                return RejectReason.None;
+            }
+
+            HelloMessage Hello(
+                string name, string mod = "0.3.0", string? build = "b8339", string? pass = "hunter2") =>
+                new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, mod, name, build, pass);
+
+            try
+            {
+                if (Attempt("wrong passphrase", Hello("a", pass: "letmein")) != RejectReason.BadPassphrase)
+                {
+                    return 1;
+                }
+
+                // Checked before anything else, so a caller that cannot get in
+                // learns nothing about our build.
+                if (Attempt("wrong passphrase AND wrong build", Hello("b", mod: "0.0.1", build: "b0", pass: "no"))
+                    != RejectReason.BadPassphrase)
+                {
+                    return 1;
+                }
+
+                if (Attempt("wrong mod version", Hello("c", mod: "0.2.0")) != RejectReason.ModVersionMismatch)
+                {
+                    return 1;
+                }
+
+                if (Attempt("wrong game build", Hello("d", build: "b0001")) != RejectReason.GameBuildMismatch)
+                {
+                    return 1;
+                }
+
+                // A peer with no game to report is the harness itself, and has to
+                // stay welcome — it is how every in-game gate is run.
+                if (Attempt("no game build reported", Hello("e", build: null)) != null)
+                {
+                    return 1;
+                }
+
+                if (Attempt("everything matching", Hello("f")) != null)
+                {
+                    return 1;
+                }
+
+                // A socket that connects and says nothing must be reaped. Before
+                // M7 nothing timed these out, which was survivable on loopback
+                // and is not once the port is reachable.
+                using (var mute = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp))
+                {
+                    mute.Connect(IPAddress.Loopback, transport.Port);
+
+                    // Let the accept actually land before moving the clock. The
+                    // listener accepts on its own thread, so skewing first would
+                    // start this socket's deadline from the post-skew instant and
+                    // the test would wait forever for a drop that is not due yet.
+                    var accepted = clock.Elapsed.TotalSeconds + 0.5;
+                    while (clock.Elapsed.TotalSeconds < accepted)
+                    {
+                        host.Pump(Now());
+                        Thread.Sleep(5);
+                    }
+
+                    skew += PbjProtocol.HandshakeTimeoutSeconds + 1;
+                    var dropped = false;
+                    var deadline = clock.Elapsed.TotalSeconds + TimeoutSeconds;
+                    while (!dropped && clock.Elapsed.TotalSeconds < deadline)
+                    {
+                        host.Pump(Now());
+                        // Poll rather than read: a closed peer reports readable
+                        // with nothing to read.
+                        dropped = mute.Poll(1000, SelectMode.SelectRead) && mute.Available == 0;
+                        Thread.Sleep(5);
+                    }
+                    if (!dropped)
+                    {
+                        Console.WriteLine("[selftest] FAIL a silent socket was never dropped");
+                        return 1;
+                    }
+                    Console.WriteLine("[selftest] OK   a socket that never handshook was dropped");
+                }
+
+                Console.WriteLine("[selftest] PASS");
+                return 0;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"[selftest] FAIL {e.GetType().Name}: {e.Message}");
+                return 1;
+            }
+            finally
+            {
+                host.Stop();
+            }
+        }
+
+        /// <summary>
+        /// A turn's motion crossing the wire and being reconstructed.
+        /// </summary>
+        /// <remarks>
+        /// The tracks here are synthetic, and that is a real limit of this
+        /// scenario: it pins the protocol, the codec and the sampler, but it
+        /// cannot prove that a track built from the game's own
+        /// <c>CombatReplayHelper</c> is correct. <c>pbj.replay-last</c> in the
+        /// running game is the real-data half — it round-trips a genuine capture
+        /// through this same codec before playing it. Neither gate is sufficient
+        /// alone.
+        /// <para>
+        /// What it does prove is the invariant everything else rests on: the last
+        /// key of every track lands exactly where the snapshot says the unit
+        /// ended, so presenting the motion cannot fight the correction.
+        /// </para>
+        /// </remarks>
+        private static int RunKeyframeStream()
+        {
+            var hostBridge = new ScriptedGameBridge { CurrentTurn = 3 };
+            var hostMailbox = new PbjMailbox(4096);
+            var hostTransport = new TcpHostTransport(hostMailbox, IPAddress.Loopback, 0);
+            hostTransport.Start();
+            var hostSession = new HostSession("host", "selftest", 3, hostBridge, "secret", SessionRequirements.None);
+            var host = new PbjRuntime(hostTransport, hostBridge, new PrefixedLog("host"), hostMailbox, hostSession);
+
+            var clientBridge = new ScriptedGameBridge { CurrentTurn = 3 };
+            var clientMailbox = new PbjMailbox(4096);
+            var clientTransport = new TcpClientTransport(clientMailbox);
+            var clientSession = new ClientSession("ally", "0.2.0", clientBridge);
+            var client = new PbjRuntime(
+                clientTransport, clientBridge, new PrefixedLog("ally"), clientMailbox, clientSession);
+
+            var clock = Stopwatch.StartNew();
+            double Now() => clock.Elapsed.TotalSeconds;
+
+            bool WaitFor(string what, Func<bool> condition)
+            {
+                var deadline = Now() + TimeoutSeconds;
+                while (Now() < deadline)
+                {
+                    host.Pump(Now());
+                    client.Pump(Now());
+                    if (condition())
+                    {
+                        Console.WriteLine($"[selftest] OK   {what}");
+                        return true;
+                    }
+                    Thread.Sleep(5);
+                }
+                Console.WriteLine($"[selftest] FAIL {what}");
+                return false;
+            }
+
+            try
+            {
+                clientTransport.Connect("127.0.0.1", hostTransport.Port);
+                if (!WaitFor("handshake completed",
+                        () => clientSession.State == ClientSessionState.Planning && hostSession.Peers.Count == 1))
+                {
+                    return 1;
+                }
+
+                // A real commit first: the host only reports a turn complete
+                // while it is executing one, so a scenario that skipped the
+                // barrier would silently assert nothing.
+                client.Post(new LocalReadyEvent());
+                if (!WaitFor("host recorded the client's Ready", () => hostSession.ReadyCount == 1))
+                {
+                    return 1;
+                }
+                host.Post(new LocalReadyEvent());
+                if (!WaitFor("turn committed and execution started",
+                        () => hostSession.State == HostSessionState.Executing))
+                {
+                    return 1;
+                }
+
+                // Move the host's world, then build a track per unit that walks
+                // from where it was to where it now is. The final key is read from
+                // the same state the snapshot is — the invariant real capture
+                // upholds by appending its last key from the snapshot's own read.
+                const float windowStart = 15f;
+                const float windowEnd = 20f;
+                var start = new Vec3(0f, 0f, 0f);
+                hostBridge.Units[0].Position = new Vec3(12.5f, 0f, -3.25f);
+                hostBridge.Units[0].Rotation = new Vec4(0f, 0.70710678f, 0f, 0.70710678f);
+
+                var tracks = new List<UnitTrack>();
+                foreach (var unit in hostBridge.Units)
+                {
+                    tracks.Add(new UnitTrack(unit.Name, new[]
+                    {
+                        new TransformKey(windowStart, start, new Vec4(0f, 0f, 0f, 1f)),
+                        new TransformKey((windowStart + windowEnd) / 2f,
+                            new Vec3(unit.Position.X / 2f, unit.Position.Y / 2f, unit.Position.Z / 2f),
+                            new Vec4(0f, 0f, 0f, 1f)),
+                        new TransformKey(windowEnd, unit.Position, unit.Rotation),
+                    }));
+                }
+                hostBridge.Keyframes = new KeyframeCapture(windowStart, windowEnd, tracks);
+
+                var hostDigest = hostBridge.ComputeStateDigest();
+                var snapshot = hostBridge.CaptureSnapshot();
+                host.Post(new LocalTurnCompleteEvent(hostDigest, snapshot, hostBridge.CaptureKeyframes()));
+
+                if (!WaitFor("client received the turn's keyframes", () => clientBridge.Played != null))
+                {
+                    return 1;
+                }
+
+                var played = clientBridge.Played!;
+                if (clientBridge.PlayedTurn != 3)
+                {
+                    Console.WriteLine($"[selftest] FAIL playback names turn {clientBridge.PlayedTurn}, not 3");
+                    return 1;
+                }
+                if (played.WindowStart != windowStart || played.WindowEnd != windowEnd)
+                {
+                    Console.WriteLine("[selftest] FAIL the playback window did not survive the wire");
+                    return 1;
+                }
+                if (played.Tracks.Count != tracks.Count)
+                {
+                    Console.WriteLine(
+                        $"[selftest] FAIL expected {tracks.Count} tracks, got {played.Tracks.Count}");
+                    return 1;
+                }
+
+                for (var i = 0; i < tracks.Count; i++)
+                {
+                    var sent = tracks[i];
+                    var got = played.Tracks[i];
+                    if (got.Name != sent.Name || got.Transforms.Count != sent.Transforms.Count)
+                    {
+                        Console.WriteLine($"[selftest] FAIL track {i} lost its name or its keys");
+                        return 1;
+                    }
+                    for (var k = 0; k < sent.Transforms.Count; k++)
+                    {
+                        var a = sent.Transforms[k];
+                        var b = got.Transforms[k];
+                        if (a.Time != b.Time
+                            || a.Position.X != b.Position.X || a.Position.Y != b.Position.Y
+                            || a.Position.Z != b.Position.Z
+                            || a.Rotation.X != b.Rotation.X || a.Rotation.Y != b.Rotation.Y
+                            || a.Rotation.Z != b.Rotation.Z || a.Rotation.W != b.Rotation.W)
+                        {
+                            Console.WriteLine($"[selftest] FAIL track {i} key {k} changed crossing the wire");
+                            return 1;
+                        }
+                    }
+                }
+                Console.WriteLine($"[selftest] OK   {played.Tracks.Count} tracks survived the wire key for key");
+
+                // The load-bearing assertion: sampling at the end of the window
+                // reproduces the snapshot exactly, so playback finishes where the
+                // correction already put the unit.
+                foreach (var unit in snapshot)
+                {
+                    UnitTrack? track = null;
+                    foreach (var candidate in played.Tracks)
+                    {
+                        if (candidate.Name == unit.Name)
+                        {
+                            track = candidate;
+                        }
+                    }
+                    if (track == null
+                        || !KeyframePlayback.TrySample(track, windowEnd, out var end, out var rotation))
+                    {
+                        Console.WriteLine($"[selftest] FAIL no playable track for {unit.Name}");
+                        return 1;
+                    }
+                    if (end.X != unit.Position.X || end.Y != unit.Position.Y || end.Z != unit.Position.Z
+                        || rotation.X != unit.Rotation.X || rotation.Y != unit.Rotation.Y
+                        || rotation.Z != unit.Rotation.Z || rotation.W != unit.Rotation.W)
+                    {
+                        Console.WriteLine(
+                            $"[selftest] FAIL {unit.Name} ends playback at {end.X},{end.Y},{end.Z} " +
+                            $"but the snapshot says {unit.Position.X},{unit.Position.Y},{unit.Position.Z}");
+                        return 1;
+                    }
+                }
+                Console.WriteLine("[selftest] OK   every track ends exactly where the snapshot says");
+
+                // And it is motion, not a constant: without this the check above
+                // would pass on a track that never moved at all.
+                UnitTrack? mover = null;
+                foreach (var candidate in played.Tracks)
+                {
+                    if (candidate.Name == hostBridge.Units[0].Name)
+                    {
+                        mover = candidate;
+                    }
+                }
+                if (!KeyframePlayback.TrySample(mover, windowStart, out var began, out _)
+                    || began.X == hostBridge.Units[0].Position.X)
+                {
+                    Console.WriteLine("[selftest] FAIL the moving unit's track is a constant, not a path");
+                    return 1;
+                }
+                Console.WriteLine("[selftest] OK   playback starts somewhere else and travels");
+
+                // Correction and presentation agree, which is the whole reason
+                // keyframes can be added without touching the snapshot path.
+                if (clientBridge.ComputeStateDigest() != hostDigest)
+                {
+                    Console.WriteLine(
+                        $"[selftest] FAIL playback disturbed the correction: host {hostDigest}, " +
+                        $"client {clientBridge.ComputeStateDigest()}");
+                    return 1;
+                }
+                Console.WriteLine("[selftest] OK   playback left the verified correction intact");
+
+                // Combat ending mid-playback must stop it, or units keep sliding
+                // along a finished turn's path into whatever comes next.
+                hostBridge.InCombat = false;
+                if (!WaitFor("combat ending stopped playback",
+                        () => clientBridge.StopKeyframesCalls > 0 && clientBridge.Played == null))
+                {
+                    return 1;
+                }
+
+                Console.WriteLine("[selftest] PASS");
+                return 0;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"[selftest] FAIL {e.GetType().Name}: {e.Message}");
+                return 1;
+            }
+            finally
+            {
+                client.Stop();
+                host.Stop();
+            }
+        }
+
+        /// <summary>
         /// Pins flush-before-close: a Reject must reach the peer before the FIN.
         /// </summary>
         /// <remarks>
@@ -345,7 +742,8 @@ namespace PBAndJ.Peer
             var mailbox = new PbjMailbox(4096);
             var transport = new TcpHostTransport(mailbox, IPAddress.Loopback, 0);
             transport.Start();
-            var session = new HostSession("host", "selftest", 3, new ScriptedGameBridge(), "secret");
+            var session = new HostSession(
+                "host", "selftest", 3, new ScriptedGameBridge(), "secret", SessionRequirements.None);
             var runtime = new PbjRuntime(transport, new ScriptedGameBridge(), new PrefixedLog("host"), mailbox, session);
 
             using (var raw = new TcpClient())
@@ -357,7 +755,7 @@ namespace PBAndJ.Peer
                     stream.ReadTimeout = TimeoutSeconds * 1000;
 
                     // A protocol version the host cannot accept.
-                    var hello = new HelloMessage(PbjProtocol.Magic, 999, "0.2.0", "stranger");
+                    var hello = new HelloMessage(PbjProtocol.Magic, 999, "0.2.0", "stranger", null, null);
                     var frame = FrameEncoder.Encode(PbjMessageCodec.Encode(hello));
                     stream.Write(frame, 0, frame.Length);
 
@@ -516,7 +914,7 @@ namespace PBAndJ.Peer
             var hostMailbox = new PbjMailbox(4096);
             var hostTransport = new TcpHostTransport(hostMailbox, IPAddress.Loopback, 0);
             hostTransport.Start();
-            var hostSession = new HostSession("host", "selftest", 3, hostBridge, "secret");
+            var hostSession = new HostSession("host", "selftest", 3, hostBridge, "secret", SessionRequirements.None);
             var host = new PbjRuntime(hostTransport, hostBridge, new PrefixedLog("host"), hostMailbox, hostSession);
 
             var clock = Stopwatch.StartNew();

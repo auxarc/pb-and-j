@@ -28,6 +28,7 @@ namespace PBAndJ.Core.Net
         Pong = 16,
         Snapshot = 17,
         Rejoin = 18,
+        Keyframes = 19,
     }
 
     /// <summary>
@@ -68,12 +69,20 @@ namespace PBAndJ.Core.Net
     /// <summary>Client's opening request. Arrives from an unauthenticated stranger.</summary>
     public sealed class HelloMessage : PbjMessage
     {
-        public HelloMessage(int magic, int protocolVersion, string? modVersion, string? playerName)
+        public HelloMessage(
+            int magic,
+            int protocolVersion,
+            string? modVersion,
+            string? playerName,
+            string? gameBuild,
+            string? passphrase)
         {
             Magic = magic;
             ProtocolVersion = protocolVersion;
             ModVersion = modVersion;
             PlayerName = playerName;
+            GameBuild = gameBuild;
+            Passphrase = passphrase;
         }
 
         public override PbjMessageType Type => PbjMessageType.Hello;
@@ -82,6 +91,27 @@ namespace PBAndJ.Core.Net
         public int ProtocolVersion { get; }
         public string? ModVersion { get; }
         public string? PlayerName { get; }
+
+        /// <summary>
+        /// The peer's Phantom Brigade build, or null if it has no game.
+        /// </summary>
+        /// <remarks>
+        /// Null is a real and expected answer: the standalone harness is a
+        /// legitimate peer with no game to report. The host therefore treats an
+        /// absent build as "cannot say" rather than "does not match".
+        /// </remarks>
+        public string? GameBuild { get; }
+
+        /// <summary>
+        /// The session passphrase, when the host requires one.
+        /// </summary>
+        /// <remarks>
+        /// Travels in the clear over plain TCP. It exists so an internet-facing
+        /// listener is not open to anything that finds the port — this protocol
+        /// is public, so without it any scanner could join and inject orders. It
+        /// is not confidentiality against anyone on the network path.
+        /// </remarks>
+        public string? Passphrase { get; }
     }
 
     /// <summary>Host's acceptance, carrying the roster and the current turn.</summary>
@@ -152,7 +182,9 @@ namespace PBAndJ.Core.Net
             string? playerName,
             string? sessionId,
             int claimedPeerId,
-            string? resumeToken)
+            string? resumeToken,
+            string? gameBuild,
+            string? passphrase)
         {
             Magic = magic;
             ProtocolVersion = protocolVersion;
@@ -161,7 +193,23 @@ namespace PBAndJ.Core.Net
             SessionId = sessionId;
             ClaimedPeerId = claimedPeerId;
             ResumeToken = resumeToken;
+            GameBuild = gameBuild;
+            Passphrase = passphrase;
         }
+
+        /// <inheritdoc cref="HelloMessage.GameBuild"/>
+        public string? GameBuild { get; }
+
+        /// <summary>
+        /// The session passphrase, re-presented on return.
+        /// </summary>
+        /// <remarks>
+        /// Carried again rather than being implied by the resume token: a
+        /// returning peer is as unauthenticated as a new one until the host has
+        /// checked something, and the token proves which departure this is, not
+        /// that the sender belongs on this listener at all.
+        /// </remarks>
+        public string? Passphrase { get; }
 
         public override PbjMessageType Type => PbjMessageType.Rejoin;
 
@@ -483,6 +531,58 @@ namespace PBAndJ.Core.Net
 
         public string? Digest { get; }
         public IReadOnlyList<UnitSnapshot> Units { get; }
+    }
+
+    /// <summary>
+    /// How every unit moved during an executed turn — what a client plays back
+    /// so it watches the turn instead of being teleported to its outcome.
+    /// </summary>
+    /// <remarks>
+    /// Broadcast after <see cref="SnapshotMessage"/>, not before it. The snapshot
+    /// is the authoritative correction and the thing the digest is checked
+    /// against; keyframes are presentation and must never be able to delay or
+    /// displace it. Applying the correction first and then animating towards the
+    /// same final state costs nothing, because the last key of every track is
+    /// captured from the same read the snapshot is — see the capture rules in
+    /// docs/design/networking.md.
+    /// <para>
+    /// Two orders of magnitude heavier than a snapshot (~51 KB for a 30-unit
+    /// turn against ~2.6 KB), which is where the outbound queue and the writer
+    /// thread start genuinely earning their place.
+    /// </para>
+    /// </remarks>
+    public sealed class KeyframesMessage : PbjMessage
+    {
+        private static readonly UnitTrack[] NoTracks = new UnitTrack[0];
+
+        public KeyframesMessage(
+            int turn, float windowStart, float windowEnd, IReadOnlyList<UnitTrack>? tracks)
+        {
+            Turn = turn;
+            WindowStart = windowStart;
+            WindowEnd = windowEnd;
+            Tracks = tracks ?? NoTracks;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.Keyframes;
+
+        /// <summary>The turn that just executed, captured at commit time.</summary>
+        public int Turn { get; }
+
+        /// <summary>
+        /// Simulation time at the start of the executed turn.
+        /// </summary>
+        /// <remarks>
+        /// Travels explicitly rather than being read off the first key: a unit
+        /// destroyed early has a short track, and every track has to be played
+        /// against one shared time base or units drift apart on screen.
+        /// </remarks>
+        public float WindowStart { get; }
+
+        /// <summary>Simulation time when execution ended.</summary>
+        public float WindowEnd { get; }
+
+        public IReadOnlyList<UnitTrack> Tracks { get; }
     }
 
     /// <summary>Graceful goodbye from either side.</summary>

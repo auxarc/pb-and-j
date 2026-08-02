@@ -77,6 +77,21 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         public void ClearLocalOrders() => ClearLocalOrdersCalls++;
+
+        /// <summary>What CaptureKeyframes hands back.</summary>
+        public KeyframeCapture Keyframes { get; set; } = KeyframeCapture.None;
+
+        /// <summary>Every playback started, in order.</summary>
+        public List<(int Turn, KeyframeCapture Capture)> Played { get; } =
+            new List<(int, KeyframeCapture)>();
+
+        public int StopKeyframesCalls { get; private set; }
+
+        public KeyframeCapture CaptureKeyframes() => Keyframes;
+
+        public void PlayKeyframes(int turn, KeyframeCapture capture) => Played.Add((turn, capture));
+
+        public void StopKeyframes() => StopKeyframesCalls++;
     }
 
     /// <summary>Records everything sent, without a socket.</summary>

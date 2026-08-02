@@ -68,6 +68,21 @@ namespace PBAndJ.Core.Net
         {
         }
 
+        /// <summary>
+        /// What this client reports about itself, and what it presents to be let
+        /// in. Set before <see cref="Start"/>.
+        /// </summary>
+        /// <remarks>
+        /// Properties rather than more constructor arguments: the constructor
+        /// already carries six, and both of these are optional in the case that
+        /// matters most for testing — a harness against a loopback host reports
+        /// no game and needs no passphrase.
+        /// </remarks>
+        public string? GameBuild { get; set; }
+
+        /// <inheritdoc cref="HelloMessage.Passphrase"/>
+        public string? Passphrase { get; set; }
+
         /// <param name="resumeToken">
         /// The token from a previous <see cref="WelcomeMessage"/>. When present
         /// the session opens with <see cref="RejoinMessage"/> instead of
@@ -129,8 +144,9 @@ namespace PBAndJ.Core.Net
             {
                 return new PbjEffect[]
                 {
-                    new SendEffect(HostConnectionId,
-                        new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, modVersion, playerName)),
+                    new SendEffect(HostConnectionId, new HelloMessage(
+                        PbjProtocol.Magic, PbjProtocol.Version, modVersion, playerName,
+                        GameBuild, Passphrase)),
                 };
             }
 
@@ -138,7 +154,7 @@ namespace PBAndJ.Core.Net
             {
                 new SendEffect(HostConnectionId, new RejoinMessage(
                     PbjProtocol.Magic, PbjProtocol.Version, modVersion, playerName,
-                    resumeSessionId, resumePeerId, resumeToken)),
+                    resumeSessionId, resumePeerId, resumeToken, GameBuild, Passphrase)),
                 new LogEffect(NetLog.Rejoining(resumeSessionId, resumePeerId)),
             };
         }
@@ -309,6 +325,7 @@ namespace PBAndJ.Core.Net
                     OwnedUnits = NoUnits;
                     submittedThisTurn = false;
                     effects.Add(new LogEffect(NetLog.CombatEndedByHost()));
+                    effects.Add(new StopKeyframesEffect());
                     effects.Add(new SetExecutionLockEffect(false));
                     break;
 
@@ -329,10 +346,15 @@ namespace PBAndJ.Core.Net
                     HandleSnapshot(snapshot, effects);
                     break;
 
+                case KeyframesMessage keyframes:
+                    HandleKeyframes(keyframes, effects);
+                    break;
+
                 case ByeMessage bye:
                     effects.Add(new LogEffect(NetLog.PeerLeft(
                         PbjPeerRegistry.HostPeerId, HostName, Describe(bye.Reason))));
                     State = ClientSessionState.Closed;
+                    effects.Add(new StopKeyframesEffect());
                     effects.Add(new SetExecutionLockEffect(false));
                     break;
 
@@ -465,6 +487,33 @@ namespace PBAndJ.Core.Net
             effects.Add(new ApplySnapshotEffect(snapshot.Turn, snapshot.Units, snapshot.Digest));
         }
 
+        /// <summary>
+        /// Starts presenting how the units reached the state we were just
+        /// corrected to.
+        /// </summary>
+        /// <remarks>
+        /// No session state changes and nothing is deferred. The snapshot that
+        /// arrived immediately before this has already hard-set the authoritative
+        /// state and verified its digest; playback only animates the view towards
+        /// the same place, because the last key of every track is captured from
+        /// the same read the snapshot is. That ordering is what lets keyframes be
+        /// added without touching the correction path at all.
+        /// </remarks>
+        private void HandleKeyframes(KeyframesMessage keyframes, List<PbjEffect> effects)
+        {
+            var keyCount = 0;
+            for (var i = 0; i < keyframes.Tracks.Count; i++)
+            {
+                keyCount += keyframes.Tracks[i].Transforms.Count;
+            }
+
+            effects.Add(new LogEffect(NetLog.KeyframesReceived(
+                keyframes.Turn, keyframes.Tracks.Count, keyCount,
+                keyframes.WindowStart, keyframes.WindowEnd)));
+            effects.Add(new PlayKeyframesEffect(keyframes.Turn, new KeyframeCapture(
+                keyframes.WindowStart, keyframes.WindowEnd, keyframes.Tracks)));
+        }
+
         private void HandleSnapshotApplied(SnapshotAppliedEvent applied, List<PbjEffect> effects)
         {
             effects.Add(string.Equals(applied.ExpectedDigest, applied.ActualDigest, StringComparison.Ordinal)
@@ -477,6 +526,10 @@ namespace PBAndJ.Core.Net
         {
             effects.Add(new LogEffect(line));
             State = ClientSessionState.Faulted;
+            // A faulted session handles nothing further, so a playback left
+            // running here would never be stopped by anything else — units would
+            // slide along last turn's path into single-player.
+            effects.Add(new StopKeyframesEffect());
             // A lost host must never leave the local execute button disabled —
             // the player continues single-player from here.
             effects.Add(new SetExecutionLockEffect(false));

@@ -233,6 +233,11 @@ namespace PBAndJ.Mod.Net
                     continue;
                 }
 
+                // Components only, and that is sufficient to render: PositionLinkSystem
+                // and RotationLinkSystem are reactive on CombatMatcher.Position /
+                // .Rotation and call CombatView.OnPosition/OnRotation, which set
+                // the view transform. Neither is gated on the simulation running,
+                // so a correction arriving between turns is visible immediately.
                 unit.ReplacePosition(new Vector3(state.Position.X, state.Position.Y, state.Position.Z));
                 unit.ReplaceRotation(new Quaternion(
                     state.Rotation.X, state.Rotation.Y, state.Rotation.Z, state.Rotation.W));
@@ -253,6 +258,151 @@ namespace PBAndJ.Mod.Net
             {
                 Debug.Log(NetLog.SnapshotUnitsSkipped(byName.Count, localOnly));
             }
+        }
+
+        // Walks the game's own replay recorder and re-keys it for the wire.
+        //
+        // Three things here are not obvious and were each verified against the
+        // decompiled 2.2.2-b8339 source:
+        //
+        // 1. Do NOT gate on CombatReplayHelper.IsRecordingAllowed(). It is
+        //    already false by the time we run: OnExecutionEnd clears the flag,
+        //    and it is called from CombatUILinkSimulationEnd, which sits in
+        //    CombatUISystems (slot 72) — ahead of CombatExecutionEndLateSystem
+        //    (slot 93), the system whose postfix brings us here. Both react to
+        //    the same Simulating.Removed() collector. Gating on it would return
+        //    empty every single turn.
+        //
+        // 2. The tracks are NOT cleared between turns. experimentalMode is true
+        //    by default and OnExecutionStart only clears `units` when it is
+        //    false, so a track accumulates for the whole combat. We slice from
+        //    the key OnExecutionStart wrote, BY INDEX — not by comparing against
+        //    turnStartTime, which is Mathf.RoundToInt'd and so can be *later*
+        //    than the previous turn's final key, dragging it into our window.
+        //
+        // 3. The recorder's last key is not the unit's final position.
+        //    OnExecutionEnd samples position before CombatExecutionEndLateSystem
+        //    force-sets it onto the projected path, and its own OnUnitSnapshot
+        //    call is a no-op by (1). So we append a final key ourselves, read
+        //    exactly where CaptureSnapshot reads, which is what makes
+        //    "last key == snapshot" true rather than merely hoped for.
+        public KeyframeCapture CaptureKeyframes()
+        {
+            if (!InCombat || CombatReplayHelper.units == null || CombatReplayHelper.units.Count == 0)
+            {
+                Debug.Log(NetLog.KeyframesUnavailable());
+                return KeyframeCapture.None;
+            }
+
+            var windowStart = CombatReplayHelper.turnStartTime;
+            var windowEnd = Contexts.sharedInstance.combat.hasSimulationTime
+                ? Contexts.sharedInstance.combat.simulationTime.f
+                : windowStart;
+
+            var tracks = new List<UnitTrack>();
+            var clamped = 0;
+
+            foreach (var entry in CombatReplayHelper.units)
+            {
+                // The recorder keys by combatEntity.id.id, a process-local ECS
+                // id that means nothing in another process. Same lookup
+                // OnExecutionEnd itself uses.
+                var unit = IDUtility.GetCombatEntity(entry.Key);
+                if (unit == null || unit.isDestroyed)
+                {
+                    continue;
+                }
+                var persistent = IDUtility.GetLinkedPersistentEntity(unit);
+                if (persistent == null || !persistent.hasNameInternal)
+                {
+                    continue;
+                }
+
+                var keys = SliceTurn(entry.Value.keyframesTransform, windowStart);
+
+                // The final key, from the same read CaptureSnapshot performs.
+                keys.Add(new TransformKey(
+                    windowEnd,
+                    ToVec3(unit.hasPosition ? unit.position.v : Vector3.zero),
+                    ToVec4(unit.hasRotation ? unit.rotation.q : Quaternion.identity)));
+
+                if (keys.Count > PbjMessageCodec.MaxKeysPerTrack)
+                {
+                    // Drop interior keys and keep the endpoints: a track
+                    // truncated at the tail would end playback short of the
+                    // state the snapshot already corrected everyone to.
+                    clamped++;
+                    keys = Decimate(keys, PbjMessageCodec.MaxKeysPerTrack);
+                }
+
+                tracks.Add(new UnitTrack(persistent.nameInternal.s, keys));
+
+                if (tracks.Count == PbjMessageCodec.MaxTracksPerKeyframes)
+                {
+                    Debug.LogWarning(NetLog.KeyframesClamped(
+                        CombatReplayHelper.units.Count, PbjMessageCodec.MaxTracksPerKeyframes, clamped));
+                    return new KeyframeCapture(windowStart, windowEnd, tracks);
+                }
+            }
+
+            if (clamped > 0)
+            {
+                Debug.LogWarning(NetLog.KeyframesClamped(
+                    tracks.Count, PbjMessageCodec.MaxTracksPerKeyframes, clamped));
+            }
+            return new KeyframeCapture(windowStart, windowEnd, tracks);
+        }
+
+        // Slices to the current turn by index. The key OnExecutionStart wrote is
+        // the first one at or after turnStartTime; everything before it belongs
+        // to an earlier turn. Scanning backwards from the end finds the boundary
+        // without walking the whole accumulated combat.
+        private static List<TransformKey> SliceTurn(
+            List<ReplayKeyframeTransform> recorded, float windowStart)
+        {
+            var first = recorded.Count;
+            while (first > 0 && recorded[first - 1].time >= windowStart)
+            {
+                first--;
+            }
+
+            var keys = new List<TransformKey>(recorded.Count - first + 1);
+            for (var i = first; i < recorded.Count; i++)
+            {
+                keys.Add(new TransformKey(
+                    recorded[i].time, ToVec3(recorded[i].position), ToVec4(recorded[i].rotation)));
+            }
+            return keys;
+        }
+
+        // Keeps the first and last key and thins what is between them, so a long
+        // turn loses temporal resolution rather than its ending.
+        private static List<TransformKey> Decimate(List<TransformKey> keys, int cap)
+        {
+            var kept = new List<TransformKey>(cap) { keys[0] };
+            var interior = cap - 2;
+            var step = (keys.Count - 2) / (double)interior;
+            for (var i = 0; i < interior; i++)
+            {
+                kept.Add(keys[1 + (int)(i * step)]);
+            }
+            kept.Add(keys[keys.Count - 1]);
+            return kept;
+        }
+
+        private static Vec3 ToVec3(Vector3 v) => new Vec3(v.x, v.y, v.z);
+
+        private static Vec4 ToVec4(Quaternion q) => new Vec4(q.x, q.y, q.z, q.w);
+
+        // Host-only bridge: a host never plays back, it simulates.
+        public void PlayKeyframes(int turn, KeyframeCapture capture)
+        {
+            KeyframePlayer.Play(turn, capture);
+        }
+
+        public void StopKeyframes()
+        {
+            KeyframePlayer.Stop();
         }
 
         public void ClearLocalOrders()

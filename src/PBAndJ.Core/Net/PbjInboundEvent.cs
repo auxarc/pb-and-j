@@ -280,10 +280,12 @@ namespace PBAndJ.Core.Net
         /// constructor is an untested branch waiting to happen, and the coverage
         /// gate would notice.
         /// </remarks>
-        public LocalTurnCompleteEvent(string? digest, IReadOnlyList<UnitSnapshot>? units)
+        public LocalTurnCompleteEvent(
+            string? digest, IReadOnlyList<UnitSnapshot>? units, KeyframeCapture? keyframes)
         {
             Digest = digest;
             Units = units ?? NoUnits;
+            Keyframes = keyframes ?? KeyframeCapture.None;
         }
 
         public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalTurnComplete;
@@ -292,5 +294,16 @@ namespace PBAndJ.Core.Net
 
         /// <summary>The state to broadcast, captured in the same read as the digest.</summary>
         public IReadOnlyList<UnitSnapshot> Units { get; }
+
+        /// <summary>
+        /// How the units got there, captured in that same read.
+        /// </summary>
+        /// <remarks>
+        /// Empty is normal, not a failure: the game only runs its replay recorder
+        /// when the scenario has prediction enabled. The snapshot still travels
+        /// and still corrects, so a turn with no keyframes degrades to exactly
+        /// M5 behaviour.
+        /// </remarks>
+        public KeyframeCapture Keyframes { get; }
     }
 }

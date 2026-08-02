@@ -438,6 +438,63 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void HostListeningOpenly_WarnsAboutTheExposure()
+        {
+            var line = NetLog.HostListeningOpenly("0.0.0.0", 27600);
+            Assert.Contains("OPEN LISTENER on 0.0.0.0:27600", line);
+            Assert.Contains("in the clear", line);
+            Assert.Contains("pbj.net-stop", line);
+        }
+
+        [Fact]
+        public void HostListeningOpenly_WithNoBindAddress_Throws()
+        {
+            Assert.Throws<ArgumentException>(() => NetLog.HostListeningOpenly(" ", 1));
+        }
+
+        [Fact]
+        public void HandshakeTimedOut_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] socket #4 connected but never handshook within 10s — dropping",
+                NetLog.HandshakeTimedOut(4, 10.0));
+        }
+
+        [Fact]
+        public void KeyframesSent_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 3 keyframes | 12 tracks, 640 keys | 15.00s-20.00s | broadcast to 1 peer",
+                NetLog.KeyframesSent(3, 12, 640, 15f, 20f, 1));
+        }
+
+        [Fact]
+        public void KeyframesReceived_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 3 keyframes received | 12 tracks, 640 keys | 5.00s of motion",
+                NetLog.KeyframesReceived(3, 12, 640, 15f, 20f));
+        }
+
+        // Not a warning: a scenario with prediction disabled records nothing, and
+        // the snapshot still corrects everyone.
+        [Fact]
+        public void KeyframesUnavailable_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] no keyframes recorded this turn — snapshot correction only",
+                NetLog.KeyframesUnavailable());
+        }
+
+        [Fact]
+        public void KeyframesClamped_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] keyframes clamped: 130 tracks captured, only 128 fit; 4 track(s) thinned",
+                NetLog.KeyframesClamped(130, 128, 4));
+        }
+
+        [Fact]
         public void PeerHeldForReconnect_ComposesTheLine()
         {
             Assert.Equal(

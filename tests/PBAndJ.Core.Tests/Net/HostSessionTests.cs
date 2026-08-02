@@ -10,10 +10,10 @@ namespace PBAndJ.Core.Tests.Net
     {
         private readonly FakeGameBridge bridge = new FakeGameBridge();
 
-        private HostSession Host(int maxPeers = 3) => new HostSession("host", "7f3a91", maxPeers, bridge, "secret");
+        private HostSession Host(int maxPeers = 3) => new HostSession("host", "7f3a91", maxPeers, bridge, "secret", SessionRequirements.None);
 
         private static HelloMessage GoodHello(string name = "ally") =>
-            new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", name);
+            new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", name, null, null);
 
         private static OrderPayload Order(string owner) => new OrderPayload("move_run", owner, 0f, 2f);
 
@@ -65,22 +65,33 @@ namespace PBAndJ.Core.Tests.Net
         [InlineData("  ")]
         public void Constructor_WithBlankHostName_Throws(string? name)
         {
-            var ex = Assert.Throws<ArgumentException>(() => new HostSession(name!, "s", 3, bridge, "secret"));
+            var ex = Assert.Throws<ArgumentException>(() => new HostSession(name!, "s", 3, bridge, "secret", SessionRequirements.None));
             Assert.Equal("hostName", ex.ParamName);
         }
 
         [Fact]
         public void Constructor_WithBlankSessionId_Throws()
         {
-            var ex = Assert.Throws<ArgumentException>(() => new HostSession("h", " ", 3, bridge, "secret"));
+            var ex = Assert.Throws<ArgumentException>(() => new HostSession("h", " ", 3, bridge, "secret", SessionRequirements.None));
             Assert.Equal("sessionId", ex.ParamName);
         }
 
         [Fact]
         public void Constructor_WithNullBridge_Throws()
         {
-            var ex = Assert.Throws<ArgumentNullException>(() => new HostSession("h", "s", 3, null!, "secret"));
+            var ex = Assert.Throws<ArgumentNullException>(() => new HostSession("h", "s", 3, null!, "secret", SessionRequirements.None));
             Assert.Equal("bridge", ex.ParamName);
+        }
+
+        // No permissive default: "accept anything" has to be spelled
+        // SessionRequirements.None at the call site, so opening a session to
+        // anyone is always something someone typed.
+        [Fact]
+        public void Constructor_WithNullRequirements_Throws()
+        {
+            var ex = Assert.Throws<ArgumentNullException>(
+                () => new HostSession("h", "s", 3, bridge, "secret", null!));
+            Assert.Equal("requirements", ex.ParamName);
         }
 
         // --- handshake ---
@@ -166,7 +177,7 @@ namespace PBAndJ.Core.Tests.Net
         public void HandleMessage_Hello_WithWrongMagic_RejectsAndDisconnects()
         {
             var host = Host();
-            var effects = host.HandleMessage(1, new HelloMessage(0xDEAD, PbjProtocol.Version, "0.2.0", "ally"));
+            var effects = host.HandleMessage(1, new HelloMessage(0xDEAD, PbjProtocol.Version, "0.2.0", "ally", null, null));
             var reject = Assert.IsType<RejectMessage>(Single<SendEffect>(effects).Message);
             Assert.Equal(RejectReason.BadMagic, reject.Reason);
             Assert.Equal(1, Single<DisconnectEffect>(effects).PeerId);
@@ -177,7 +188,7 @@ namespace PBAndJ.Core.Tests.Net
         public void HandleMessage_Hello_WithVersionMismatch_RejectsWithDetail()
         {
             var host = Host();
-            var effects = host.HandleMessage(1, new HelloMessage(PbjProtocol.Magic, 999, "0.2.0", "ally"));
+            var effects = host.HandleMessage(1, new HelloMessage(PbjProtocol.Magic, 999, "0.2.0", "ally", null, null));
             var reject = Assert.IsType<RejectMessage>(Single<SendEffect>(effects).Message);
             Assert.Equal(RejectReason.VersionMismatch, reject.Reason);
             Assert.Equal("peer v999, host v" + PbjProtocol.Version, reject.Detail);
@@ -207,7 +218,7 @@ namespace PBAndJ.Core.Tests.Net
             // The message layer deliberately lets this through so the session
             // can answer with a clean Reject rather than a decode failure.
             var host = Host();
-            var effects = host.HandleMessage(1, new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "v", "   "));
+            var effects = host.HandleMessage(1, new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "v", "   ", null, null));
             Assert.Equal(RejectReason.InvalidName,
                 ((RejectMessage)Single<SendEffect>(effects).Message).Reason);
         }
@@ -462,7 +473,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new CommitOutcomeEvent(3, true));
             bridge.CurrentTurn = 4;
 
-            var effects = host.Handle(new LocalTurnCompleteEvent("3f9c1a04", null));
+            var effects = host.Handle(new LocalTurnCompleteEvent("3f9c1a04", null, null));
             var complete = (TurnCompleteMessage)All<BroadcastEffect>(effects)
                 .Single(b => b.Message is TurnCompleteMessage).Message;
             Assert.Equal(3, complete.Turn);
@@ -478,7 +489,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new CommitOutcomeEvent(3, true));
             bridge.CurrentTurn = 4;
 
-            var effects = host.Handle(new LocalTurnCompleteEvent("d", null));
+            var effects = host.Handle(new LocalTurnCompleteEvent("d", null, null));
             Assert.Equal(HostSessionState.Planning, host.State);
             Assert.Equal(4, host.Turn);
             Assert.Equal(0, host.ReadyCount);
@@ -488,7 +499,7 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void Handle_LocalTurnComplete_WhenNotExecuting_ProducesNoEffects()
         {
-            Assert.Empty(WithPeer().Handle(new LocalTurnCompleteEvent("d", null)));
+            Assert.Empty(WithPeer().Handle(new LocalTurnCompleteEvent("d", null, null)));
         }
 
         // --- un-ready ---
@@ -768,7 +779,7 @@ namespace PBAndJ.Core.Tests.Net
 
         private static RejoinMessage Rejoin(string token, int claimedPeerId = 1, string name = "ally",
             string session = "7f3a91") =>
-            new RejoinMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", name, session, claimedPeerId, token);
+            new RejoinMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", name, session, claimedPeerId, token, null, null);
 
         [Fact]
         public void Welcome_IssuesAResumeToken()
@@ -783,8 +794,8 @@ namespace PBAndJ.Core.Tests.Net
             // Two sessions identical but for their secret must issue different
             // tokens, or the token is no credential at all — session id, peer id
             // and player name all reach every client.
-            var a = new HostSession("host", "7f3a91", 3, bridge, "secret-a");
-            var b = new HostSession("host", "7f3a91", 3, bridge, "secret-b");
+            var a = new HostSession("host", "7f3a91", 3, bridge, "secret-a", SessionRequirements.None);
+            var b = new HostSession("host", "7f3a91", 3, bridge, "secret-b", SessionRequirements.None);
             a.Handle(new TickEvent(1000));
             b.Handle(new TickEvent(1000));
 
@@ -901,8 +912,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new PeerDisconnectedEvent(1, "closed"));
             host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
 
-            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, new RejoinMessage(
-                PbjProtocol.Magic, 999, "0.2.0", "ally", "7f3a91", 1, token))).Message;
+            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, new RejoinMessage(PbjProtocol.Magic, 999, "0.2.0", "ally", "7f3a91", 1, token, null, null))).Message;
             Assert.Equal(RejectReason.VersionMismatch, reject.Reason);
         }
 
@@ -913,8 +923,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new PeerDisconnectedEvent(1, "closed"));
             host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
 
-            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, new RejoinMessage(
-                0xDEAD, PbjProtocol.Version, "0.2.0", "ally", "7f3a91", 1, token))).Message;
+            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, new RejoinMessage(0xDEAD, PbjProtocol.Version, "0.2.0", "ally", "7f3a91", 1, token, null, null))).Message;
             Assert.Equal(RejectReason.BadMagic, reject.Reason);
             Assert.Null(reject.Detail);
         }
@@ -1043,7 +1052,7 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void Rejoin_WhenTheSessionFilledUpMeanwhile_IsRefused()
         {
-            var host = new HostSession("host", "7f3a91", 1, bridge, "secret");
+            var host = new HostSession("host", "7f3a91", 1, bridge, "secret", SessionRequirements.None);
             host.Handle(new TickEvent(1000));
             host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
             var token = ((WelcomeMessage)Single<SendEffect>(host.HandleMessage(1, GoodHello())).Message).ResumeToken!;
@@ -1066,7 +1075,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
 
             var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2,
-                new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", null))).Message;
+                new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", null, null, null))).Message;
             Assert.Equal(RejectReason.InvalidName, reject.Reason);
         }
 
@@ -1075,7 +1084,7 @@ namespace PBAndJ.Core.Tests.Net
         [InlineData("  ")]
         public void Constructor_WithBlankSessionSecret_Throws(string? secret)
         {
-            var ex = Assert.Throws<ArgumentException>(() => new HostSession("h", "s", 3, bridge, secret!));
+            var ex = Assert.Throws<ArgumentException>(() => new HostSession("h", "s", 3, bridge, secret!, SessionRequirements.None));
             Assert.Equal("sessionSecret", ex.ParamName);
         }
 
@@ -1110,7 +1119,7 @@ namespace PBAndJ.Core.Tests.Net
             // Snapshot-first would make the client's digest already match when it
             // compared, silencing the divergence diagnostic permanently.
             var effects = Executing()
-                .Handle(new LocalTurnCompleteEvent("abc", new[] { Snap("unit_a") }))
+                .Handle(new LocalTurnCompleteEvent("abc", new[] { Snap("unit_a") }, null))
                 .ToList();
 
             var completeAt = effects.FindIndex(e => e is BroadcastEffect b && b.Message is TurnCompleteMessage);
@@ -1121,7 +1130,7 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void TurnComplete_SnapshotCarriesTheExecutedTurnAndTheSameDigest()
         {
-            var effects = Executing().Handle(new LocalTurnCompleteEvent("abc", new[] { Snap("unit_a") }));
+            var effects = Executing().Handle(new LocalTurnCompleteEvent("abc", new[] { Snap("unit_a") }, null));
             var snapshot = (SnapshotMessage)All<BroadcastEffect>(effects)
                 .Single(b => b.Message is SnapshotMessage).Message;
 
@@ -1135,16 +1144,208 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void TurnComplete_WithNoUnits_StillBroadcastsASnapshot()
         {
-            var effects = Executing().Handle(new LocalTurnCompleteEvent("abc", null));
+            var effects = Executing().Handle(new LocalTurnCompleteEvent("abc", null, null));
             var snapshot = (SnapshotMessage)All<BroadcastEffect>(effects)
                 .Single(b => b.Message is SnapshotMessage).Message;
             Assert.Empty(snapshot.Units);
+        }
+
+        // --- build compatibility and the handshake deadline (M7) ---
+
+        private HostSession Guarded(string? passphrase = null) =>
+            new HostSession("host", "7f3a91", 3, bridge, "secret",
+                new SessionRequirements("0.2.0", "b8339", passphrase));
+
+        private static HelloMessage Hello(
+            string mod = "0.2.0", string? build = "b8339", string? passphrase = null, string name = "ally") =>
+            new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, mod, name, build, passphrase);
+
+        private static RejectMessage RejectedBy(IEnumerable<PbjEffect> effects) =>
+            (RejectMessage)effects.OfType<SendEffect>().Single(s => s.Message is RejectMessage).Message;
+
+        [Fact]
+        public void Hello_WithAMatchingBuild_IsWelcomed()
+        {
+            var effects = Guarded().HandleMessage(1, Hello());
+            Assert.Contains(All<SendEffect>(effects), s => s.Message is WelcomeMessage);
+        }
+
+        // Without this a friend on a different mod build connects perfectly and
+        // then diverges on every turn, which reads as a netcode bug.
+        [Fact]
+        public void Hello_WithADifferentModVersion_IsRejectedAndDisconnected()
+        {
+            var host = Guarded();
+            var effects = host.HandleMessage(1, Hello(mod: "0.1.0"));
+
+            Assert.Equal(RejectReason.ModVersionMismatch, RejectedBy(effects).Reason);
+            Assert.Single(All<DisconnectEffect>(effects));
+            Assert.Empty(host.Peers);
+        }
+
+        [Fact]
+        public void Hello_WithADifferentGameBuild_IsRejected()
+        {
+            var effects = Guarded().HandleMessage(1, Hello(build: "b0001"));
+            Assert.Equal(RejectReason.GameBuildMismatch, RejectedBy(effects).Reason);
+        }
+
+        // The standalone harness is a legitimate peer with no game to report.
+        [Fact]
+        public void Hello_WithNoGameBuild_IsAccepted()
+        {
+            var effects = Guarded().HandleMessage(1, Hello(build: null));
+            Assert.Contains(All<SendEffect>(effects), s => s.Message is WelcomeMessage);
+        }
+
+        [Fact]
+        public void Hello_WithoutTheRequiredPassphrase_IsRejected()
+        {
+            var effects = Guarded("hunter2").HandleMessage(1, Hello(passphrase: "wrong"));
+            Assert.Equal(RejectReason.BadPassphrase, RejectedBy(effects).Reason);
+        }
+
+        [Fact]
+        public void Hello_WithTheRequiredPassphrase_IsWelcomed()
+        {
+            var effects = Guarded("hunter2").HandleMessage(1, Hello(passphrase: "hunter2"));
+            Assert.Contains(All<SendEffect>(effects), s => s.Message is WelcomeMessage);
+        }
+
+        // A returning peer is as unauthenticated as a new one: the resume token
+        // proves which departure this is, not that the sender belongs here.
+        [Fact]
+        public void Rejoin_WithoutTheRequiredPassphrase_IsRejected()
+        {
+            var host = Guarded("hunter2");
+            var token = ((WelcomeMessage)All<SendEffect>(host.HandleMessage(1, Hello(passphrase: "hunter2")))
+                .Single(s => s.Message is WelcomeMessage).Message).ResumeToken;
+            host.Handle(new PeerDisconnectedEvent(1, "dropped"));
+
+            var effects = host.HandleMessage(2, new RejoinMessage(
+                PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", "ally", "7f3a91", 1, token, "b8339", "wrong"));
+
+            Assert.Equal(RejectReason.BadPassphrase, RejectedBy(effects).Reason);
+        }
+
+        [Fact]
+        public void ASocketThatNeverSaysHello_IsDroppedAfterTheHandshakeDeadline()
+        {
+            var host = Guarded();
+            host.Handle(new PeerConnectedEvent(1, "203.0.113.7:5000"));
+            host.Handle(new TickEvent(0));
+
+            var effects = host.Handle(new TickEvent(PbjProtocol.HandshakeTimeoutSeconds + 1));
+
+            Assert.Equal(1, Single<DisconnectEffect>(effects).PeerId);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("never handshook"));
+        }
+
+        [Fact]
+        public void ASocketWithinTheHandshakeDeadline_IsLeftAlone()
+        {
+            var host = Guarded();
+            host.Handle(new PeerConnectedEvent(1, "203.0.113.7:5000"));
+            host.Handle(new TickEvent(0));
+
+            Assert.Empty(All<DisconnectEffect>(host.Handle(new TickEvent(PbjProtocol.HandshakeTimeoutSeconds - 1))));
+        }
+
+        [Fact]
+        public void APeerThatHandshook_IsNotDroppedByTheHandshakeDeadline()
+        {
+            var host = Guarded();
+            host.Handle(new PeerConnectedEvent(1, "203.0.113.7:5000"));
+            host.Handle(new TickEvent(0));
+            host.HandleMessage(1, Hello());
+
+            Assert.Empty(All<DisconnectEffect>(host.Handle(new TickEvent(PbjProtocol.HandshakeTimeoutSeconds + 1))));
+            Assert.Single(host.Peers);
+        }
+
+        // A rejected socket is already being disconnected; the deadline must not
+        // queue a second disconnect for it on the next tick.
+        [Fact]
+        public void ARejectedSocket_IsNotAlsoDroppedByTheDeadline()
+        {
+            var host = Guarded();
+            host.Handle(new PeerConnectedEvent(1, "203.0.113.7:5000"));
+            host.Handle(new TickEvent(0));
+            host.HandleMessage(1, Hello(mod: "0.1.0"));
+
+            Assert.Empty(All<DisconnectEffect>(host.Handle(new TickEvent(PbjProtocol.HandshakeTimeoutSeconds + 1))));
         }
 
         [Fact]
         public void SnapshotApplied_IsIgnoredOnTheHost()
         {
             Assert.Empty(WithPeer().Handle(new SnapshotAppliedEvent(3, 1, "a", "a")));
+        }
+
+        // --- keyframes (M6) ---
+
+        private static KeyframeCapture Motion() =>
+            new KeyframeCapture(15f, 20f, new[]
+            {
+                new UnitTrack("unit_a", new[]
+                {
+                    new TransformKey(15f, new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f)),
+                    new TransformKey(20f, new Vec3(9f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f)),
+                }),
+            });
+
+        // Keyframes are presentation; the snapshot is the correction the digest
+        // is checked against. The correction must never queue behind them.
+        [Fact]
+        public void TurnComplete_BroadcastsKeyframesAfterTheSnapshot()
+        {
+            var effects = Executing()
+                .Handle(new LocalTurnCompleteEvent("abc", new[] { Snap("unit_a") }, Motion()))
+                .ToList();
+
+            var snapshotAt = effects.FindIndex(e => e is BroadcastEffect b && b.Message is SnapshotMessage);
+            var keyframesAt = effects.FindIndex(e => e is BroadcastEffect b && b.Message is KeyframesMessage);
+            Assert.True(snapshotAt >= 0 && keyframesAt > snapshotAt);
+        }
+
+        [Fact]
+        public void TurnComplete_KeyframesCarryTheExecutedTurnAndTheWindow()
+        {
+            var effects = Executing()
+                .Handle(new LocalTurnCompleteEvent("abc", new[] { Snap("unit_a") }, Motion()));
+            var keyframes = (KeyframesMessage)All<BroadcastEffect>(effects)
+                .Single(b => b.Message is KeyframesMessage).Message;
+
+            Assert.Equal(3, keyframes.Turn);
+            Assert.Equal(15f, keyframes.WindowStart);
+            Assert.Equal(20f, keyframes.WindowEnd);
+            Assert.Equal("unit_a", Assert.Single(keyframes.Tracks).Name);
+        }
+
+        // A scenario with prediction disabled records nothing. That must cost an
+        // empty broadcast, not an empty message.
+        [Fact]
+        public void TurnComplete_WithNothingRecorded_BroadcastsNoKeyframes()
+        {
+            var effects = Executing().Handle(new LocalTurnCompleteEvent("abc", null, null));
+
+            Assert.DoesNotContain(All<BroadcastEffect>(effects), b => b.Message is KeyframesMessage);
+            Assert.Contains(All<BroadcastEffect>(effects), b => b.Message is SnapshotMessage);
+        }
+
+        // Keyframes are client-bound, so a peer sending them upward is a protocol
+        // violation and gets the same treatment Snapshot or Welcome would. Pinned
+        // because the temptation with a new message type is to give it a quiet
+        // ignore-arm, which would make it the one client-bound message a peer may
+        // forge freely.
+        [Fact]
+        public void Keyframes_FromAPeer_AreAProtocolViolationLikeAnyClientBoundMessage()
+        {
+            var host = WithPeer();
+            var effects = host.HandleMessage(1, new KeyframesMessage(3, 0f, 5f, null));
+
+            Assert.Equal(1, Single<DisconnectEffect>(effects).PeerId);
+            Assert.Empty(host.Peers);
         }
 
         // --- keepalive ---

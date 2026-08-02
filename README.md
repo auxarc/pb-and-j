@@ -62,7 +62,58 @@ this code mod is open source (MIT) and any networking will be strictly opt-in.
         there is no scenario transfer, so both processes would have to independently enter
         an identical combat, which the game gives no mechanism to guarantee.
 
-Next: M6 — keyframe streaming, so the client watches execution rather than being corrected after it.
+- [ ] M6 — keyframe streaming, so the client watches execution rather than being corrected
+      after it. Code complete; **in-game verification outstanding**.
+  - [x] 6a: `KeyframesMessage` (wire v2, type 19) carrying a transform track per unit —
+        transforms only, poses and state keys deliberately deferred
+  - [x] 6b: host capture from `CombatReplayHelper`, re-keyed from the process-local ECS id to
+        `nameInternal`, sliced to the current turn by index, with a final key appended from the
+        same read the snapshot uses — so a track always ends where the correction put the unit
+  - [x] 6c: broadcast after the snapshot, never before; a turn with nothing recorded (prediction
+        disabled) sends nothing and degrades to exactly M5 behaviour
+  - [x] 6d: `KeyframePlayback.TrySample` — pure interpolation under the 100% gate — plus the
+        play/stop effects and their cancellation edges
+  - [x] 6e: `KeyframePlayer` writes the **view** transform (`combatView.view.transform`), never
+        the ECS, so playback cannot touch order authoring or the state digest;
+        `pbj.replay-last` round-trips a real capture through the codec and plays it on the host
+  - [x] 6f: `make peer-selftest` scenario 5 — tracks survive the wire key for key, sampling at
+        the window's end reproduces the snapshot exactly, and combat ending stops playback
+  - [ ] in-game checklist: `pbj.replay-last` retraces a turn, `keyframes sent` counts look sane,
+        the M5d digest still matches, and a prediction-disabled scenario degrades quietly
+
+- [ ] M7 — remote play: packaging and the guards a session between two machines needs.
+      Code complete; **no cross-machine session run yet**.
+  - [x] 7a: wire **v3** — `Hello`/`Rejoin` carry the game build and a session passphrase, and
+        the host refuses a peer whose mod or game build differs, naming both sides. Plus a
+        10s deadline for sockets that connect and never speak.
+  - [x] 7b: `pbj.host <bind> <port> <passphrase>` and `pbj.join <addr> <port> <passphrase>`.
+        A non-loopback bind **requires** a passphrase and logs the exposure loudly.
+  - [x] 7c: `pbj-peer` gains `--passphrase`, `--game-build`, `--mod-version`, and a sixth
+        selftest scenario driving every rejection plus the handshake deadline over real sockets
+  - [x] 7d: `make package` — mod zip, self-contained `pbj-peer.exe` for win-x64, friend README
+  - [x] stage 1: **verified cross-country 2026-08-02.** A second player, on Windows, ran
+        `pbj-peer` against this machine's real game over a port-forwarded TCP connection,
+        handshook under wire v3 with a passphrase, was dealt units, queued a `move_run` and
+        readied — and when both sides readied, the turn committed and his order executed here.
+        First time the protocol has crossed a real network between two people.
+  - [ ] stage 2: two real game instances, combat transferred by save file
+
+Next: **M8 — replay handoff.** Rather than streaming animation poses, hand the client the host's
+recorded replay and let the game's own playback system draw it, so a client sees the turn exactly
+as the host did. Designed in `docs/design/networking.md`; gated on stage 2, which is what makes
+the equipment and scenario match it depends on.
+
+**5f is not blocked after all.** M5 recorded two real instances as impossible because "there is
+no scenario transfer" — but M3a had already built one. `pbj.combat-save` writes a plain save
+directory; copy it to the other machine and `pbj.combat-load` puts both processes in the same
+combat with the same unit names, which is exactly the join key the snapshot and keyframe paths
+need.
+
+A trap paid for during M6, recorded so it is not re-paid: `TransformLinkSystem` looks like the
+ECS→view path for units, but `CombatEntity.ReplaceTransformLink` is never called anywhere in the
+game — no unit has that component. Units are driven by `PositionLinkSystem`/`RotationLinkSystem`,
+which are reactive on `Position`/`Rotation` and are not gated on the simulation running. The
+rendered transform of a unit is `combatView.view.transform`.
 
 ## Multiplayer is opt-in
 

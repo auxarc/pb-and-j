@@ -15,8 +15,10 @@ namespace PBAndJ.Core.Net
         Log = 7,
         ApplySnapshot = 8,
         ClearLocalOrders = 9,
+        PlayKeyframes = 10,
+        StopKeyframes = 11,
 
-        // 10+ reserved for M6 keyframe streaming.
+        // 12+ unallocated.
     }
 
     /// <summary>
@@ -151,6 +153,43 @@ namespace PBAndJ.Core.Net
     public sealed class ClearLocalOrdersEffect : PbjEffect
     {
         public override PbjEffectKind Kind => PbjEffectKind.ClearLocalOrders;
+    }
+
+    /// <summary>
+    /// Present a received turn's motion, replacing any playback already running.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="ApplySnapshotEffect"/> this reports nothing back. There
+    /// is nothing to verify: playback is presentation, the snapshot that arrived
+    /// just before it is what the digest was checked against, and a playback that
+    /// never finishes is corrected by the next turn's snapshot anyway.
+    /// </remarks>
+    public sealed class PlayKeyframesEffect : PbjEffect
+    {
+        public PlayKeyframesEffect(int turn, KeyframeCapture capture)
+        {
+            Turn = turn;
+            Capture = capture ?? throw new ArgumentNullException(nameof(capture));
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.PlayKeyframes;
+
+        public int Turn { get; }
+        public KeyframeCapture Capture { get; }
+    }
+
+    /// <summary>
+    /// Abandon any playback in flight.
+    /// </summary>
+    /// <remarks>
+    /// Needed at every edge that ends the turn being presented — combat ending,
+    /// the host saying goodbye, the session faulting. Without it a unit keeps
+    /// sliding along last turn's path through whatever comes next, and on a
+    /// faulted session nothing would ever stop it.
+    /// </remarks>
+    public sealed class StopKeyframesEffect : PbjEffect
+    {
+        public override PbjEffectKind Kind => PbjEffectKind.StopKeyframes;
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
+using Content.Code.Utility;
 using System.Reflection;
 using System.Threading;
 using HarmonyLib;
@@ -42,6 +43,17 @@ namespace PBAndJ.Mod.Net
         private static string? lastAddress;
         private static int lastPort;
 
+        // Survives Shutdown alongside the resume token: pbj.rejoin has to present
+        // the same passphrase the original join did, and the session that knew it
+        // is gone by then.
+        private static string? sessionPassphrase;
+
+        // The last turn's captured motion, kept for pbj.replay-last. Survives
+        // Shutdown for the same reason the resume token does: the command is a
+        // diagnostic and has to work after a session ends.
+        private static KeyframeCapture? lastCapture;
+        private static int lastCaptureTurn = -1;
+
         internal sealed class UnityLog : IPbjLog
         {
             public void Log(string line) => Debug.Log(line);
@@ -51,26 +63,68 @@ namespace PBAndJ.Mod.Net
 
         public static string Host() => Host(DefaultPort);
 
-        public static string Host(int port)
+        public static string Host(int port) => Host("127.0.0.1", port, null);
+
+        /// <summary>
+        /// Hosts on a specific interface, for play with someone who is not on
+        /// this machine.
+        /// </summary>
+        /// <remarks>
+        /// A separate form rather than a changed default, because the promise in
+        /// the README and the mod policy is that networking is strictly opt-in.
+        /// Reaching the outside world should be something a player typed, not
+        /// something that happened.
+        /// <para>
+        /// A non-loopback bind <em>requires</em> a passphrase. This protocol is
+        /// open source, so a listener on a routable address with no passphrase is
+        /// joinable by anything that finds the port — and an accepted peer can
+        /// submit orders for the units it is dealt. The passphrase travels in the
+        /// clear over plain TCP: it keeps strangers out, it is not confidentiality
+        /// against anyone sitting on the path.
+        /// </para>
+        /// </remarks>
+        public static string Host(string bind, int port, string? passphrase)
         {
             if (runtime != null)
             {
                 return "[pb-and-j] a session is already running — pbj.net-stop first";
             }
+
+            IPAddress address;
+            if (!IPAddress.TryParse(bind, out address))
+            {
+                return "[pb-and-j] '" + bind + "' is not an IP address — try 127.0.0.1 or 0.0.0.0";
+            }
+
+            var loopback = IPAddress.IsLoopback(address);
+            if (!loopback && string.IsNullOrEmpty(passphrase))
+            {
+                return "[pb-and-j] refusing to listen on " + bind + " without a passphrase — "
+                    + "use: pbj.host " + bind + " " + port + " <passphrase>";
+            }
+
             try
             {
                 bridge = new CombatGameBridge();
                 var mailbox = new PbjMailbox(MailboxCapacity);
-                var transport = new TcpHostTransport(mailbox, IPAddress.Loopback, port);
+                var transport = new TcpHostTransport(mailbox, address, port);
                 transport.Start();
                 hostTransport = transport;
 
-                var session = new HostSession(HostName(), NewSessionId(), MaxPeers, bridge, NewSessionSecret());
+                var session = new HostSession(
+                    HostName(), NewSessionId(), MaxPeers, bridge, NewSessionSecret(),
+                    new SessionRequirements(ModVersion(), GameBuild(), passphrase));
                 runtime = new PbjRuntime(transport, bridge, new UnityLog(), mailbox, session);
                 killed = false;
 
-                var line = NetLog.HostListening("127.0.0.1", transport.Port, PbjProtocol.Version, MaxPeers);
+                var line = NetLog.HostListening(bind, transport.Port, PbjProtocol.Version, MaxPeers);
                 Debug.Log(line);
+                if (!loopback)
+                {
+                    // Loud, and once, so nobody discovers after the fact that
+                    // their game was reachable from off the machine.
+                    Debug.LogWarning(NetLog.HostListeningOpenly(bind, transport.Port));
+                }
                 return line;
             }
             catch (Exception e)
@@ -80,9 +134,37 @@ namespace PBAndJ.Mod.Net
             }
         }
 
+        /// <summary>
+        /// This installation's Phantom Brigade build, as the game reports it.
+        /// </summary>
+        /// <remarks>
+        /// The whole string, not a parsed version: two peers only need to agree,
+        /// and the raw value distinguishes builds that share a version number.
+        /// Null if the game cannot say, which the handshake reads as "cannot
+        /// say" rather than "does not match".
+        /// </remarks>
+        private static string? GameBuild()
+        {
+            try
+            {
+                return BuildInfoHelper.GetBuildInfo();
+            }
+            catch (Exception e)
+            {
+                Debug.Log("[pb-and-j] could not read the game build: " + e.GetType().Name);
+                return null;
+            }
+        }
+
         public static string Join(string address) => Join(address, DefaultPort);
 
-        public static string Join(string address, int port) => Connect(address, port, resuming: false);
+        public static string Join(string address, int port) => Join(address, port, null);
+
+        public static string Join(string address, int port, string? passphrase)
+        {
+            sessionPassphrase = passphrase;
+            return Connect(address, port, resuming: false);
+        }
 
         /// <summary>
         /// Reconnects to the last host, reclaiming the units we held.
@@ -117,6 +199,11 @@ namespace PBAndJ.Mod.Net
                 var session = resuming
                     ? new ClientSession(HostName(), ModVersion(), bridge, resumeSessionId, resumePeerId, resumeToken)
                     : new ClientSession(HostName(), ModVersion(), bridge);
+
+                // Set before Start(), which is what composes the Hello or Rejoin.
+                session.GameBuild = GameBuild();
+                session.Passphrase = sessionPassphrase;
+
                 runtime = new PbjRuntime(transport, bridge, new UnityLog(), mailbox, session);
                 killed = false;
                 lastAddress = address;
@@ -146,6 +233,63 @@ namespace PBAndJ.Mod.Net
             }
             var client = (ClientSession)runtime.Session;
             return NetLog.Status("CLIENT", client.State.ToString(), client.Turn, 1, 0);
+        }
+
+        /// <summary>
+        /// Replays the last executed turn's captured motion on this machine.
+        /// </summary>
+        /// <remarks>
+        /// The M6 gate. Deliberately round-trips the tracks through the codec
+        /// before playing them, so one command exercises the whole pipeline a
+        /// client depends on — capture, re-key, turn slicing, encode, decode,
+        /// sample, render — with a single game instance. Playing the in-memory
+        /// capture directly would prove only that capture works.
+        /// <para>
+        /// Safe on a host because it writes view transforms only. Authoritative
+        /// ECS state is untouched, and the next execution's TransformLinkSystem
+        /// pass restores every view regardless. Expect units to slide rather than
+        /// walk: poses are out of scope, and sliding is exactly what a client
+        /// sees today.
+        /// </para>
+        /// </remarks>
+        public static string ReplayLast()
+        {
+            if (lastCapture == null || lastCapture.Tracks.Count == 0)
+            {
+                return "[pb-and-j] no keyframes captured yet — execute a turn first";
+            }
+
+            KeyframesMessage decoded;
+            try
+            {
+                var wire = PbjMessageCodec.Encode(new KeyframesMessage(
+                    lastCaptureTurn, lastCapture.WindowStart, lastCapture.WindowEnd, lastCapture.Tracks));
+                decoded = (KeyframesMessage)PbjMessageCodec.Decode(wire);
+            }
+            catch (PbjProtocolException e)
+            {
+                // A capture the codec refuses would have been dropped silently on
+                // the wire. Better to learn it here.
+                return "[pb-and-j] captured keyframes failed the codec round-trip: " + e.Message;
+            }
+
+            var keys = 0;
+            foreach (var track in decoded.Tracks)
+            {
+                keys += track.Transforms.Count;
+            }
+
+            KeyframePlayer.Play(decoded.Turn,
+                new KeyframeCapture(decoded.WindowStart, decoded.WindowEnd, decoded.Tracks));
+            if (!KeyframePlayer.IsPlaying)
+            {
+                return "[pb-and-j] replay: no recorded unit is present in this combat";
+            }
+
+            var line = NetLog.KeyframesReceived(
+                decoded.Turn, decoded.Tracks.Count, keys, decoded.WindowStart, decoded.WindowEnd);
+            Debug.Log(line);
+            return line;
         }
 
         public static string NetStop()
@@ -208,8 +352,17 @@ namespace PBAndJ.Mod.Net
             // describes exactly the state that goes on the wire. Reading the
             // bridge twice, or building a throwaway one as this used to, would
             // let the two drift apart between calls.
+            //
+            // Keyframes are read in the same call for the same reason, and it is
+            // load-bearing here: the final key capture appends comes from the
+            // same read the snapshot does, which is what makes "playback ends
+            // where the correction put it" true rather than hoped for.
             var snapshot = bridge.CaptureSnapshot();
-            runtime.Post(new LocalTurnCompleteEvent(bridge.ComputeStateDigest(), snapshot));
+            var keyframes = bridge.CaptureKeyframes();
+            lastCapture = keyframes;
+            lastCaptureTurn = bridge.CurrentTurn;
+            runtime.Post(new LocalTurnCompleteEvent(
+                bridge.ComputeStateDigest(), snapshot, keyframes));
         }
 
         /// <summary>
@@ -300,7 +453,9 @@ namespace PBAndJ.Mod.Net
             return string.IsNullOrWhiteSpace(name) ? "player" : name;
         }
 
-        private static string ModVersion() => "0.2.0";
+        // One source of truth, in Core, shared with the standalone harness —
+        // see PbjProtocol.ModVersion for why it stopped being a literal here.
+        private static string ModVersion() => PbjProtocol.ModVersion;
 
         private static string NewSessionId()
         {
@@ -325,13 +480,16 @@ namespace PBAndJ.Mod.Net
         {
             Add(nameof(Host), new Type[0], "pbj.host");
             Add(nameof(Host), new[] { typeof(int) }, "pbj.host");
+            Add(nameof(Host), new[] { typeof(string), typeof(int), typeof(string) }, "pbj.host");
             Add(nameof(Join), new[] { typeof(string) }, "pbj.join");
             Add(nameof(Join), new[] { typeof(string), typeof(int) }, "pbj.join");
+            Add(nameof(Join), new[] { typeof(string), typeof(int), typeof(string) }, "pbj.join");
             Add(nameof(NetStatus), new Type[0], "pbj.net-status");
             Add(nameof(NetStop), new Type[0], "pbj.net-stop");
             Add(nameof(Ready), new Type[0], "pbj.ready");
             Add(nameof(Unready), new Type[0], "pbj.unready");
             Add(nameof(Rejoin), new Type[0], "pbj.rejoin");
+            Add(nameof(ReplayLast), new Type[0], "pbj.replay-last");
         }
 
         private static void Add(string methodName, Type[] parameters, string command)
@@ -353,6 +511,13 @@ namespace PBAndJ.Mod.Net
         private static void Postfix()
         {
             NetGlue.Pump();
+
+            // Outside the pump's session guard on purpose: pbj.replay-last has to
+            // work on a host with no session, and playback must keep running for
+            // its full window even if the session faults halfway through.
+            // Unscaled, because the game parks Time.timeScale at zero during
+            // planning.
+            KeyframePlayer.Advance(Time.unscaledDeltaTime);
         }
     }
 

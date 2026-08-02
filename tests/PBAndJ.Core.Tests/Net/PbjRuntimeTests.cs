@@ -17,7 +17,7 @@ namespace PBAndJ.Core.Tests.Net
 
         private PbjRuntime HostRuntime(int maxPeers = 3)
         {
-            host = new HostSession("host", "7f3a91", maxPeers, bridge, "secret");
+            host = new HostSession("host", "7f3a91", maxPeers, bridge, "secret", SessionRequirements.None);
             return new PbjRuntime(transport, bridge, log, mailbox, host);
         }
 
@@ -25,7 +25,7 @@ namespace PBAndJ.Core.Tests.Net
             FrameEncoder.Encode(PbjMessageCodec.Encode(message));
 
         private static HelloMessage GoodHello(string name = "ally") =>
-            new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", name);
+            new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", name, null, null);
 
         /// <summary>Runs a peer through the handshake via the real byte path.</summary>
         private PbjRuntime WithHandshakenPeer(int peerId = 1)
@@ -43,7 +43,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Constructor_WithNullTransport_Throws()
         {
             var ex = Assert.Throws<ArgumentNullException>(
-                () => new PbjRuntime(null!, bridge, log, mailbox, new HostSession("h", "s", 1, bridge, "secret")));
+                () => new PbjRuntime(null!, bridge, log, mailbox, new HostSession("h", "s", 1, bridge, "secret", SessionRequirements.None)));
             Assert.Equal("transport", ex.ParamName);
         }
 
@@ -51,7 +51,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Constructor_WithNullBridge_Throws()
         {
             var ex = Assert.Throws<ArgumentNullException>(
-                () => new PbjRuntime(transport, null!, log, mailbox, new HostSession("h", "s", 1, bridge, "secret")));
+                () => new PbjRuntime(transport, null!, log, mailbox, new HostSession("h", "s", 1, bridge, "secret", SessionRequirements.None)));
             Assert.Equal("bridge", ex.ParamName);
         }
 
@@ -59,7 +59,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Constructor_WithNullLog_Throws()
         {
             var ex = Assert.Throws<ArgumentNullException>(
-                () => new PbjRuntime(transport, bridge, null!, mailbox, new HostSession("h", "s", 1, bridge, "secret")));
+                () => new PbjRuntime(transport, bridge, null!, mailbox, new HostSession("h", "s", 1, bridge, "secret", SessionRequirements.None)));
             Assert.Equal("log", ex.ParamName);
         }
 
@@ -67,7 +67,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Constructor_WithNullMailbox_Throws()
         {
             var ex = Assert.Throws<ArgumentNullException>(
-                () => new PbjRuntime(transport, bridge, log, null!, new HostSession("h", "s", 1, bridge, "secret")));
+                () => new PbjRuntime(transport, bridge, log, null!, new HostSession("h", "s", 1, bridge, "secret", SessionRequirements.None)));
             Assert.Equal("mailbox", ex.ParamName);
         }
 
@@ -202,7 +202,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Pump_DisconnectEffect_CallsTransportDisconnect()
         {
             var runtime = HostRuntime();
-            mailbox.Post(new PeerBytesEvent(1, Frame(new HelloMessage(0xDEAD, 1, "v", "ally"))));
+            mailbox.Post(new PeerBytesEvent(1, Frame(new HelloMessage(0xDEAD, 1, "v", "ally", null, null))));
             runtime.Pump(0);
             Assert.Equal(1, transport.Disconnected.Single().PeerId);
         }
@@ -354,7 +354,7 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(HostSessionState.Executing, host.State);
 
             bridge.InCombat = false;
-            mailbox.Post(new LocalTurnCompleteEvent("deadbeef", null));
+            mailbox.Post(new LocalTurnCompleteEvent("deadbeef", null, null));
             runtime.Pump(0);
 
             var sent = transport.MessagesTo(1);
@@ -393,6 +393,63 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(1, bridge.ClearLocalOrdersCalls);
             Assert.Equal(2, Assert.Single(bridge.AppliedSnapshots).Count);
             Assert.Contains(log.Lines, l => l.Contains("corrected") && l.Contains("OK"));
+        }
+
+        // --- keyframe playback ---
+
+        [Fact]
+        public void Pump_ReceivingKeyframes_HandsThemToTheBridgeToPresent()
+        {
+            var runtime = ClientRuntime(out _);
+
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId,
+                Frame(new KeyframesMessage(3, 15f, 20f, new[]
+                {
+                    new UnitTrack("unit_a", new[]
+                    {
+                        new TransformKey(15f, new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f)),
+                        new TransformKey(20f, new Vec3(9f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f)),
+                    }),
+                }))));
+            runtime.Pump(1);
+
+            var (turn, capture) = Assert.Single(bridge.Played);
+            Assert.Equal(3, turn);
+            Assert.Equal(20f, capture.WindowEnd);
+            Assert.Equal("unit_a", Assert.Single(capture.Tracks).Name);
+        }
+
+        // The whole ordering claim in one pump: the correction lands and is
+        // verified, and playback only then animates towards the same state. If
+        // these were ever reordered the client would verify its digest against a
+        // half-played animation.
+        [Fact]
+        public void Pump_SnapshotThenKeyframes_CorrectsBeforeItPresents()
+        {
+            var runtime = ClientRuntime(out _);
+            bridge.Digest = "stale";
+            bridge.DigestAfterApply = "abc";
+
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId,
+                Frame(new SnapshotMessage(3, "abc", new[] { Snap("unit_a") }))));
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId,
+                Frame(new KeyframesMessage(3, 15f, 20f, new[] { new UnitTrack("unit_a", null) }))));
+            runtime.Pump(1);
+
+            Assert.Single(bridge.AppliedSnapshots);
+            Assert.Single(bridge.Played);
+            Assert.Contains(log.Lines, l => l.Contains("corrected") && l.Contains("OK"));
+        }
+
+        [Fact]
+        public void Pump_CombatEnding_StopsPlaybackOnTheBridge()
+        {
+            var runtime = ClientRuntime(out _);
+
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId, Frame(new CombatEndMessage())));
+            runtime.Pump(1);
+
+            Assert.Equal(1, bridge.StopKeyframesCalls);
         }
 
         [Fact]
@@ -470,7 +527,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Pump_WhenTransportSendThrows_DisconnectsThatPeerAndContinues()
         {
             var throwing = new ThrowingTransport();
-            var session = new HostSession("host", "s", 3, bridge, "secret");
+            var session = new HostSession("host", "s", 3, bridge, "secret", SessionRequirements.None);
             var runtime = new PbjRuntime(throwing, bridge, log, mailbox, session);
 
             mailbox.Post(new PeerBytesEvent(1, Frame(GoodHello())));
@@ -484,7 +541,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Pump_ReportsMailboxOverflow()
         {
             var small = new PbjMailbox(1);
-            var runtime = new PbjRuntime(transport, bridge, log, small, new HostSession("h", "s", 1, bridge, "secret"));
+            var runtime = new PbjRuntime(transport, bridge, log, small, new HostSession("h", "s", 1, bridge, "secret", SessionRequirements.None));
             small.Post(new TransportLogEvent("a"));
             small.Post(new TransportLogEvent("dropped"));
             runtime.Pump(0);
@@ -496,7 +553,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Pump_ReportsOverflowOnlyOncePerBatchOfDrops()
         {
             var small = new PbjMailbox(1);
-            var runtime = new PbjRuntime(transport, bridge, log, small, new HostSession("h", "s", 1, bridge, "secret"));
+            var runtime = new PbjRuntime(transport, bridge, log, small, new HostSession("h", "s", 1, bridge, "secret", SessionRequirements.None));
             small.Post(new TransportLogEvent("a"));
             small.Post(new TransportLogEvent("dropped"));
             runtime.Pump(0);
