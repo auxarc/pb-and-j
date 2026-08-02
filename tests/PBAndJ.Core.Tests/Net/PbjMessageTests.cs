@@ -33,7 +33,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Welcome_RetainsFields()
         {
             var peers = new[] { new PeerInfo(0, "host"), new PeerInfo(1, "ally") };
-            var m = new WelcomeMessage(1, "7f3a91", 1, "host", peers, 3);
+            var m = new WelcomeMessage(1, "7f3a91", 1, "host", peers, 3, "tok");
             Assert.Equal(PbjMessageType.Welcome, m.Type);
             Assert.Equal(1, m.ProtocolVersion);
             Assert.Equal("7f3a91", m.SessionId);
@@ -46,7 +46,7 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void Welcome_WithNullPeers_NormalisesToEmpty()
         {
-            Assert.Empty(new WelcomeMessage(1, "s", 1, "h", null, 0).Peers);
+            Assert.Empty(new WelcomeMessage(1, "s", 1, "h", null, 0, "tok").Peers);
         }
 
         [Fact]

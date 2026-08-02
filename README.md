@@ -43,8 +43,26 @@ this code mod is open source (MIT) and any networking will be strictly opt-in.
 
 **Feasibility verdict: proven. Two planners, one sim, over a network.**
 
-Next: M5 — letting the client actually *see* execution (end-of-turn snapshot correction), plus
-an outbound writer thread, which is a hard prerequisite before state snapshots go over the wire.
+- [x] M5 — the client can see execution, verified in-game 2026-08-02
+  - [x] 5a: `Unready`, `OrderResult` (by batch index), `CombatStart`/`CombatEnd`
+  - [x] 5b: per-peer outbound queue + writer thread — sends no longer block the frame
+  - [x] 5c: keepalive (`Ping`/`Pong`), peer and host timeouts, asymmetric on purpose
+  - [x] 5d: **snapshot correction** — the host broadcasts authoritative unit state at
+        end-of-turn and the client hard-sets to it, then verifies its own digest.
+        **Verified in-game 2026-08-02:** a `move_run` of 18 units was relayed from `pbj-peer`
+        to the real game for `pb_mech_02`, the mech walked it, and the client's independently
+        recomputed digest matched the host's after correction.
+  - [x] 5e: reconnect-after-drop — units are held through a grace window and rebound to the
+        returning player's new peer id (wire v2).
+        **Verified in-game 2026-08-02:** a dropped peer reconnected under the same player name
+        during the grace window, was issued a fresh peer id, and got `pb_mech_02` back.
+  - [x] in-game checklist cleared: `pbj.unready`, `OrderResult` rejecting an unowned order,
+        peer timeout, reconnect
+  - [ ] 5f (stretch, not attempted): two real game instances. The blocker is not Proton —
+        there is no scenario transfer, so both processes would have to independently enter
+        an identical combat, which the game gives no mechanism to guarantee.
+
+Next: M6 — keyframe streaming, so the client watches execution rather than being corrected after it.
 
 ## Multiplayer is opt-in
 

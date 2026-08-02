@@ -145,6 +145,21 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void Mix_IsStableAndDistinguishesInputs()
+        {
+            Assert.Equal(StateDigest.Mix("a:1:ally"), StateDigest.Mix("a:1:ally"));
+            Assert.NotEqual(StateDigest.Mix("a:1:ally"), StateDigest.Mix("b:1:ally"));
+            Assert.Equal(8, StateDigest.Mix("anything").Length);
+        }
+
+        [Fact]
+        public void Mix_WithNull_Throws()
+        {
+            var ex = Assert.Throws<ArgumentNullException>(() => StateDigest.Mix(null!));
+            Assert.Equal("value", ex.ParamName);
+        }
+
+        [Fact]
         public void UnitState_RetainsFields()
         {
             var unit = new UnitState("unit_a", new Vec3(1f, 2f, 3f), 0.75f);

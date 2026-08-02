@@ -14,20 +14,60 @@ namespace PBAndJ.Peer
     /// that runs inside Phantom Brigade — the protocol is exercised for real,
     /// just without a game attached.
     /// </remarks>
+    /// <summary>A unit in the harness's stand-in world.</summary>
+    [ExcludeFromCodeCoverage]
+    internal sealed class ScriptedUnit
+    {
+        public ScriptedUnit(string name)
+        {
+            Name = name;
+            Rotation = new Vec4(0f, 0f, 0f, 1f);
+            Facing = new Vec3(0f, 0f, 1f);
+            Integrity = 1f;
+        }
+
+        public string Name { get; }
+        public Vec3 Position { get; set; }
+        public Vec4 Rotation { get; set; }
+        public Vec3 Facing { get; set; }
+        public float Integrity { get; set; }
+        public bool IsDead { get; set; }
+        public float DeathTime { get; set; }
+    }
+
     [ExcludeFromCodeCoverage]
     internal sealed class ScriptedGameBridge : IPbjGameBridge
     {
         private readonly List<OrderPayload> staged = new List<OrderPayload>();
+        private readonly List<ScriptedUnit> units = new List<ScriptedUnit>
+        {
+            new ScriptedUnit("unit_a"),
+            new ScriptedUnit("unit_b"),
+            new ScriptedUnit("unit_c"),
+        };
 
         public int CurrentTurn { get; set; }
 
         public bool InCombat { get; set; } = true;
 
-        public List<string> Units { get; } = new List<string> { "unit_a", "unit_b", "unit_c" };
+        public IReadOnlyList<ScriptedUnit> Units => units;
 
         public bool ExecutionLocked { get; private set; }
 
-        public IReadOnlyList<string> AssignableUnitNames => Units;
+        public int ClearLocalOrdersCalls { get; private set; }
+
+        public IReadOnlyList<string> AssignableUnitNames
+        {
+            get
+            {
+                var names = new List<string>(units.Count);
+                foreach (var unit in units)
+                {
+                    names.Add(unit.Name);
+                }
+                return names;
+            }
+        }
 
         public IReadOnlyList<OrderPayload> StagedOrders => staged;
 
@@ -63,11 +103,70 @@ namespace PBAndJ.Peer
         public void SetExecutionLocked(bool locked) => ExecutionLocked = locked;
 
         /// <summary>
-        /// Deliberately not a real state hash — a harness has no units, so it
-        /// will diverge from the host, which is exactly what the divergence
-        /// detector should report.
+        /// A real digest over the harness's own model.
         /// </summary>
-        public string ComputeStateDigest() => StateDigest.Compute(Array.Empty<UnitState>());
+        /// <remarks>
+        /// It was a deliberate stub through M4, when the harness had no state to
+        /// hash and always reporting DIVERGED was the honest answer. Since M5d it
+        /// has a model, and this is what the snapshot gate compares.
+        /// </remarks>
+        public string ComputeStateDigest() => StateDigest.Compute(ToUnitStates());
+
+        public IReadOnlyList<UnitSnapshot> CaptureSnapshot()
+        {
+            var snapshot = new List<UnitSnapshot>(units.Count);
+            foreach (var unit in units)
+            {
+                snapshot.Add(new UnitSnapshot(
+                    unit.Name, unit.Position, unit.Rotation, unit.Facing,
+                    unit.Integrity, unit.IsDead, unit.DeathTime));
+            }
+            return snapshot;
+        }
+
+        /// <summary>
+        /// Replaces the model wholesale rather than merging by name.
+        /// </summary>
+        /// <remarks>
+        /// A merge would be wrong here and would quietly fail the gate: the
+        /// harness seeds itself with unit_a/b/c, and a real game sends
+        /// pb_mech_01 and friends, so a name join would match nothing, leave the
+        /// stand-in units in place, and report DIVERGED forever. Wholesale
+        /// replacement is also the honest meaning of "hard-set" for a bridge with
+        /// no world of its own.
+        /// </remarks>
+        public void ApplySnapshot(IReadOnlyList<UnitSnapshot> snapshot)
+        {
+            units.Clear();
+            foreach (var incoming in snapshot)
+            {
+                units.Add(new ScriptedUnit(incoming.Name ?? "?")
+                {
+                    Position = incoming.Position,
+                    Rotation = incoming.Rotation,
+                    Facing = incoming.Facing,
+                    Integrity = incoming.Integrity,
+                    IsDead = incoming.IsDead,
+                    DeathTime = incoming.DeathTime,
+                });
+            }
+        }
+
+        public void ClearLocalOrders()
+        {
+            ClearLocalOrdersCalls++;
+            staged.Clear();
+        }
+
+        private UnitState[] ToUnitStates()
+        {
+            var states = new UnitState[units.Count];
+            for (var i = 0; i < units.Count; i++)
+            {
+                states[i] = new UnitState(units[i].Name, units[i].Position, units[i].Integrity);
+            }
+            return states;
+        }
     }
 
     [ExcludeFromCodeCoverage]

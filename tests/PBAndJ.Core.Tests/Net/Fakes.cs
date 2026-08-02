@@ -49,6 +49,34 @@ namespace PBAndJ.Core.Tests.Net
         public void SetExecutionLocked(bool locked) => LockCalls.Add(locked);
 
         public string ComputeStateDigest() => Digest;
+
+        /// <summary>What CaptureSnapshot hands back.</summary>
+        public List<UnitSnapshot> Snapshot { get; } = new List<UnitSnapshot>();
+
+        /// <summary>Every snapshot handed to ApplySnapshot, in order.</summary>
+        public List<IReadOnlyList<UnitSnapshot>> AppliedSnapshots { get; } =
+            new List<IReadOnlyList<UnitSnapshot>>();
+
+        public int ClearLocalOrdersCalls { get; private set; }
+
+        /// <summary>
+        /// Digest to report once a snapshot has been applied — lets a test make
+        /// the correction land or deliberately fail to.
+        /// </summary>
+        public string? DigestAfterApply { get; set; }
+
+        public IReadOnlyList<UnitSnapshot> CaptureSnapshot() => Snapshot;
+
+        public void ApplySnapshot(IReadOnlyList<UnitSnapshot> units)
+        {
+            AppliedSnapshots.Add(units);
+            if (DigestAfterApply != null)
+            {
+                Digest = DigestAfterApply;
+            }
+        }
+
+        public void ClearLocalOrders() => ClearLocalOrdersCalls++;
     }
 
     /// <summary>Records everything sent, without a socket.</summary>

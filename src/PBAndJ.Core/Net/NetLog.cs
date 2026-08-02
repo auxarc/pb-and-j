@@ -245,6 +245,35 @@ namespace PBAndJ.Core.Net
                 peerId, Describe(unitName), Describe(blueprint), result);
         }
 
+        public static string OrderResultSent(int peerId, int accepted, int rejected)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "order result to #{0}: {1} accepted, {2} rejected", peerId, accepted, rejected);
+        }
+
+        public static string OrderResultReceived(int turn, int accepted, int rejected)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} orders: {1} accepted, {2} rejected by host", turn, accepted, rejected);
+        }
+
+        public static string UnreadyReceived(int peerId, string? name, int turn)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "un-ready from #{0} '{1}' for turn {2}", peerId, Describe(name), turn);
+        }
+
+        public static string UnreadyIgnored(int peerId, int turn, string why)
+        {
+            RequireText(why, nameof(why));
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "ignoring un-ready from #{0} for turn {1} — {2}", peerId, turn, why);
+        }
+
         public static string TurnCommitted(int turn)
         {
             return Prefix + string.Format(CultureInfo.InvariantCulture, "turn {0} committed", turn);
@@ -278,6 +307,172 @@ namespace PBAndJ.Core.Net
             return Prefix + string.Format(
                 CultureInfo.InvariantCulture,
                 "turn {0} DIVERGED | host {1} | local {2}", turn, Describe(expected), Describe(actual));
+        }
+
+        // --- snapshots ---
+
+        public static string SnapshotSent(int turn, int unitCount, int peerCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} snapshot | {1} unit{2} | broadcast to {3} peer{4}",
+                turn, unitCount, Plural(unitCount), peerCount, Plural(peerCount));
+        }
+
+        public static string SnapshotVerified(int turn, int unitCount, string? digest)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} corrected | {1} unit{2} | digest {3} OK",
+                turn, unitCount, Plural(unitCount), Describe(digest));
+        }
+
+        public static string SnapshotStillDiverged(int turn, string? expected, string? actual)
+        {
+            // Loud on purpose: correction landing and the result still not
+            // matching means the two sides disagree about which units exist,
+            // which no amount of position-setting can fix.
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} STILL DIVERGED after correction | host {1} | local {2}",
+                turn, Describe(expected), Describe(actual));
+        }
+
+        public static string SnapshotUnitsSkipped(int missingLocally, int missingRemotely)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "snapshot: {0} unit(s) not present locally, {1} local unit(s) not in the snapshot",
+                missingLocally, missingRemotely);
+        }
+
+        public static string SnapshotClamped(int captured, int cap)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "snapshot clamped: {0} units captured, only {1} fit — the rest are NOT corrected",
+                captured, cap);
+        }
+
+        // --- keepalive ---
+
+        public static string PeerTimedOut(int peerId, string? name, double silentSeconds)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "peer #{0} '{1}' silent for {2:F0}s — dropping", peerId, Describe(name), silentSeconds);
+        }
+
+        public static string HostTimedOut(double silentSeconds)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "host silent for {0:F0}s — connection lost, continuing single-player", silentSeconds);
+        }
+
+        // --- reconnect ---
+
+        public static string PeerHeldForReconnect(int peerId, string? name, double graceSeconds)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "holding #{0} '{1}' units for {2:F0}s in case they reconnect",
+                peerId, Describe(name), graceSeconds);
+        }
+
+        public static string PeerRejoined(int oldPeerId, int newPeerId, string? name)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "'{0}' rejoined as #{1} (was #{2}) — units rebound",
+                Describe(name), newPeerId, oldPeerId);
+        }
+
+        public static string ReconnectExpired(int peerId, string? name)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "#{0} '{1}' did not return — releasing their units",
+                peerId, Describe(name));
+        }
+
+        public static string Rejoining(string? sessionId, int claimedPeerId)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "rejoining session {0} as peer #{1}", Describe(sessionId), claimedPeerId);
+        }
+
+        // --- combat lifecycle ---
+
+        public static string CombatStarted(int turn, int peerCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "combat started on turn {0} — announcing to {1} peer{2}", turn, peerCount, Plural(peerCount));
+        }
+
+        public static string CombatEnded(int peerCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "combat ended — unlocking {0} peer{1}", peerCount, Plural(peerCount));
+        }
+
+        public static string CombatStateObserved(bool inCombat)
+        {
+            return Prefix + "host reports combat " + (inCombat ? "started" : "ended");
+        }
+
+        public static string CombatStartedByHost(int turn)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture, "host started combat on turn {0}", turn);
+        }
+
+        public static string CombatEndedByHost()
+        {
+            return Prefix + "host's combat ended — back to the lobby";
+        }
+
+        // --- the outbound queue ---
+        //
+        // Composed here, called from the transports' writer threads, and posted
+        // as a TransportLogEvent rather than logged directly: a background thread
+        // must never touch the log sink. Composing a string touches nothing but
+        // the string.
+
+        public static string SendQueueBacklog(int peerId, int queuedBytes, int queuedFrames)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "send queue backing up for #{0}: {1} frame(s), {2} byte(s) — slow link",
+                peerId, queuedFrames, queuedBytes);
+        }
+
+        public static string SendQueueOverflowed(int peerId, int queuedBytes, int queuedFrames)
+        {
+            // Dropping a frame is not an option — the protocol is a stateful
+            // stream with no resend, so a lost TurnCommit would strand that peer
+            // undetectably. The peer goes instead.
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "send queue OVERFLOWED for #{0} at {1} frame(s), {2} byte(s) — dropping the peer",
+                peerId, queuedFrames, queuedBytes);
+        }
+
+        public static string SendFailed(int peerId, string detail)
+        {
+            RequireText(detail, nameof(detail));
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture, "send to #{0} failed: {1}", peerId, detail);
+        }
+
+        public static string SendAfterStop(int peerId)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "dropping a frame for #{0}: the transport is stopped", peerId);
         }
 
         public static string MailboxOverflowed(int dropped)

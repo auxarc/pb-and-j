@@ -6,11 +6,22 @@ namespace PBAndJ.Core.Tests.Net
     public class PbjProtocolTests
     {
         [Fact]
-        public void Version_IsOne()
+        public void Version_IsTwo()
         {
             // Pinned deliberately: bumping the wire format must be an explicit
             // edit here and in Write_MinimalOrder_ProducesExactBytes.
-            Assert.Equal(1, PbjProtocol.Version);
+            // v2 (M5e) added ResumeToken to Welcome. The message types added
+            // earlier in M5 left every existing layout alone and so kept v1.
+            Assert.Equal(2, PbjProtocol.Version);
+        }
+
+        [Fact]
+        public void Timeouts_GiveTheHostMoreRopeThanItGivesAPeer()
+        {
+            // The host is the side that hitches, and a client fault is terminal.
+            Assert.True(PbjProtocol.HostTimeoutSeconds > PbjProtocol.PeerTimeoutSeconds);
+            Assert.True(PbjProtocol.PeerTimeoutSeconds > PbjProtocol.PingIntervalSeconds);
+            Assert.True(PbjProtocol.PingIntervalSeconds > PbjProtocol.TickIntervalSeconds);
         }
 
         [Fact]

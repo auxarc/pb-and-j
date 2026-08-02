@@ -41,10 +41,12 @@ namespace PBAndJ.Peer
             "pbj-peer — standalone peer for the pb-and-j protocol\n" +
             "\n" +
             "  pbj-peer connect --host 127.0.0.1 --port 27600 --name ally [--protocol N] [--auto-ready]\n" +
+            "                   [--token T --session S --peer-id N]   reclaim units after a drop\n" +
             "  pbj-peer listen  --bind 127.0.0.1 --port 27600 --name host [--peers 3]\n" +
             "  pbj-peer selftest\n" +
             "\n" +
-            "REPL commands: status, units, order <unit> <dx> <dy> <dz>, orders, clear, ready, digest, quit\n" +
+            "REPL commands: status, units, order <unit> <dx> <dy> <dz>, orders, clear,\n" +
+            "               ready, unready, digest, snapshot, quit\n" +
             "  order coordinates are an OFFSET from the unit's current position";
 
         private static int Connect(Options options)
@@ -57,7 +59,12 @@ namespace PBAndJ.Peer
             var bridge = new ScriptedGameBridge();
             var mailbox = new PbjMailbox(4096);
             var transport = new TcpClientTransport(mailbox);
-            var session = new ClientSession(options.Name, options.ModVersion, bridge);
+            // With a token this opens as a Rejoin and reclaims the units the
+            // previous connection held, rather than arriving as a new player.
+            var session = options.ResumeToken == null
+                ? new ClientSession(options.Name, options.ModVersion, bridge)
+                : new ClientSession(options.Name, options.ModVersion, bridge,
+                    options.ResumeSession, options.ResumePeerId, options.ResumeToken);
             var runtime = new PbjRuntime(transport, bridge, new ConsoleLog(), mailbox, session);
 
             Console.WriteLine(NetLog.ClientConnecting(options.Host, options.Port, options.Name));
@@ -146,7 +153,7 @@ namespace PBAndJ.Peer
             var transport = new TcpHostTransport(mailbox, IPAddress.Parse(options.Bind), options.Port);
             transport.Start();
 
-            var session = new HostSession(options.Name, "peer01", options.Peers, bridge);
+            var session = new HostSession(options.Name, "peer01", options.Peers, bridge, Guid.NewGuid().ToString("N"));
             var runtime = new PbjRuntime(transport, bridge, new ConsoleLog(), mailbox, session);
 
             Console.WriteLine(NetLog.HostListening(options.Bind, transport.Port, PbjProtocol.Version, options.Peers));
@@ -242,6 +249,11 @@ namespace PBAndJ.Peer
                     Console.WriteLine("[pbj-peer] ready posted");
                     break;
 
+                case "unready":
+                    runtime.Post(new LocalUnreadyEvent());
+                    Console.WriteLine("[pbj-peer] un-ready posted");
+                    break;
+
                 case "units":
                     if (runtime.Session is ClientSession session)
                     {
@@ -255,11 +267,50 @@ namespace PBAndJ.Peer
                     Console.WriteLine($"[pbj-peer] local digest {bridge.ComputeStateDigest()}");
                     break;
 
+                case "snapshot":
+                    PrintSnapshot(bridge);
+                    break;
+
                 default:
                     Console.WriteLine(Usage);
                     break;
             }
             return true;
+        }
+
+        /// <summary>
+        /// Dumps the corrected local world unit by unit.
+        /// </summary>
+        /// <remarks>
+        /// This is the M5 gate's output: run against a real game, press Execute
+        /// there, and every line here is host-authoritative state that survived
+        /// capture, the codec, the socket and the hard-set. The digest at the
+        /// bottom is the client's own, recomputed — if it matches the one the
+        /// host logged, the whole path is proven including the Mono-vs-.NET float
+        /// question.
+        /// </remarks>
+        private static void PrintSnapshot(ScriptedGameBridge bridge)
+        {
+            if (bridge.Units.Count == 0)
+            {
+                Console.WriteLine("[pbj-peer] no snapshot received yet");
+                return;
+            }
+
+            Console.WriteLine($"[pbj-peer] {bridge.Units.Count} unit(s) in the last correction:");
+            foreach (var unit in bridge.Units)
+            {
+                var pos = unit.Position;
+                var rot = unit.Rotation;
+                var state = unit.IsDead
+                    ? $"DEAD @{unit.DeathTime.ToString("F2", CultureInfo.InvariantCulture)}"
+                    : "alive";
+                Console.WriteLine(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "[pbj-peer]   {0,-24} pos ({1,8:F2},{2,8:F2},{3,8:F2})  rot ({4:F2},{5:F2},{6:F2},{7:F2})  integrity {8:P0}  {9}",
+                    unit.Name, pos.X, pos.Y, pos.Z, rot.X, rot.Y, rot.Z, rot.W, unit.Integrity, state));
+            }
+            Console.WriteLine($"[pbj-peer] local digest {bridge.ComputeStateDigest()}");
         }
 
         private static void StageOrder(string[] parts, ScriptedGameBridge bridge)
@@ -296,7 +347,15 @@ namespace PBAndJ.Peer
                 return NetLog.Status("HOST", host.State.ToString(), host.Turn, host.ParticipantCount, host.ReadyCount);
             }
             var client = (ClientSession)runtime.Session;
-            return NetLog.Status("CLIENT", client.State.ToString(), client.Turn, 1, 0);
+            var line = NetLog.Status("CLIENT", client.State.ToString(), client.Turn, 1, 0);
+            if (client.ResumeToken != null)
+            {
+                // Printed so an operator can copy it straight into the reconnect
+                // command after killing this peer.
+                line += $"\n[pbj-peer] to reclaim these units: --token {client.ResumeToken}"
+                    + $" --session {client.SessionId} --peer-id {client.PeerId}";
+            }
+            return line;
         }
 
         private sealed class Options
@@ -311,6 +370,14 @@ namespace PBAndJ.Peer
 
             /// <summary>Set only by --protocol, to exercise the reject path.</summary>
             public int? ProtocolVersion { get; private set; }
+
+            /// <summary>
+            /// Reconnect credentials, from the Welcome of a previous run. With
+            /// all three set the session opens as a Rejoin.
+            /// </summary>
+            public string? ResumeToken { get; private set; }
+            public string? ResumeSession { get; private set; }
+            public int ResumePeerId { get; private set; } = -1;
 
             public static Options Parse(string[] args)
             {
@@ -332,6 +399,12 @@ namespace PBAndJ.Peer
                             i++;
                             break;
                         case "--auto-ready": options.AutoReady = true; break;
+                        case "--token": options.ResumeToken = next!; i++; break;
+                        case "--session": options.ResumeSession = next!; i++; break;
+                        case "--peer-id":
+                            options.ResumePeerId = int.Parse(next!, CultureInfo.InvariantCulture);
+                            i++;
+                            break;
                     }
                 }
                 return options;

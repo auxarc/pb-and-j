@@ -38,12 +38,50 @@ namespace PBAndJ.Core.Net
         public const int HostConnectionId = 0;
 
         private static readonly int[] HostOnly = { HostConnectionId };
+        private static readonly string[] NoUnits = new string[0];
 
         private readonly IPbjGameBridge bridge;
         private readonly string playerName;
         private readonly string modVersion;
 
+        // What we present to reclaim our units, when this session is a return
+        // rather than a first arrival.
+        private readonly string? resumeSessionId;
+        private readonly int resumePeerId;
+        private readonly string? resumeToken;
+
+        /// <summary>
+        /// Whether a Ready is outstanding for the current turn. Gates the send:
+        /// un-readying without having readied is a no-op, not an unlock.
+        /// </summary>
+        private bool submittedThisTurn;
+
+        // Keepalive. Stamped from the last TickEvent, the only place a clock
+        // enters a session.
+        private double nowSeconds;
+        private double lastInboundSeconds;
+        private bool ticked;
+        private bool stamped;
+
         public ClientSession(string playerName, string modVersion, IPbjGameBridge bridge)
+            : this(playerName, modVersion, bridge, null, -1)
+        {
+        }
+
+        /// <param name="resumeToken">
+        /// The token from a previous <see cref="WelcomeMessage"/>. When present
+        /// the session opens with <see cref="RejoinMessage"/> instead of
+        /// <see cref="HelloMessage"/>, reclaiming the units it held before.
+        /// </param>
+        /// <param name="resumeSessionId">Which session the token belongs to.</param>
+        /// <param name="resumePeerId">The peer id that token was issued to.</param>
+        public ClientSession(
+            string playerName,
+            string modVersion,
+            IPbjGameBridge bridge,
+            string? resumeSessionId,
+            int resumePeerId,
+            string? resumeToken = null)
         {
             if (string.IsNullOrWhiteSpace(playerName))
             {
@@ -52,6 +90,9 @@ namespace PBAndJ.Core.Net
             this.playerName = playerName;
             this.modVersion = modVersion ?? string.Empty;
             this.bridge = bridge ?? throw new ArgumentNullException(nameof(bridge));
+            this.resumeSessionId = resumeSessionId;
+            this.resumePeerId = resumePeerId;
+            this.resumeToken = resumeToken;
         }
 
         public ClientSessionState State { get; private set; } = ClientSessionState.Handshaking;
@@ -71,13 +112,34 @@ namespace PBAndJ.Core.Net
 
         public IReadOnlyList<int> ConnectedPeerIds => HostOnly;
 
+        /// <summary>
+        /// The token to present if this connection drops and we come back.
+        /// </summary>
+        /// <remarks>
+        /// Handed out by the host in Welcome. The glue must keep it somewhere
+        /// that survives tearing the session down, or a reconnect has nothing to
+        /// present.
+        /// </remarks>
+        public string? ResumeToken { get; private set; }
+
         /// <summary>Opens the handshake. Called once the transport connects.</summary>
         public IReadOnlyList<PbjEffect> Start()
         {
+            if (resumeToken == null)
+            {
+                return new PbjEffect[]
+                {
+                    new SendEffect(HostConnectionId,
+                        new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, modVersion, playerName)),
+                };
+            }
+
             return new PbjEffect[]
             {
-                new SendEffect(HostConnectionId,
-                    new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, modVersion, playerName)),
+                new SendEffect(HostConnectionId, new RejoinMessage(
+                    PbjProtocol.Magic, PbjProtocol.Version, modVersion, playerName,
+                    resumeSessionId, resumePeerId, resumeToken)),
+                new LogEffect(NetLog.Rejoining(resumeSessionId, resumePeerId)),
             };
         }
 
@@ -120,6 +182,30 @@ namespace PBAndJ.Core.Net
                     HandleLocalReady(effects);
                     break;
 
+                case LocalUnreadyEvent:
+                    HandleLocalUnready(effects);
+                    break;
+
+                case OrderAppliedEvent:
+                    // Clients never apply remote orders.
+                    break;
+
+                case SnapshotAppliedEvent applied:
+                    HandleSnapshotApplied(applied, effects);
+                    break;
+
+                case CombatEnteredEvent:
+                case CombatExitedEvent:
+                    // A client's own combat state is not authoritative — it
+                    // learns combat state from the host's CombatStart/CombatEnd.
+                    // These arms exist so the edge does not throw.
+                    effects.Add(new LogEffect(NetLog.CombatStateObserved(evt is CombatEnteredEvent)));
+                    break;
+
+                case TickEvent tick:
+                    HandleTick(tick, effects);
+                    break;
+
                 case LocalTurnCompleteEvent:
                     // A client does not simulate, so its own execution-end hook
                     // carries no authority. The host's TurnComplete drives us.
@@ -146,6 +232,22 @@ namespace PBAndJ.Core.Net
             var effects = new List<PbjEffect>();
             if (IsFinished)
             {
+                return effects;
+            }
+
+            // Any traffic proves the host is alive.
+            if (ticked)
+            {
+                lastInboundSeconds = nowSeconds;
+                stamped = true;
+            }
+
+            if (message is PingMessage ping)
+            {
+                // Answered before the handshake guard below: a Ping is not a
+                // protocol violation whenever it arrives, and refusing to answer
+                // one would have the host reap a peer that is perfectly alive.
+                effects.Add(new SendEffect(HostConnectionId, new PongMessage(ping.Nonce)));
                 return effects;
             }
 
@@ -194,12 +296,37 @@ namespace PBAndJ.Core.Net
                     effects.Add(new LogEffect(NetLog.PeerLeft(left.PeerId, left.Name, "host reported")));
                     break;
 
+                case CombatStartMessage combatStart:
+                    Turn = combatStart.Turn;
+                    State = ClientSessionState.Planning;
+                    submittedThisTurn = false;
+                    effects.Add(new LogEffect(NetLog.CombatStartedByHost(combatStart.Turn)));
+                    effects.Add(new SetExecutionLockEffect(false));
+                    break;
+
+                case CombatEndMessage:
+                    State = ClientSessionState.Lobby;
+                    OwnedUnits = NoUnits;
+                    submittedThisTurn = false;
+                    effects.Add(new LogEffect(NetLog.CombatEndedByHost()));
+                    effects.Add(new SetExecutionLockEffect(false));
+                    break;
+
+                case OrderResultMessage result:
+                    effects.Add(new LogEffect(NetLog.OrderResultReceived(
+                        result.Turn, result.Accepted, result.Rejected.Count)));
+                    break;
+
                 case TurnCommitMessage commit:
                     HandleTurnCommit(commit, effects);
                     break;
 
                 case TurnCompleteMessage complete:
                     HandleTurnComplete(complete, effects);
+                    break;
+
+                case SnapshotMessage snapshot:
+                    HandleSnapshot(snapshot, effects);
                     break;
 
                 case ByeMessage bye:
@@ -232,6 +359,7 @@ namespace PBAndJ.Core.Net
             SessionId = welcome.SessionId;
             HostName = welcome.HostName;
             Turn = welcome.CurrentTurn;
+            ResumeToken = welcome.ResumeToken;
             State = bridge.InCombat ? ClientSessionState.Planning : ClientSessionState.Lobby;
 
             effects.Add(new LogEffect(NetLog.Welcomed(PeerId, SessionId, HostName, Turn)));
@@ -251,9 +379,49 @@ namespace PBAndJ.Core.Net
             }
 
             var orders = bridge.CaptureLocalOrders();
+            submittedThisTurn = true;
             effects.Add(new SendEffect(HostConnectionId, new ReadyMessage(Turn, orders)));
             effects.Add(new LogEffect(NetLog.ReadyReceived(PeerId, playerName, Turn, orders.Count)));
             effects.Add(new SetExecutionLockEffect(true));
+        }
+
+        /// <summary>Gives up on a host that has gone quiet.</summary>
+        private void HandleTick(TickEvent tick, List<PbjEffect> effects)
+        {
+            nowSeconds = tick.NowSeconds;
+            ticked = true;
+
+            if (!stamped)
+            {
+                // Seed rather than judge on the first tick — in-game the clock
+                // starts at the process uptime, so an unstamped session would
+                // otherwise look silent since time zero and fault immediately.
+                lastInboundSeconds = nowSeconds;
+                stamped = true;
+                return;
+            }
+
+            var silent = nowSeconds - lastInboundSeconds;
+            if (silent >= PbjProtocol.HostTimeoutSeconds)
+            {
+                // Fault already unlocks execution, which is the invariant that
+                // matters: a lost host must never leave the local execute button
+                // disabled.
+                Fault(NetLog.HostTimedOut(silent), effects);
+            }
+        }
+
+        private void HandleLocalUnready(List<PbjEffect> effects)
+        {
+            if (State != ClientSessionState.Planning || !submittedThisTurn)
+            {
+                return;
+            }
+
+            submittedThisTurn = false;
+            effects.Add(new SendEffect(HostConnectionId, new UnreadyMessage(Turn)));
+            effects.Add(new LogEffect(NetLog.UnreadyReceived(PeerId, playerName, Turn)));
+            effects.Add(new SetExecutionLockEffect(false));
         }
 
         private void HandleTurnCommit(TurnCommitMessage commit, List<PbjEffect> effects)
@@ -262,6 +430,7 @@ namespace PBAndJ.Core.Net
             // on, this is how we learn the real turn.
             Turn = commit.Turn;
             State = ClientSessionState.Watching;
+            submittedThisTurn = false;
             effects.Add(new LogEffect(NetLog.TurnCommitted(commit.Turn)));
             effects.Add(new SetExecutionLockEffect(true));
         }
@@ -275,7 +444,33 @@ namespace PBAndJ.Core.Net
 
             Turn = complete.Turn + 1;
             State = ClientSessionState.Planning;
+            submittedThisTurn = false;
             effects.Add(new SetExecutionLockEffect(false));
+        }
+
+        /// <summary>
+        /// Takes the host's authoritative state: drop the stale local plan, then
+        /// hard-set.
+        /// </summary>
+        /// <remarks>
+        /// The clear comes first and is not optional. A client's planned orders
+        /// are real <c>ActionEntity</c>s that never execute, so left alone they
+        /// pile up and <c>CaptureLocalOrders</c> starts re-submitting orders the
+        /// host already ran. The disposal cascade does not bite here because
+        /// applying a snapshot writes components, not actions.
+        /// </remarks>
+        private void HandleSnapshot(SnapshotMessage snapshot, List<PbjEffect> effects)
+        {
+            effects.Add(new ClearLocalOrdersEffect());
+            effects.Add(new ApplySnapshotEffect(snapshot.Turn, snapshot.Units, snapshot.Digest));
+        }
+
+        private void HandleSnapshotApplied(SnapshotAppliedEvent applied, List<PbjEffect> effects)
+        {
+            effects.Add(string.Equals(applied.ExpectedDigest, applied.ActualDigest, StringComparison.Ordinal)
+                ? new LogEffect(NetLog.SnapshotVerified(applied.Turn, applied.UnitCount, applied.ActualDigest))
+                : new LogEffect(NetLog.SnapshotStillDiverged(
+                    applied.Turn, applied.ExpectedDigest, applied.ActualDigest)));
         }
 
         private void Fault(string line, List<PbjEffect> effects)

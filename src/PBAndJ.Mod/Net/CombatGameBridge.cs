@@ -138,14 +138,31 @@ namespace PBAndJ.Mod.Net
             ScenarioUtility.RecheckExecutionAvailability(forceUIRefresh: true);
         }
 
+        // The digest is a projection of the snapshot, never an independent walk.
+        // If the two were allowed to disagree about which units exist, a client
+        // would fail its post-correction check for reasons that have nothing to
+        // do with correction.
         public string ComputeStateDigest()
         {
-            var units = new List<UnitState>();
+            var snapshot = CaptureSnapshot();
+            var units = new UnitState[snapshot.Count];
+            for (var i = 0; i < snapshot.Count; i++)
+            {
+                units[i] = snapshot[i].ToUnitState();
+            }
+            return StateDigest.Compute(units);
+        }
+
+        public IReadOnlyList<UnitSnapshot> CaptureSnapshot()
+        {
+            var units = new List<UnitSnapshot>();
             if (!InCombat)
             {
-                return StateDigest.Compute(units);
+                return units;
             }
 
+            // Every unit with a resolvable name — hostiles included, not just the
+            // assignable ones. A client must be corrected about the whole fight.
             foreach (var unit in Contexts.sharedInstance.combat.GetGroup(CombatMatcher.UnitTag).GetEntities())
             {
                 var persistent = IDUtility.GetLinkedPersistentEntity(unit);
@@ -153,14 +170,112 @@ namespace PBAndJ.Mod.Net
                 {
                     continue;
                 }
+
                 var position = unit.hasPosition ? unit.position.v : Vector3.zero;
+                var rotation = unit.hasRotation ? unit.rotation.q : Quaternion.identity;
+                var facing = unit.hasFacing ? unit.facing.v : Vector3.forward;
                 var integrity = persistent.hasUnitFrameIntegrity ? persistent.unitFrameIntegrity.f : 0f;
-                units.Add(new UnitState(
+                var dead = persistent.hasDeathStatus;
+
+                units.Add(new UnitSnapshot(
                     persistent.nameInternal.s,
                     new Vec3(position.x, position.y, position.z),
-                    integrity));
+                    new Vec4(rotation.x, rotation.y, rotation.z, rotation.w),
+                    new Vec3(facing.x, facing.y, facing.z),
+                    integrity,
+                    dead,
+                    dead ? persistent.deathStatus.time : 0f));
+
+                if (units.Count == PbjMessageCodec.MaxUnitsPerSnapshot)
+                {
+                    // Clamp at capture rather than letting the encoder produce a
+                    // frame the far side would reject outright. Loud, because a
+                    // silently truncated snapshot reads as a correct one.
+                    Debug.LogWarning(NetLog.SnapshotClamped(
+                        units.Count, PbjMessageCodec.MaxUnitsPerSnapshot));
+                    break;
+                }
             }
-            return StateDigest.Compute(units);
+            return units;
+        }
+
+        // Safe only because a client never sets combat.Simulating, so no playback
+        // system is driving these transforms and nothing overwrites the write on
+        // the next tick. The same call on a simulating host would lose.
+        public void ApplySnapshot(IReadOnlyList<UnitSnapshot> snapshot)
+        {
+            if (!InCombat || snapshot.Count == 0)
+            {
+                return;
+            }
+
+            var byName = new Dictionary<string, UnitSnapshot>(snapshot.Count);
+            for (var i = 0; i < snapshot.Count; i++)
+            {
+                var name = snapshot[i].Name;
+                if (!string.IsNullOrEmpty(name))
+                {
+                    byName[name!] = snapshot[i];
+                }
+            }
+
+            var localOnly = 0;
+            foreach (var unit in Contexts.sharedInstance.combat.GetGroup(CombatMatcher.UnitTag).GetEntities())
+            {
+                var persistent = IDUtility.GetLinkedPersistentEntity(unit);
+                if (persistent == null || !persistent.hasNameInternal)
+                {
+                    continue;
+                }
+                if (!byName.TryGetValue(persistent.nameInternal.s, out var state))
+                {
+                    localOnly++;
+                    continue;
+                }
+
+                unit.ReplacePosition(new Vector3(state.Position.X, state.Position.Y, state.Position.Z));
+                unit.ReplaceRotation(new Quaternion(
+                    state.Rotation.X, state.Rotation.Y, state.Rotation.Z, state.Rotation.W));
+                unit.ReplaceFacing(new Vector3(state.Facing.X, state.Facing.Y, state.Facing.Z));
+                persistent.ReplaceUnitFrameIntegrity(state.Integrity);
+
+                if (state.IsDead && !persistent.hasDeathStatus)
+                {
+                    persistent.ReplaceDeathStatus(state.DeathTime, "remote");
+                }
+                byName.Remove(persistent.nameInternal.s);
+            }
+
+            // Entities are never created from a snapshot. A roster difference is
+            // a structural mismatch that hard-setting positions cannot fix, so
+            // it is reported rather than papered over.
+            if (byName.Count > 0 || localOnly > 0)
+            {
+                Debug.Log(NetLog.SnapshotUnitsSkipped(byName.Count, localOnly));
+            }
+        }
+
+        public void ClearLocalOrders()
+        {
+            if (!InCombat)
+            {
+                return;
+            }
+
+            // A client's planned orders never execute, because it never
+            // simulates. Left alone they accumulate and CaptureLocalOrders starts
+            // re-submitting orders the host already ran.
+            var matcher = ActionMatcher
+                .AllOf(ActionMatcher.ActionOwner, ActionMatcher.Duration, ActionMatcher.StartTime)
+                .NoneOf(ActionMatcher.Destroyed);
+            foreach (var action in Contexts.sharedInstance.action.GetGroup(matcher).GetEntities())
+            {
+                if (action.CompletedAction || action.isDisposed || action.AIAction)
+                {
+                    continue;
+                }
+                action.isDisposed = true;
+            }
         }
     }
 }

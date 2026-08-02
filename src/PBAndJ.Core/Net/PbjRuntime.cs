@@ -30,6 +30,9 @@ namespace PBAndJ.Core.Net
 
         private int reportedDrops;
         private bool stopped;
+        private bool lastInCombat;
+        private bool ticked;
+        private double lastTickSeconds;
 
         public PbjRuntime(IPbjTransport transport, IPbjGameBridge bridge, IPbjLog log, PbjMailbox mailbox, IPbjSession session)
         {
@@ -38,6 +41,10 @@ namespace PBAndJ.Core.Net
             this.log = log ?? throw new ArgumentNullException(nameof(log));
             this.mailbox = mailbox ?? throw new ArgumentNullException(nameof(mailbox));
             this.session = session ?? throw new ArgumentNullException(nameof(session));
+
+            // Seeded, not defaulted: a session started mid-combat must not
+            // report entering one on its first pump.
+            lastInCombat = bridge.InCombat;
         }
 
         public IPbjSession Session => session;
@@ -72,7 +79,52 @@ namespace PBAndJ.Core.Net
                 Run(session.Handle(evt));
             }
 
+            ObserveCombatEdge();
+            ObserveTick(nowSeconds);
             ReportDrops();
+        }
+
+        /// <summary>
+        /// Hands the session the time, at most four times a second.
+        /// </summary>
+        /// <remarks>
+        /// Throttled because an unthrottled tick allocates an effect list every
+        /// frame — 60 a second — to discover that nothing has expired. A quarter
+        /// second is two orders of magnitude finer than the shortest interval
+        /// anything here cares about.
+        /// </remarks>
+        private void ObserveTick(double nowSeconds)
+        {
+            if (ticked && nowSeconds - lastTickSeconds < PbjProtocol.TickIntervalSeconds)
+            {
+                return;
+            }
+            ticked = true;
+            lastTickSeconds = nowSeconds;
+            Run(session.Handle(new TickEvent(nowSeconds)));
+        }
+
+        /// <summary>
+        /// Turns a change in <see cref="IPbjGameBridge.InCombat"/> into an event.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately runs *after* the drain. When the last turn's execution is
+        /// what ended the combat, the queued LocalTurnComplete and the cleared
+        /// InCombat flag arrive together; observing the edge first would move the
+        /// host to Lobby and the final TurnComplete would be dropped by its
+        /// "only while executing" guard, taking the turn's results with it.
+        /// </remarks>
+        private void ObserveCombatEdge()
+        {
+            var inCombat = bridge.InCombat;
+            if (inCombat == lastInCombat)
+            {
+                return;
+            }
+            lastInCombat = inCombat;
+            Run(session.Handle(inCombat
+                ? (PbjInboundEvent)new CombatEnteredEvent()
+                : new CombatExitedEvent()));
         }
 
         /// <summary>Feeds a locally-originated event, for console commands.</summary>
@@ -190,13 +242,31 @@ namespace PBAndJ.Core.Net
                         log.Log(NetLog.OrderRejectedByGame(
                             apply.PeerId, apply.Order.OwnerName, apply.Order.Blueprint, result));
                     }
-                    break;
+                    // Synchronous, like the commit outcome below: every order's
+                    // fate is folded into the session before the commit effect
+                    // behind it is dequeued, which is what lets one OrderResult
+                    // describe the whole batch.
+                    return session.Handle(new OrderAppliedEvent(apply.PeerId, apply.BatchIndex, result));
                 }
 
                 case CommitTurnEffect commit:
                     // The game's commit can silently refuse, so its outcome goes
                     // straight back to the session before anything is broadcast.
                     return session.Handle(new CommitOutcomeEvent(commit.Turn, bridge.CommitTurn()));
+
+                case ApplySnapshotEffect snapshot:
+                {
+                    bridge.ApplySnapshot(snapshot.Units);
+                    // Recomputed rather than assumed: the whole point is that the
+                    // client verifies its own correction.
+                    var actual = bridge.ComputeStateDigest();
+                    return session.Handle(new SnapshotAppliedEvent(
+                        snapshot.Turn, snapshot.Units.Count, snapshot.ExpectedDigest, actual));
+                }
+
+                case ClearLocalOrdersEffect:
+                    bridge.ClearLocalOrders();
+                    break;
 
                 case SetExecutionLockEffect setLock:
                     bridge.SetExecutionLocked(setLock.Locked);

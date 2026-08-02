@@ -326,6 +326,181 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void OrderResultSent_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] order result to #2: 3 accepted, 1 rejected",
+                NetLog.OrderResultSent(2, 3, 1));
+        }
+
+        [Fact]
+        public void OrderResultReceived_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 orders: 3 accepted, 1 rejected by host",
+                NetLog.OrderResultReceived(4, 3, 1));
+        }
+
+        [Fact]
+        public void UnreadyReceived_ComposesTheLine()
+        {
+            Assert.Equal("[pb-and-j] un-ready from #2 'ally' for turn 3", NetLog.UnreadyReceived(2, "ally", 3));
+        }
+
+        [Fact]
+        public void UnreadyReceived_WithNoName_MarksItUnknown()
+        {
+            Assert.Equal("[pb-and-j] un-ready from #2 '?' for turn 3", NetLog.UnreadyReceived(2, null, 3));
+        }
+
+        [Fact]
+        public void UnreadyIgnored_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] ignoring un-ready from #2 for turn 3 — already executing",
+                NetLog.UnreadyIgnored(2, 3, "already executing"));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("  ")]
+        public void UnreadyIgnored_WithBlankReason_Throws(string? why)
+        {
+            Assert.Throws<ArgumentException>(() => NetLog.UnreadyIgnored(2, 3, why!));
+        }
+
+        [Fact]
+        public void CombatStarted_ComposesTheLine()
+        {
+            Assert.Equal("[pb-and-j] combat started on turn 0 — announcing to 1 peer", NetLog.CombatStarted(0, 1));
+            Assert.Equal("[pb-and-j] combat started on turn 4 — announcing to 2 peers", NetLog.CombatStarted(4, 2));
+        }
+
+        [Fact]
+        public void CombatEnded_ComposesTheLine()
+        {
+            Assert.Equal("[pb-and-j] combat ended — unlocking 1 peer", NetLog.CombatEnded(1));
+            Assert.Equal("[pb-and-j] combat ended — unlocking 0 peers", NetLog.CombatEnded(0));
+        }
+
+        [Fact]
+        public void SendQueueBacklog_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] send queue backing up for #2: 40 frame(s), 262144 byte(s) — slow link",
+                NetLog.SendQueueBacklog(2, 262144, 40));
+        }
+
+        [Fact]
+        public void SendQueueOverflowed_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] send queue OVERFLOWED for #2 at 1024 frame(s), 4194304 byte(s) — dropping the peer",
+                NetLog.SendQueueOverflowed(2, 4194304, 1024));
+        }
+
+        [Fact]
+        public void SendFailed_ComposesTheLine()
+        {
+            Assert.Equal("[pb-and-j] send to #2 failed: IOException", NetLog.SendFailed(2, "IOException"));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("  ")]
+        public void SendFailed_WithBlankDetail_Throws(string? detail)
+        {
+            Assert.Throws<ArgumentException>(() => NetLog.SendFailed(2, detail!));
+        }
+
+        [Fact]
+        public void SendAfterStop_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] dropping a frame for #0: the transport is stopped",
+                NetLog.SendAfterStop(0));
+        }
+
+        [Fact]
+        public void SnapshotUnitsSkipped_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] snapshot: 2 unit(s) not present locally, 1 local unit(s) not in the snapshot",
+                NetLog.SnapshotUnitsSkipped(2, 1));
+        }
+
+        [Fact]
+        public void SnapshotClamped_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] snapshot clamped: 128 units captured, only 128 fit — the rest are NOT corrected",
+                NetLog.SnapshotClamped(128, 128));
+        }
+
+        [Fact]
+        public void PeerHeldForReconnect_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] holding #2 'ally' units for 120s in case they reconnect",
+                NetLog.PeerHeldForReconnect(2, "ally", 120.0));
+        }
+
+        [Fact]
+        public void PeerRejoined_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] 'ally' rejoined as #4 (was #2) — units rebound",
+                NetLog.PeerRejoined(2, 4, "ally"));
+        }
+
+        [Fact]
+        public void ReconnectExpired_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] #2 'ally' did not return — releasing their units",
+                NetLog.ReconnectExpired(2, "ally"));
+        }
+
+        [Fact]
+        public void Rejoining_ComposesTheLine()
+        {
+            Assert.Equal("[pb-and-j] rejoining session 7f3a91 as peer #1", NetLog.Rejoining("7f3a91", 1));
+        }
+
+        [Fact]
+        public void PeerTimedOut_ComposesTheLine()
+        {
+            Assert.Equal("[pb-and-j] peer #2 'ally' silent for 20s — dropping", NetLog.PeerTimedOut(2, "ally", 20.4));
+        }
+
+        [Fact]
+        public void HostTimedOut_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] host silent for 31s — connection lost, continuing single-player",
+                NetLog.HostTimedOut(30.6));
+        }
+
+        [Fact]
+        public void CombatStartedByHost_ComposesTheLine()
+        {
+            Assert.Equal("[pb-and-j] host started combat on turn 0", NetLog.CombatStartedByHost(0));
+        }
+
+        [Fact]
+        public void CombatEndedByHost_ComposesTheLine()
+        {
+            Assert.Equal("[pb-and-j] host's combat ended — back to the lobby", NetLog.CombatEndedByHost());
+        }
+
+        [Fact]
+        public void CombatStateObserved_ComposesBothDirections()
+        {
+            Assert.Equal("[pb-and-j] host reports combat started", NetLog.CombatStateObserved(true));
+            Assert.Equal("[pb-and-j] host reports combat ended", NetLog.CombatStateObserved(false));
+        }
+
+        [Fact]
         public void OrderRejectedUnowned_ComposesTheLine()
         {
             Assert.Equal(

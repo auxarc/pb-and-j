@@ -22,6 +22,7 @@ namespace PBAndJ.Net
 
         private readonly IPbjInbox inbox;
         private TcpClient? client;
+        private PeerWriter? writer;
         private volatile bool running;
 
         public TcpClientTransport(IPbjInbox inbox)
@@ -36,6 +37,12 @@ namespace PBAndJ.Net
             client.Connect(host, port);
             running = true;
 
+            // Queued like the host's, so a stalled host cannot freeze the
+            // client's frame loop either — which matters once a real game sits
+            // on this side of the socket.
+            writer = new PeerWriter(ClientSession.HostConnectionId, client, inbox, OnWriterClosed);
+            writer.Start();
+
             inbox.Post(new PeerConnectedEvent(ClientSession.HostConnectionId,
                 client.Client.RemoteEndPoint?.ToString()));
 
@@ -44,17 +51,55 @@ namespace PBAndJ.Net
 
         public void Send(int peerId, byte[] frame)
         {
-            client?.GetStream().Write(frame, 0, frame.Length);
+            var current = writer;
+            if (current == null)
+            {
+                // Was a silent no-op before, which made a frame lost after Stop
+                // impossible to diagnose.
+                inbox.Post(new TransportLogEvent(NetLog.SendAfterStop(peerId)));
+                return;
+            }
+            current.Enqueue(frame);
         }
 
+        /// <summary>Closes behind anything already queued — a Bye still lands.</summary>
         public void Disconnect(int peerId, string? reason)
         {
-            Stop();
+            var current = writer;
+            if (current == null)
+            {
+                Stop();
+                return;
+            }
+            current.EnqueueClose(reason ?? "disconnected");
         }
 
         public void Stop()
         {
             running = false;
+            var currentWriter = writer;
+            writer = null;
+            currentWriter?.Stop();
+
+            var current = client;
+            client = null;
+            if (current == null)
+            {
+                return;
+            }
+            try
+            {
+                current.Close();
+            }
+            catch (Exception)
+            {
+                // teardown is best-effort
+            }
+        }
+
+        private void OnWriterClosed(int peerId, string reason)
+        {
+            writer = null;
             var current = client;
             client = null;
             if (current == null)
@@ -97,6 +142,9 @@ namespace PBAndJ.Net
             }
             finally
             {
+                // Release the writer, or its thread waits forever on a queue
+                // nothing will feed again.
+                writer?.EnqueueClose(reason);
                 if (running)
                 {
                     inbox.Post(new PeerDisconnectedEvent(ClientSession.HostConnectionId, reason));

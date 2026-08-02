@@ -62,6 +62,32 @@ namespace PBAndJ.Core.Net
             }
         }
 
+        /// <summary>
+        /// FNV-1a over a string, as eight lowercase hex digits.
+        /// </summary>
+        /// <remarks>
+        /// Shared with resume-token derivation so there is one hash function in
+        /// Core rather than two. Not a cryptographic digest and not used as one —
+        /// see the token discussion in docs/design/networking.md.
+        /// </remarks>
+        public static string Mix(string value)
+        {
+            if (value == null)
+            {
+                throw new ArgumentNullException(nameof(value));
+            }
+
+            unchecked
+            {
+                var hash = FnvOffsetBasis;
+                for (var i = 0; i < value.Length; i++)
+                {
+                    hash = (hash ^ value[i]) * FnvPrime;
+                }
+                return hash.ToString("x8", System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
         private static uint HashUnit(UnitState unit)
         {
             unchecked

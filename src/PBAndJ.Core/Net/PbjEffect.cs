@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace PBAndJ.Core.Net
 {
@@ -12,6 +13,10 @@ namespace PBAndJ.Core.Net
         CommitTurn = 5,
         SetExecutionLock = 6,
         Log = 7,
+        ApplySnapshot = 8,
+        ClearLocalOrders = 9,
+
+        // 10+ reserved for M6 keyframe streaming.
     }
 
     /// <summary>
@@ -83,9 +88,10 @@ namespace PBAndJ.Core.Net
     /// <summary>Apply one remote order to the live game.</summary>
     public sealed class ApplyOrderEffect : PbjEffect
     {
-        public ApplyOrderEffect(int peerId, OrderPayload order)
+        public ApplyOrderEffect(int peerId, int batchIndex, OrderPayload order)
         {
             PeerId = peerId;
+            BatchIndex = batchIndex;
             Order = order ?? throw new ArgumentNullException(nameof(order));
         }
 
@@ -93,7 +99,58 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Who submitted it — for attributing rejections in the log.</summary>
         public int PeerId { get; }
+
+        /// <summary>
+        /// Where it sat in that peer's Ready batch. Travels back on the
+        /// <see cref="OrderAppliedEvent"/> so the outcome can be reported
+        /// without orders needing a stable id.
+        /// </summary>
+        public int BatchIndex { get; }
+
         public OrderPayload Order { get; }
+    }
+
+    /// <summary>
+    /// Hard-set local units to the host's authoritative state, then report what
+    /// the local digest became.
+    /// </summary>
+    /// <remarks>
+    /// The expected digest rides on the effect rather than living in session
+    /// state, which keeps the effect self-contained and lets the runner be tested
+    /// with no session at all. The runtime feeds the comparison back as a
+    /// <see cref="SnapshotAppliedEvent"/> in the same pump, the same way
+    /// <see cref="CommitTurnEffect"/> reports its outcome.
+    /// </remarks>
+    public sealed class ApplySnapshotEffect : PbjEffect
+    {
+        private static readonly UnitSnapshot[] NoUnits = new UnitSnapshot[0];
+
+        public ApplySnapshotEffect(int turn, IReadOnlyList<UnitSnapshot>? units, string? expectedDigest)
+        {
+            Turn = turn;
+            Units = units ?? NoUnits;
+            ExpectedDigest = expectedDigest;
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.ApplySnapshot;
+
+        public int Turn { get; }
+        public IReadOnlyList<UnitSnapshot> Units { get; }
+        public string? ExpectedDigest { get; }
+    }
+
+    /// <summary>
+    /// Dispose the local player's planned orders.
+    /// </summary>
+    /// <remarks>
+    /// Client-side only, and not optional. A client plans real
+    /// <c>ActionEntity</c>s that never execute, because it never simulates — so
+    /// without this its timeline accumulates junk and <c>CaptureLocalOrders</c>
+    /// starts re-submitting orders the host already ran.
+    /// </remarks>
+    public sealed class ClearLocalOrdersEffect : PbjEffect
+    {
+        public override PbjEffectKind Kind => PbjEffectKind.ClearLocalOrders;
     }
 
     /// <summary>

@@ -19,6 +19,17 @@ namespace PBAndJ.Core.Net
         /// <summary>Cap on units named in one <see cref="AssignmentsMessage"/> entry.</summary>
         public const int MaxUnitsPerPeer = 64;
 
+        /// <summary>
+        /// Cap on units in one <see cref="SnapshotMessage"/>.
+        /// </summary>
+        /// <remarks>
+        /// Not <see cref="MaxUnitsPerPeer"/>: that is a roster cap for one peer's
+        /// share, and a snapshot covers every unit in the combat, hostile ones
+        /// included. At ~85 bytes a unit this caps a snapshot near 11 KB, about
+        /// 1% of <c>PbjRuntime.MaxFrameLength</c>.
+        /// </remarks>
+        public const int MaxUnitsPerSnapshot = 128;
+
         public static byte[] Encode(PbjMessage message)
         {
             if (message == null)
@@ -50,6 +61,17 @@ namespace PBAndJ.Core.Net
                         writer.WriteString(welcome.Peers[i].Name);
                     }
                     writer.WriteInt32(welcome.CurrentTurn);
+                    writer.WriteString(welcome.ResumeToken);
+                    break;
+
+                case RejoinMessage rejoin:
+                    writer.WriteInt32(rejoin.Magic);
+                    writer.WriteInt32(rejoin.ProtocolVersion);
+                    writer.WriteString(rejoin.ModVersion);
+                    writer.WriteString(rejoin.PlayerName);
+                    writer.WriteString(rejoin.SessionId);
+                    writer.WriteInt32(rejoin.ClaimedPeerId);
+                    writer.WriteString(rejoin.ResumeToken);
                     break;
 
                 case RejectMessage reject:
@@ -99,6 +121,47 @@ namespace PBAndJ.Core.Net
                     }
                     break;
 
+                case UnreadyMessage unready:
+                    writer.WriteInt32(unready.Turn);
+                    break;
+
+                case OrderResultMessage result:
+                    writer.WriteInt32(result.Turn);
+                    writer.WriteInt32(result.Accepted);
+                    writer.WriteInt32(result.Rejected.Count);
+                    for (var i = 0; i < result.Rejected.Count; i++)
+                    {
+                        writer.WriteInt32(result.Rejected[i].Index);
+                        writer.WriteInt32((int)result.Rejected[i].Reason);
+                    }
+                    break;
+
+                case CombatStartMessage combatStart:
+                    writer.WriteInt32(combatStart.Turn);
+                    break;
+
+                case CombatEndMessage:
+                    // No body — the type byte is the whole message.
+                    break;
+
+                case SnapshotMessage snapshot:
+                    writer.WriteInt32(snapshot.Turn);
+                    writer.WriteString(snapshot.Digest);
+                    writer.WriteInt32(snapshot.Units.Count);
+                    for (var i = 0; i < snapshot.Units.Count; i++)
+                    {
+                        WriteUnitSnapshot(writer, snapshot.Units[i]);
+                    }
+                    break;
+
+                case PingMessage ping:
+                    writer.WriteInt32(ping.Nonce);
+                    break;
+
+                case PongMessage pong:
+                    writer.WriteInt32(pong.Nonce);
+                    break;
+
                 case ByeMessage bye:
                     writer.WriteString(bye.Reason);
                     break;
@@ -146,7 +209,20 @@ namespace PBAndJ.Core.Net
                         peers[i] = new PeerInfo(reader.ReadInt32(), reader.ReadString());
                     }
                     return new WelcomeMessage(
-                        protocolVersion, sessionId, assignedPeerId, hostName, peers, reader.ReadInt32());
+                        protocolVersion, sessionId, assignedPeerId, hostName, peers,
+                        reader.ReadInt32(), reader.ReadString());
+                }
+
+                case PbjMessageType.Rejoin:
+                {
+                    var magic = reader.ReadInt32();
+                    var protocolVersion = reader.ReadInt32();
+                    var modVersion = reader.ReadString();
+                    var playerName = reader.ReadString();
+                    var sessionId = reader.ReadString();
+                    return new RejoinMessage(
+                        magic, protocolVersion, modVersion, playerName, sessionId,
+                        reader.ReadInt32(), reader.ReadString());
                 }
 
                 case PbjMessageType.Reject:
@@ -194,12 +270,105 @@ namespace PBAndJ.Core.Net
                     return new AssignmentsMessage(entries);
                 }
 
+                case PbjMessageType.Unready:
+                    return new UnreadyMessage(reader.ReadInt32());
+
+                case PbjMessageType.OrderResult:
+                {
+                    var turn = reader.ReadInt32();
+                    var accepted = reader.ReadInt32();
+                    // A result cannot reject more orders than a batch can hold.
+                    var count = ReadCount(reader, MaxOrdersPerReady, "rejection");
+                    var rejected = new RejectedOrder[count];
+                    for (var i = 0; i < count; i++)
+                    {
+                        rejected[i] = new RejectedOrder(
+                            reader.ReadInt32(), (OrderApplyResult)reader.ReadInt32());
+                    }
+                    return new OrderResultMessage(turn, accepted, rejected);
+                }
+
+                case PbjMessageType.CombatStart:
+                    return new CombatStartMessage(reader.ReadInt32());
+
+                case PbjMessageType.CombatEnd:
+                    return new CombatEndMessage();
+
+                case PbjMessageType.Snapshot:
+                {
+                    var turn = reader.ReadInt32();
+                    var digest = reader.ReadString();
+                    var count = ReadCount(reader, MaxUnitsPerSnapshot, "snapshot unit");
+                    var units = new UnitSnapshot[count];
+                    for (var i = 0; i < count; i++)
+                    {
+                        units[i] = ReadUnitSnapshot(reader);
+                    }
+                    return new SnapshotMessage(turn, digest, units);
+                }
+
+                case PbjMessageType.Ping:
+                    return new PingMessage(reader.ReadInt32());
+
+                case PbjMessageType.Pong:
+                    return new PongMessage(reader.ReadInt32());
+
                 case PbjMessageType.Bye:
                     return new ByeMessage(reader.ReadString());
 
                 default:
                     throw new PbjProtocolException("Unknown message type byte " + (int)type + ".");
             }
+        }
+
+        /// <summary>
+        /// Writes one unit's state as raw float bits — deliberately unquantised.
+        /// </summary>
+        /// <remarks>
+        /// Quantisation is a <em>digest</em> rule, not a wire rule.
+        /// <see cref="StateDigest"/> quantises because it compares values across
+        /// two runtimes via formatting; there is no formatting here.
+        /// <see cref="PbjWriter.WriteSingle"/> reinterprets the float's bits and
+        /// emits them with explicit little-endian shifts, so the bytes are
+        /// identical on Mono-under-Wine and .NET, NaN payloads included.
+        /// Quantising the wire would lose precision for no benefit.
+        /// </remarks>
+        private static void WriteUnitSnapshot(PbjWriter writer, UnitSnapshot unit)
+        {
+            writer.WriteString(unit.Name);
+            WriteVec3(writer, unit.Position);
+            writer.WriteSingle(unit.Rotation.X);
+            writer.WriteSingle(unit.Rotation.Y);
+            writer.WriteSingle(unit.Rotation.Z);
+            writer.WriteSingle(unit.Rotation.W);
+            WriteVec3(writer, unit.Facing);
+            writer.WriteSingle(unit.Integrity);
+            writer.WriteBool(unit.IsDead);
+            writer.WriteSingle(unit.DeathTime);
+        }
+
+        private static UnitSnapshot ReadUnitSnapshot(PbjReader reader)
+        {
+            var name = reader.ReadString();
+            var position = ReadVec3(reader);
+            var rotation = new Vec4(
+                reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            var facing = ReadVec3(reader);
+            return new UnitSnapshot(
+                name, position, rotation, facing,
+                reader.ReadSingle(), reader.ReadBool(), reader.ReadSingle());
+        }
+
+        private static void WriteVec3(PbjWriter writer, Vec3 value)
+        {
+            writer.WriteSingle(value.X);
+            writer.WriteSingle(value.Y);
+            writer.WriteSingle(value.Z);
+        }
+
+        private static Vec3 ReadVec3(PbjReader reader)
+        {
+            return new Vec3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
         }
 
         private static int ReadCount(PbjReader reader, int max, string what)
