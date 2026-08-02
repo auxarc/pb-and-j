@@ -88,6 +88,16 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void CommitOutcome_RetainsFields()
+        {
+            var committed = new CommitOutcomeEvent(3, committed: true);
+            Assert.Equal(PbjInboundEventKind.CommitOutcome, committed.Kind);
+            Assert.Equal(3, committed.Turn);
+            Assert.True(committed.Committed);
+            Assert.False(new CommitOutcomeEvent(3, committed: false).Committed);
+        }
+
+        [Fact]
         public void LocalTurnComplete_RetainsFields()
         {
             var e = new LocalTurnCompleteEvent("3f9c1a04");

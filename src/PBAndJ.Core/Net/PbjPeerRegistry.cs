@@ -35,7 +35,6 @@ namespace PBAndJ.Core.Net
 
         private readonly List<PbjPeer> peers = new List<PbjPeer>();
         private readonly int maxPeers;
-        private int nextPeerId = HostPeerId + 1;
 
         public PbjPeerRegistry(int maxPeers)
         {
@@ -52,12 +51,29 @@ namespace PBAndJ.Core.Net
         public int Count => peers.Count;
 
         /// <summary>
-        /// Registers a peer. Returns null on success, or why it was refused.
-        /// Ids are never reused, so a reconnecting player is a new peer.
+        /// Registers a peer under the id its transport connection already has.
+        /// Returns null on success, or why the peer was refused.
         /// </summary>
-        public RejectReason? Add(string? name, out PbjPeer? peer)
+        /// <remarks>
+        /// The id comes from the transport rather than being minted here, so
+        /// connection and peer share one id space — a socket is always
+        /// addressable by the id that appears in the logs. The transport never
+        /// reuses ids, so a reconnecting player arrives as a new peer.
+        /// </remarks>
+        public RejectReason? Add(int peerId, string? name, out PbjPeer? peer)
         {
             peer = null;
+
+            if (peerId == HostPeerId)
+            {
+                throw new ArgumentException(
+                    "Peer id " + HostPeerId + " is reserved for the host.", nameof(peerId));
+            }
+            if (TryGet(peerId, out _))
+            {
+                // The transport handed out a duplicate id — our bug, not the peer's.
+                throw new InvalidOperationException("Peer id " + peerId + " is already registered.");
+            }
 
             if (string.IsNullOrWhiteSpace(name) || name!.Length > MaxNameLength)
             {
@@ -75,8 +91,9 @@ namespace PBAndJ.Core.Net
                 }
             }
 
-            peer = new PbjPeer(nextPeerId++, name);
+            peer = new PbjPeer(peerId, name);
             peers.Add(peer);
+            peers.Sort((a, b) => a.PeerId.CompareTo(b.PeerId));
             return null;
         }
 

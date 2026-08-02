@@ -16,6 +16,7 @@ namespace PBAndJ.Core.Net
         TransportLog = 5,
         LocalReady = 6,
         LocalTurnComplete = 7,
+        CommitOutcome = 8,
     }
 
     /// <summary>
@@ -123,6 +124,30 @@ namespace PBAndJ.Core.Net
     public sealed class LocalReadyEvent : PbjInboundEvent
     {
         public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalReady;
+    }
+
+    /// <summary>
+    /// Result of a <see cref="CommitTurnEffect"/>, fed straight back to the
+    /// session by the runtime within the same pump.
+    /// </summary>
+    /// <remarks>
+    /// This exists because <c>CombatUtilities.ConfirmExecution</c> is void and
+    /// silently refuses in four normal situations. Broadcasting TurnCommit
+    /// before knowing the commit landed would leave every peer locked and
+    /// waiting while the host sat in planning.
+    /// </remarks>
+    public sealed class CommitOutcomeEvent : PbjInboundEvent
+    {
+        public CommitOutcomeEvent(int turn, bool committed)
+        {
+            Turn = turn;
+            Committed = committed;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.CommitOutcome;
+
+        public int Turn { get; }
+        public bool Committed { get; }
     }
 
     /// <summary>
