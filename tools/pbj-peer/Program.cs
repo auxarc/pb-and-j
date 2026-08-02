@@ -44,7 +44,7 @@ namespace PBAndJ.Peer
             "  pbj-peer listen  --bind 127.0.0.1 --port 27600 --name host [--peers 3]\n" +
             "  pbj-peer selftest\n" +
             "\n" +
-            "REPL commands: status, order <unit> <x> <y> <z>, orders, clear, ready, digest, quit";
+            "REPL commands: status, units, order <unit> <x> <y> <z>, orders, clear, ready, digest, quit";
 
         private static int Connect(Options options)
         {
@@ -239,6 +239,15 @@ namespace PBAndJ.Peer
                 case "ready":
                     runtime.Post(new LocalReadyEvent());
                     Console.WriteLine("[pbj-peer] ready posted");
+                    break;
+
+                case "units":
+                    if (runtime.Session is ClientSession session)
+                    {
+                        Console.WriteLine(session.OwnedUnits.Count == 0
+                            ? "[pbj-peer] no units assigned yet"
+                            : $"[pbj-peer] you control: {string.Join(", ", session.OwnedUnits)}");
+                    }
                     break;
 
                 case "digest":

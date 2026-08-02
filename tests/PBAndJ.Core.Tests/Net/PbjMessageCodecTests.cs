@@ -32,6 +32,10 @@ namespace PBAndJ.Core.Tests.Net
             yield return new object[] { new TurnCommitMessage(7) };
             yield return new object[] { new TurnCompleteMessage(7, "3f9c1a04") };
             yield return new object[] { new ByeMessage("bye") };
+            yield return new object[]
+            {
+                new AssignmentsMessage(new[] { new PeerAssignment(0, new[] { "unit_a" }) }),
+            };
         }
 
         [Theory]
@@ -165,6 +169,57 @@ namespace PBAndJ.Core.Tests.Net
             var m = RoundTrip(new TurnCompleteMessage(7, "3f9c1a04"));
             Assert.Equal(7, m.Turn);
             Assert.Equal("3f9c1a04", m.Digest);
+        }
+
+        [Fact]
+        public void RoundTrip_Assignments_PreservesEveryPeersUnits()
+        {
+            var m = RoundTrip(new AssignmentsMessage(new[]
+            {
+                new PeerAssignment(0, new[] { "unit_a", "unit_c" }),
+                new PeerAssignment(1, new[] { "unit_b" }),
+            }));
+            Assert.Equal(2, m.Assignments.Count);
+            Assert.Equal(0, m.Assignments[0].PeerId);
+            Assert.Equal(new[] { "unit_a", "unit_c" }, m.Assignments[0].UnitNames);
+            Assert.Equal(new[] { "unit_b" }, m.Assignments[1].UnitNames);
+        }
+
+        [Fact]
+        public void RoundTrip_Assignments_WithPeerHoldingNoUnits_PreservesEmpty()
+        {
+            var m = RoundTrip(new AssignmentsMessage(new[] { new PeerAssignment(2, null) }));
+            Assert.Empty(m.Assignments[0].UnitNames);
+        }
+
+        [Fact]
+        public void RoundTrip_Assignments_WithNoEntries_PreservesEmpty()
+        {
+            Assert.Empty(RoundTrip(new AssignmentsMessage(null)).Assignments);
+        }
+
+        [Fact]
+        public void Decode_AssignmentsWithTooManyUnits_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.Assignments);
+            writer.WriteInt32(1);
+            writer.WriteInt32(0);
+            writer.WriteInt32(PbjMessageCodec.MaxUnitsPerPeer + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        [Fact]
+        public void Decode_AssignmentsWithNullUnitName_ReadsAsEmptyString()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.Assignments);
+            writer.WriteInt32(1);
+            writer.WriteInt32(0);
+            writer.WriteInt32(1);
+            writer.WriteString(null);
+            var m = Assert.IsType<AssignmentsMessage>(PbjMessageCodec.Decode(writer.ToArray()));
+            Assert.Equal(string.Empty, m.Assignments[0].UnitNames[0]);
         }
 
         [Fact]

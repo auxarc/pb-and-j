@@ -16,6 +16,9 @@ namespace PBAndJ.Core.Net
         /// <summary>Cap on roster entries in one <see cref="WelcomeMessage"/>.</summary>
         public const int MaxPeersPerWelcome = 16;
 
+        /// <summary>Cap on units named in one <see cref="AssignmentsMessage"/> entry.</summary>
+        public const int MaxUnitsPerPeer = 64;
+
         public static byte[] Encode(PbjMessage message)
         {
             if (message == null)
@@ -80,6 +83,20 @@ namespace PBAndJ.Core.Net
                 case TurnCompleteMessage complete:
                     writer.WriteInt32(complete.Turn);
                     writer.WriteString(complete.Digest);
+                    break;
+
+                case AssignmentsMessage assignments:
+                    writer.WriteInt32(assignments.Assignments.Count);
+                    for (var i = 0; i < assignments.Assignments.Count; i++)
+                    {
+                        var entry = assignments.Assignments[i];
+                        writer.WriteInt32(entry.PeerId);
+                        writer.WriteInt32(entry.UnitNames.Count);
+                        for (var u = 0; u < entry.UnitNames.Count; u++)
+                        {
+                            writer.WriteString(entry.UnitNames[u]);
+                        }
+                    }
                     break;
 
                 case ByeMessage bye:
@@ -158,6 +175,24 @@ namespace PBAndJ.Core.Net
 
                 case PbjMessageType.TurnComplete:
                     return new TurnCompleteMessage(reader.ReadInt32(), reader.ReadString());
+
+                case PbjMessageType.Assignments:
+                {
+                    var count = ReadCount(reader, MaxPeersPerWelcome, "assignment");
+                    var entries = new PeerAssignment[count];
+                    for (var i = 0; i < count; i++)
+                    {
+                        var peerId = reader.ReadInt32();
+                        var unitCount = ReadCount(reader, MaxUnitsPerPeer, "unit");
+                        var units = new string[unitCount];
+                        for (var u = 0; u < unitCount; u++)
+                        {
+                            units[u] = reader.ReadString() ?? string.Empty;
+                        }
+                        entries[i] = new PeerAssignment(peerId, units);
+                    }
+                    return new AssignmentsMessage(entries);
+                }
 
                 case PbjMessageType.Bye:
                     return new ByeMessage(reader.ReadString());

@@ -99,7 +99,8 @@ namespace PBAndJ.Core.Tests.Net
         public void Pump_PeerBytes_DecodesAndDispatchesMessage()
         {
             WithHandshakenPeer();
-            Assert.IsType<WelcomeMessage>(transport.MessagesTo(1).Single());
+            // Welcome, then the Assignments broadcast.
+            Assert.IsType<WelcomeMessage>(transport.MessagesTo(1)[0]);
         }
 
         [Fact]
@@ -116,7 +117,7 @@ namespace PBAndJ.Core.Tests.Net
 
             mailbox.Post(new PeerBytesEvent(1, second));
             runtime.Pump(0);
-            Assert.Single(transport.MessagesTo(1));
+            Assert.IsType<WelcomeMessage>(transport.MessagesTo(1)[0]);
         }
 
         [Fact]
@@ -178,10 +179,10 @@ namespace PBAndJ.Core.Tests.Net
         public void Pump_SendEffect_WritesAnEncodedFrame()
         {
             WithHandshakenPeer();
-            var sent = transport.Sent.Single();
+            var sent = transport.Sent[0];
             Assert.Equal(1, sent.PeerId);
             Assert.Equal(FrameEncoder.HeaderLength + PbjMessageCodec.Encode(
-                (WelcomeMessage)transport.MessagesTo(1).Single()).Length, sent.Frame.Length);
+                (WelcomeMessage)transport.MessagesTo(1)[0]).Length, sent.Frame.Length);
         }
 
         [Fact]

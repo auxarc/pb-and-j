@@ -118,6 +118,28 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void Assignments_RetainsEntries()
+        {
+            var m = new AssignmentsMessage(new[] { new PeerAssignment(1, new[] { "unit_b" }) });
+            Assert.Equal(PbjMessageType.Assignments, m.Type);
+            Assert.Single(m.Assignments);
+            Assert.Equal(1, m.Assignments[0].PeerId);
+            Assert.Equal(new[] { "unit_b" }, m.Assignments[0].UnitNames);
+        }
+
+        [Fact]
+        public void Assignments_WithNullEntries_NormalisesToEmpty()
+        {
+            Assert.Empty(new AssignmentsMessage(null).Assignments);
+        }
+
+        [Fact]
+        public void PeerAssignment_WithNullUnits_NormalisesToEmpty()
+        {
+            Assert.Empty(new PeerAssignment(1, null).UnitNames);
+        }
+
+        [Fact]
         public void Bye_RetainsFields()
         {
             var m = new ByeMessage("host shutting down");

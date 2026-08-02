@@ -162,9 +162,15 @@ itself. Type bytes are assigned once and never reused.
 | 7 | `TurnCommit` | down | turn |
 | 8 | `TurnComplete` | down | turn, digest |
 | 9 | `Bye` | both | reason |
+| 10 | `Assignments` | down | per-peer unit lists |
 
-**Deferred to 4e / M5 (type bytes 10+ reserved):** `Unready`, `Assignments`, `OrderResult`,
-`CombatStart`, `CombatEnd`, `Ping`, `Pong`.
+**Deferred to M5 (type bytes 11+ reserved):** `Unready`, `OrderResult`, `CombatStart`,
+`CombatEnd`, `Ping`, `Pong`.
+
+`Assignments` was originally deferred and then pulled forward during 4e: without it a client is
+never told which units it may plan, which makes it unusable as anything but a harness driven from
+the host's log. It is advisory — the host re-checks every inbound order against its own copy, so a
+client that ignores or forges it simply gets its orders rejected.
 
 `Ready` carries its order list from the start, even though M4's client is a harness — the payload
 codec already exists, so there is no saving in leaving it out and no wire change later.

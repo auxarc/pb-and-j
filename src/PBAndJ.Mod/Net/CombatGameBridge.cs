@@ -15,6 +15,12 @@ namespace PBAndJ.Mod.Net
         /// <summary>Read by the execute-button patches.</summary>
         internal static bool ExecutionLocked { get; private set; }
 
+        /// <summary>
+        /// True while WE are inside ConfirmExecution. The external-advance
+        /// detector must not fire on our own barrier-driven commit.
+        /// </summary>
+        internal static bool CommitInProgress { get; private set; }
+
         internal static void ResetLock()
         {
             ExecutionLocked = false;
@@ -104,7 +110,15 @@ namespace PBAndJ.Mod.Net
             }
 
             var before = combat.currentTurn.i;
-            CombatUtilities.ConfirmExecution(1);
+            CommitInProgress = true;
+            try
+            {
+                CombatUtilities.ConfirmExecution(1);
+            }
+            finally
+            {
+                CommitInProgress = false;
+            }
 
             // ConfirmExecution is void and refuses silently in four normal
             // situations, so the only honest test is whether the turn moved.

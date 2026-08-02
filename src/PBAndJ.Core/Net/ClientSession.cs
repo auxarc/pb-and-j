@@ -66,6 +66,9 @@ namespace PBAndJ.Core.Net
 
         public string? HostName { get; private set; }
 
+        /// <summary>Units this client may plan, as last told by the host.</summary>
+        public IReadOnlyList<string> OwnedUnits { get; private set; } = new string[0];
+
         public IReadOnlyList<int> ConnectedPeerIds => HostOnly;
 
         /// <summary>Opens the handshake. Called once the transport connects.</summary>
@@ -166,6 +169,22 @@ namespace PBAndJ.Core.Net
                     State = ClientSessionState.Faulted;
                     effects.Add(new SetExecutionLockEffect(false));
                     break;
+
+                case AssignmentsMessage assignmentsMessage:
+                {
+                    var mine = new List<string>();
+                    for (var i = 0; i < assignmentsMessage.Assignments.Count; i++)
+                    {
+                        var entry = assignmentsMessage.Assignments[i];
+                        if (entry.PeerId == PeerId)
+                        {
+                            mine.AddRange(entry.UnitNames);
+                        }
+                    }
+                    OwnedUnits = mine;
+                    effects.Add(new LogEffect(NetLog.AssignedUnits(mine)));
+                    break;
+                }
 
                 case PeerJoinedMessage joined:
                     effects.Add(new LogEffect(NetLog.PeerConnected(joined.PeerId, joined.Name)));

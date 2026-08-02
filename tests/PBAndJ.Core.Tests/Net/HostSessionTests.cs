@@ -108,9 +108,9 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal("host", welcome.HostName);
             Assert.Equal(3, welcome.CurrentTurn);
 
-            var joined = Assert.IsType<PeerJoinedMessage>(Single<BroadcastEffect>(effects).Message);
-            Assert.Equal(1, joined.PeerId);
-            Assert.Equal(1, Single<BroadcastEffect>(effects).ExceptPeerId);
+            var joinBroadcast = All<BroadcastEffect>(effects).Single(b => b.Message is PeerJoinedMessage);
+            Assert.Equal(1, ((PeerJoinedMessage)joinBroadcast.Message).PeerId);
+            Assert.Equal(1, joinBroadcast.ExceptPeerId);
         }
 
         [Fact]
@@ -140,11 +140,26 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void HandleMessage_Hello_BroadcastsAssignmentsSoClientsKnowWhatTheyOwn()
+        {
+            var host = Host();
+            var effects = host.HandleMessage(1, GoodHello());
+            var message = All<BroadcastEffect>(effects)
+                .Select(b => b.Message).OfType<AssignmentsMessage>().Single();
+
+            Assert.Equal(2, message.Assignments.Count);
+            Assert.Equal(new[] { "unit_a", "unit_c" }, message.Assignments[0].UnitNames);
+            Assert.Equal(new[] { "unit_b" }, message.Assignments[1].UnitNames);
+        }
+
+        [Fact]
         public void HandleMessage_Hello_OutOfCombat_DoesNotAssign()
         {
             bridge.InCombat = false;
-            var host = WithPeer();
+            var host = Host();
+            var effects = host.HandleMessage(1, GoodHello());
             Assert.Empty(host.Assignments.PeerIds);
+            Assert.Empty(All<BroadcastEffect>(effects).Select(b => b.Message).OfType<AssignmentsMessage>());
         }
 
         [Fact]

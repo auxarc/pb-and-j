@@ -85,7 +85,10 @@ namespace PBAndJ.Mod.Net
 
         private static void Postfix()
         {
-            if (!NetGlue.HasSession)
+            // CommitInProgress means this is our own barrier-driven commit, not
+            // scenario content sneaking past. Without this the detector would
+            // fire on every normal turn and drown out the real signal.
+            if (!NetGlue.HasSession || CombatGameBridge.CommitInProgress)
             {
                 return;
             }

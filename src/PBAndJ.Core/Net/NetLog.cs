@@ -159,6 +159,29 @@ namespace PBAndJ.Core.Net
             return sb.ToString();
         }
 
+        public static string AssignedUnits(IReadOnlyList<string> units)
+        {
+            if (units == null)
+            {
+                throw new ArgumentNullException(nameof(units));
+            }
+            if (units.Count == 0)
+            {
+                return Prefix + "you control no units this combat";
+            }
+            var sb = new StringBuilder();
+            sb.Append(Prefix).Append("you control: ");
+            for (var i = 0; i < units.Count; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(", ");
+                }
+                sb.Append(units[i]);
+            }
+            return sb.ToString();
+        }
+
         // --- the turn barrier ---
 
         public static string ReadyReceived(int peerId, string? name, int turn, int orderCount)

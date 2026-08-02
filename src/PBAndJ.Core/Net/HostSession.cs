@@ -382,6 +382,15 @@ namespace PBAndJ.Core.Net
             }
             assignments = UnitAssignmentPlanner.Plan(ParticipantIds(), bridge.AssignableUnitNames);
             effects.Add(new LogEffect(NetLog.Assignment(assignments)));
+
+            // Clients cannot plan without knowing what they own. Advisory only —
+            // every inbound order is still re-checked against our own copy.
+            var entries = new List<PeerAssignment>();
+            foreach (var peerId in assignments.PeerIds)
+            {
+                entries.Add(new PeerAssignment(peerId, assignments.UnitsFor(peerId)));
+            }
+            effects.Add(new BroadcastEffect(new AssignmentsMessage(entries)));
         }
 
         private List<int> ParticipantIds()

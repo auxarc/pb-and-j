@@ -238,6 +238,33 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal("assignments", ex.ParamName);
         }
 
+        [Fact]
+        public void AssignedUnits_ListsThem()
+        {
+            Assert.Equal(
+                "[pb-and-j] you control: unit_a, unit_b",
+                NetLog.AssignedUnits(new[] { "unit_a", "unit_b" }));
+        }
+
+        [Fact]
+        public void AssignedUnits_WithOneUnit_OmitsTheSeparator()
+        {
+            Assert.Equal("[pb-and-j] you control: unit_a", NetLog.AssignedUnits(new[] { "unit_a" }));
+        }
+
+        [Fact]
+        public void AssignedUnits_WithNone_SaysSo()
+        {
+            Assert.Equal("[pb-and-j] you control no units this combat", NetLog.AssignedUnits(new string[0]));
+        }
+
+        [Fact]
+        public void AssignedUnits_WithNull_Throws()
+        {
+            var ex = Assert.Throws<ArgumentNullException>(() => NetLog.AssignedUnits(null!));
+            Assert.Equal("units", ex.ParamName);
+        }
+
         // --- barrier ---
 
         [Fact]

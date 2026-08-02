@@ -6,9 +6,9 @@ namespace PBAndJ.Core.Net
     /// Discriminator byte at the head of every encoded message.
     /// </summary>
     /// <remarks>
-    /// Values are assigned once and never reused. 10+ are reserved for the
-    /// deferred set: Unready, Assignments, OrderResult, CombatStart, CombatEnd,
-    /// Ping, Pong (see docs/design/networking.md).
+    /// Values are assigned once and never reused. 11+ are reserved for the
+    /// deferred set: Unready, OrderResult, CombatStart, CombatEnd, Ping, Pong
+    /// (see docs/design/networking.md).
     /// </remarks>
     public enum PbjMessageType : byte
     {
@@ -21,6 +21,7 @@ namespace PBAndJ.Core.Net
         TurnCommit = 7,
         TurnComplete = 8,
         Bye = 9,
+        Assignments = 10,
     }
 
     /// <summary>
@@ -204,6 +205,45 @@ namespace PBAndJ.Core.Net
 
         public int Turn { get; }
         public string? Digest { get; }
+    }
+
+    /// <summary>One peer's share of the units, inside an <see cref="AssignmentsMessage"/>.</summary>
+    public sealed class PeerAssignment
+    {
+        private static readonly string[] NoUnits = new string[0];
+
+        public PeerAssignment(int peerId, IReadOnlyList<string>? unitNames)
+        {
+            PeerId = peerId;
+            UnitNames = unitNames ?? NoUnits;
+        }
+
+        public int PeerId { get; }
+        public IReadOnlyList<string> UnitNames { get; }
+    }
+
+    /// <summary>
+    /// Who controls which units. Broadcast when combat starts and whenever the
+    /// roster changes.
+    /// </summary>
+    /// <remarks>
+    /// A client cannot function without this — it needs to know which units it
+    /// may plan. It is advisory only: the host re-checks every incoming order
+    /// against its own copy, so a client that ignores this message simply gets
+    /// its orders rejected.
+    /// </remarks>
+    public sealed class AssignmentsMessage : PbjMessage
+    {
+        private static readonly PeerAssignment[] None = new PeerAssignment[0];
+
+        public AssignmentsMessage(IReadOnlyList<PeerAssignment>? assignments)
+        {
+            Assignments = assignments ?? None;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.Assignments;
+
+        public IReadOnlyList<PeerAssignment> Assignments { get; }
     }
 
     /// <summary>Graceful goodbye from either side.</summary>
