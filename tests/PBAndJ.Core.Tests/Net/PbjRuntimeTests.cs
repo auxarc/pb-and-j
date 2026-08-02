@@ -17,7 +17,7 @@ namespace PBAndJ.Core.Tests.Net
 
         private PbjRuntime HostRuntime(int maxPeers = 3)
         {
-            host = new HostSession("host", "7f3a91", maxPeers, bridge);
+            host = new HostSession("host", "7f3a91", maxPeers, bridge, "secret");
             return new PbjRuntime(transport, bridge, log, mailbox, host);
         }
 
@@ -43,7 +43,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Constructor_WithNullTransport_Throws()
         {
             var ex = Assert.Throws<ArgumentNullException>(
-                () => new PbjRuntime(null!, bridge, log, mailbox, new HostSession("h", "s", 1, bridge)));
+                () => new PbjRuntime(null!, bridge, log, mailbox, new HostSession("h", "s", 1, bridge, "secret")));
             Assert.Equal("transport", ex.ParamName);
         }
 
@@ -51,7 +51,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Constructor_WithNullBridge_Throws()
         {
             var ex = Assert.Throws<ArgumentNullException>(
-                () => new PbjRuntime(transport, null!, log, mailbox, new HostSession("h", "s", 1, bridge)));
+                () => new PbjRuntime(transport, null!, log, mailbox, new HostSession("h", "s", 1, bridge, "secret")));
             Assert.Equal("bridge", ex.ParamName);
         }
 
@@ -59,7 +59,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Constructor_WithNullLog_Throws()
         {
             var ex = Assert.Throws<ArgumentNullException>(
-                () => new PbjRuntime(transport, bridge, null!, mailbox, new HostSession("h", "s", 1, bridge)));
+                () => new PbjRuntime(transport, bridge, null!, mailbox, new HostSession("h", "s", 1, bridge, "secret")));
             Assert.Equal("log", ex.ParamName);
         }
 
@@ -67,7 +67,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Constructor_WithNullMailbox_Throws()
         {
             var ex = Assert.Throws<ArgumentNullException>(
-                () => new PbjRuntime(transport, bridge, log, null!, new HostSession("h", "s", 1, bridge)));
+                () => new PbjRuntime(transport, bridge, log, null!, new HostSession("h", "s", 1, bridge, "secret")));
             Assert.Equal("mailbox", ex.ParamName);
         }
 
@@ -294,13 +294,183 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Contains(log.Lines, l => l.Contains("hello from the transport"));
         }
 
+        // --- combat edges ---
+
+        [Fact]
+        public void Pump_WhenCombatStarts_AnnouncesItToPeers()
+        {
+            bridge.InCombat = false;
+            var runtime = WithHandshakenPeer();
+
+            bridge.InCombat = true;
+            bridge.CurrentTurn = 0;
+            runtime.Pump(0);
+
+            Assert.Contains(transport.MessagesTo(1), m => m is CombatStartMessage);
+        }
+
+        [Fact]
+        public void Pump_WhenCombatEnds_AnnouncesItToPeers()
+        {
+            var runtime = WithHandshakenPeer();
+
+            bridge.InCombat = false;
+            runtime.Pump(0);
+
+            Assert.Contains(transport.MessagesTo(1), m => m is CombatEndMessage);
+        }
+
+        [Fact]
+        public void Pump_WithNoChangeInCombatState_AnnouncesNothing()
+        {
+            var runtime = WithHandshakenPeer();
+            runtime.Pump(0);
+            runtime.Pump(0);
+
+            Assert.DoesNotContain(transport.MessagesTo(1), m => m is CombatStartMessage || m is CombatEndMessage);
+        }
+
+        [Fact]
+        public void Constructor_SeedsTheCombatEdgeSoAMidCombatStartDoesNotFireOne()
+        {
+            // bridge.InCombat is already true when the session is constructed.
+            var runtime = WithHandshakenPeer();
+            runtime.Pump(0);
+
+            Assert.DoesNotContain(transport.MessagesTo(1), m => m is CombatStartMessage);
+        }
+
+        [Fact]
+        public void Pump_ObservesTheCombatEdgeAfterDraining_SoAFinalTurnsResultsStillGoOut()
+        {
+            // The last turn's execution is what ended the combat: the queued
+            // LocalTurnComplete and the cleared InCombat flag arrive together.
+            // Observing the edge first would flip the host to Lobby and the
+            // TurnComplete would be swallowed by its State != Executing guard.
+            var runtime = WithHandshakenPeer();
+            mailbox.Post(new PeerBytesEvent(1, Frame(new ReadyMessage(3, null))));
+            mailbox.Post(new LocalReadyEvent());
+            runtime.Pump(0);
+            Assert.Equal(HostSessionState.Executing, host.State);
+
+            bridge.InCombat = false;
+            mailbox.Post(new LocalTurnCompleteEvent("deadbeef", null));
+            runtime.Pump(0);
+
+            var sent = transport.MessagesTo(1);
+            Assert.Contains(sent, m => m is TurnCompleteMessage);
+            Assert.Contains(sent, m => m is CombatEndMessage);
+        }
+
+        // --- snapshot correction ---
+
+        private PbjRuntime ClientRuntime(out ClientSession session)
+        {
+            session = new ClientSession("ally", "0.2.0", bridge);
+            var runtime = new PbjRuntime(transport, bridge, log, mailbox, session);
+            mailbox.Post(new PeerConnectedEvent(ClientSession.HostConnectionId, "127.0.0.1:1"));
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId, Frame(new WelcomeMessage(
+                PbjProtocol.Version, "s", 1, "host", new[] { new PeerInfo(0, "host") }, 3, "tok"))));
+            runtime.Pump(0);
+            return runtime;
+        }
+
+        private static UnitSnapshot Snap(string name) =>
+            new UnitSnapshot(name, new Vec3(1f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                new Vec3(0f, 0f, 1f), 1f, false, 0f);
+
+        [Fact]
+        public void Pump_ApplyingASnapshot_ClearsOrdersHardSetsAndVerifiesInOnePump()
+        {
+            var runtime = ClientRuntime(out _);
+            bridge.Digest = "stale";
+            bridge.DigestAfterApply = "abc";
+
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId,
+                Frame(new SnapshotMessage(3, "abc", new[] { Snap("unit_a"), Snap("unit_b") }))));
+            runtime.Pump(1);
+
+            Assert.Equal(1, bridge.ClearLocalOrdersCalls);
+            Assert.Equal(2, Assert.Single(bridge.AppliedSnapshots).Count);
+            Assert.Contains(log.Lines, l => l.Contains("corrected") && l.Contains("OK"));
+        }
+
+        [Fact]
+        public void Pump_WhenCorrectionDoesNotLand_ReportsStillDiverged()
+        {
+            // The honest failure: the two sides disagree about which units exist,
+            // which no amount of position-setting can fix.
+            var runtime = ClientRuntime(out _);
+            bridge.Digest = "local";
+            bridge.DigestAfterApply = "local";
+
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId,
+                Frame(new SnapshotMessage(3, "host", new[] { Snap("unit_a") }))));
+            runtime.Pump(1);
+
+            Assert.Contains(log.Lines, l => l.Contains("STILL DIVERGED"));
+        }
+
+        [Fact]
+        public void Snapshot_VerifiesRegardlessOfTheOrderUnitsAreApplied()
+        {
+            // StateDigest combines per-unit hashes by addition, so the client may
+            // apply in any order and still match.
+            var forwards = StateDigest.Compute(new[]
+            {
+                new UnitState("a", new Vec3(1f, 2f, 3f), 0.5f),
+                new UnitState("b", new Vec3(4f, 5f, 6f), 0.25f),
+            });
+            var backwards = StateDigest.Compute(new[]
+            {
+                new UnitState("b", new Vec3(4f, 5f, 6f), 0.25f),
+                new UnitState("a", new Vec3(1f, 2f, 3f), 0.5f),
+            });
+
+            Assert.Equal(forwards, backwards);
+        }
+
+        // --- ticks ---
+
+        [Fact]
+        public void Pump_TicksTheSessionOnItsFirstCall()
+        {
+            var runtime = WithHandshakenPeer();
+            // The handshake pump already ticked at 0; a peer stamped then must
+            // time out once enough time passes.
+            runtime.Pump(PbjProtocol.PeerTimeoutSeconds);
+
+            Assert.Contains(log.Lines, l => l.Contains("silent for"));
+        }
+
+        [Fact]
+        public void Pump_WithinTheTickInterval_DoesNotTickAgain()
+        {
+            var runtime = WithHandshakenPeer();
+            // Would time the peer out if the throttle were not honoured.
+            runtime.Pump(PbjProtocol.TickIntervalSeconds / 2);
+            runtime.Pump(PbjProtocol.TickIntervalSeconds / 2);
+
+            Assert.DoesNotContain(log.Lines, l => l.Contains("silent for"));
+        }
+
+        [Fact]
+        public void Pump_PingsAndTheClientPongs()
+        {
+            var runtime = WithHandshakenPeer();
+            runtime.Pump(PbjProtocol.PingIntervalSeconds);
+            runtime.Pump(2 * PbjProtocol.PingIntervalSeconds);
+
+            Assert.Contains(transport.MessagesTo(1), m => m is PingMessage);
+        }
+
         // --- failure isolation ---
 
         [Fact]
         public void Pump_WhenTransportSendThrows_DisconnectsThatPeerAndContinues()
         {
             var throwing = new ThrowingTransport();
-            var session = new HostSession("host", "s", 3, bridge);
+            var session = new HostSession("host", "s", 3, bridge, "secret");
             var runtime = new PbjRuntime(throwing, bridge, log, mailbox, session);
 
             mailbox.Post(new PeerBytesEvent(1, Frame(GoodHello())));
@@ -314,7 +484,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Pump_ReportsMailboxOverflow()
         {
             var small = new PbjMailbox(1);
-            var runtime = new PbjRuntime(transport, bridge, log, small, new HostSession("h", "s", 1, bridge));
+            var runtime = new PbjRuntime(transport, bridge, log, small, new HostSession("h", "s", 1, bridge, "secret"));
             small.Post(new TransportLogEvent("a"));
             small.Post(new TransportLogEvent("dropped"));
             runtime.Pump(0);
@@ -326,7 +496,7 @@ namespace PBAndJ.Core.Tests.Net
         public void Pump_ReportsOverflowOnlyOncePerBatchOfDrops()
         {
             var small = new PbjMailbox(1);
-            var runtime = new PbjRuntime(transport, bridge, log, small, new HostSession("h", "s", 1, bridge));
+            var runtime = new PbjRuntime(transport, bridge, log, small, new HostSession("h", "s", 1, bridge, "secret"));
             small.Post(new TransportLogEvent("a"));
             small.Post(new TransportLogEvent("dropped"));
             runtime.Pump(0);

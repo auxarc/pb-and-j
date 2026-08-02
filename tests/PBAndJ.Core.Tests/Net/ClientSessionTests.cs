@@ -14,7 +14,7 @@ namespace PBAndJ.Core.Tests.Net
 
         private static WelcomeMessage Welcome(int turn = 3) =>
             new WelcomeMessage(PbjProtocol.Version, "7f3a91", 1, "host",
-                new[] { new PeerInfo(0, "host"), new PeerInfo(1, "ally") }, turn);
+                new[] { new PeerInfo(0, "host"), new PeerInfo(1, "ally") }, turn, "tok");
 
         /// <summary>A client that has completed the handshake.</summary>
         private ClientSession Welcomed(int turn = 3)
@@ -291,6 +291,298 @@ namespace PBAndJ.Core.Tests.Net
                 l => l.Line.Contains("DIVERGED | host aaaa1111 | local bbbb2222"));
         }
 
+        // --- un-ready ---
+
+        [Fact]
+        public void LocalUnready_AfterSubmitting_SendsUnreadyAndUnlocksExecution()
+        {
+            var client = Welcomed();
+            client.Handle(new LocalReadyEvent());
+
+            var effects = client.Handle(new LocalUnreadyEvent());
+            var unready = (UnreadyMessage)Single<SendEffect>(effects).Message;
+            Assert.Equal(3, unready.Turn);
+            Assert.False(Single<SetExecutionLockEffect>(effects).Locked);
+        }
+
+        [Fact]
+        public void LocalUnready_WithNothingSubmitted_SendsNothing()
+        {
+            var effects = Welcomed().Handle(new LocalUnreadyEvent());
+            Assert.Empty(All<SendEffect>(effects));
+        }
+
+        [Fact]
+        public void LocalUnready_IsRefusedOnceTheHostHasCommitted()
+        {
+            var client = Welcomed();
+            client.Handle(new LocalReadyEvent());
+            client.HandleMessage(ClientSession.HostConnectionId, new TurnCommitMessage(3));
+
+            Assert.Empty(All<SendEffect>(client.Handle(new LocalUnreadyEvent())));
+        }
+
+        [Fact]
+        public void LocalUnready_ThenReady_SubmitsAgain()
+        {
+            var client = Welcomed();
+            client.Handle(new LocalReadyEvent());
+            client.Handle(new LocalUnreadyEvent());
+
+            Assert.IsType<ReadyMessage>(Single<SendEffect>(client.Handle(new LocalReadyEvent())).Message);
+        }
+
+        // --- combat lifecycle from the host ---
+
+        [Fact]
+        public void CombatStart_MovesToPlanningAtTheHostsTurnAndUnlocks()
+        {
+            bridge.InCombat = false;
+            var client = Welcomed(-1);
+            Assert.Equal(ClientSessionState.Lobby, client.State);
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, new CombatStartMessage(0));
+            Assert.Equal(ClientSessionState.Planning, client.State);
+            Assert.Equal(0, client.Turn);
+            Assert.False(Single<SetExecutionLockEffect>(effects).Locked);
+        }
+
+        [Fact]
+        public void CombatStart_ClearsAStaleSubmission()
+        {
+            var client = Welcomed();
+            client.Handle(new LocalReadyEvent());
+            client.HandleMessage(ClientSession.HostConnectionId, new CombatStartMessage(0));
+
+            Assert.Empty(All<SendEffect>(client.Handle(new LocalUnreadyEvent())));
+        }
+
+        [Fact]
+        public void CombatEnd_ReturnsToLobbyDropsOwnedUnitsAndUnlocks()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, new AssignmentsMessage(new[]
+            {
+                new PeerAssignment(1, new[] { "unit_b" }),
+            }));
+            Assert.NotEmpty(client.OwnedUnits);
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, new CombatEndMessage());
+            Assert.Equal(ClientSessionState.Lobby, client.State);
+            Assert.Empty(client.OwnedUnits);
+            Assert.False(Single<SetExecutionLockEffect>(effects).Locked);
+        }
+
+        [Fact]
+        public void CombatEnd_WhileWatchingStillUnlocks()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, new TurnCommitMessage(3));
+            Assert.Equal(ClientSessionState.Watching, client.State);
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, new CombatEndMessage());
+            Assert.False(Single<SetExecutionLockEffect>(effects).Locked);
+        }
+
+        [Fact]
+        public void OwnCombatEdges_AreLoggedButChangeNothing()
+        {
+            // A client's local InCombat is not authoritative — it learns combat
+            // state from the host. These arms exist so the event does not throw.
+            var client = Welcomed();
+
+            foreach (var evt in new PbjInboundEvent[] { new CombatEnteredEvent(), new CombatExitedEvent() })
+            {
+                var effects = client.Handle(evt);
+                Assert.Single(All<LogEffect>(effects));
+                Assert.DoesNotContain(effects, e => !(e is LogEffect));
+                Assert.Equal(ClientSessionState.Planning, client.State);
+            }
+        }
+
+        [Fact]
+        public void OrderApplied_IsIgnored()
+        {
+            // Clients never apply remote orders; the arm exists so the event,
+            // which the shared runtime can produce, does not throw.
+            Assert.Empty(Welcomed().Handle(new OrderAppliedEvent(1, 0, OrderApplyResult.Applied)));
+        }
+
+        // --- order results ---
+
+        [Fact]
+        public void OrderResult_IsReportedAndChangesNoState()
+        {
+            var client = Welcomed();
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, new OrderResultMessage(3, 2, new[]
+            {
+                new RejectedOrder(1, OrderApplyResult.NotOwned),
+            }));
+
+            Assert.Single(All<LogEffect>(effects));
+            Assert.DoesNotContain(effects, e => !(e is LogEffect));
+            Assert.Equal(ClientSessionState.Planning, client.State);
+        }
+
+        // --- reconnect ---
+
+        [Fact]
+        public void Start_WithAResumeToken_SendsRejoinRatherThanHello()
+        {
+            var client = new ClientSession("ally", "0.2.0", bridge, "7f3a91", 1, "tok");
+            var rejoin = Assert.IsType<RejoinMessage>(Single<SendEffect>(client.Start()).Message);
+
+            Assert.Equal(PbjProtocol.Magic, rejoin.Magic);
+            Assert.Equal(PbjProtocol.Version, rejoin.ProtocolVersion);
+            Assert.Equal("ally", rejoin.PlayerName);
+            Assert.Equal("7f3a91", rejoin.SessionId);
+            Assert.Equal(1, rejoin.ClaimedPeerId);
+            Assert.Equal("tok", rejoin.ResumeToken);
+        }
+
+        [Fact]
+        public void Start_WithNoResumeToken_SendsHello()
+        {
+            Assert.IsType<HelloMessage>(Single<SendEffect>(Client().Start()).Message);
+        }
+
+        [Fact]
+        public void Welcome_StoresTheResumeTokenForALaterReturn()
+        {
+            Assert.Equal("tok", Welcomed().ResumeToken);
+        }
+
+        // --- snapshot correction ---
+
+        private static UnitSnapshot Snap(string name, float x = 1f) =>
+            new UnitSnapshot(name, new Vec3(x, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                new Vec3(0f, 0f, 1f), 1f, false, 0f);
+
+        [Fact]
+        public void Snapshot_ClearsStaleLocalOrdersBeforeApplying()
+        {
+            // A client's planned orders never execute, so by turn 3 its timeline
+            // is junk and CaptureLocalOrders would re-send orders already run.
+            var client = Welcomed();
+            var effects = client.HandleMessage(ClientSession.HostConnectionId,
+                new SnapshotMessage(3, "abc", new[] { Snap("unit_b") })).ToList();
+
+            var clearAt = effects.FindIndex(e => e is ClearLocalOrdersEffect);
+            var applyAt = effects.FindIndex(e => e is ApplySnapshotEffect);
+            Assert.True(clearAt >= 0 && applyAt > clearAt);
+        }
+
+        [Fact]
+        public void Snapshot_CarriesTheHostsDigestOnTheEffect()
+        {
+            var client = Welcomed();
+            var apply = Single<ApplySnapshotEffect>(client.HandleMessage(ClientSession.HostConnectionId,
+                new SnapshotMessage(3, "abc", new[] { Snap("unit_b") })));
+
+            Assert.Equal(3, apply.Turn);
+            Assert.Equal("abc", apply.ExpectedDigest);
+            Assert.Equal("unit_b", Assert.Single(apply.Units).Name);
+        }
+
+        [Fact]
+        public void SnapshotApplied_WithAMatchingDigest_ReportsTheCorrectionVerified()
+        {
+            var effects = Welcomed().Handle(new SnapshotAppliedEvent(3, 2, "abc", "abc"));
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("corrected") && l.Line.Contains("OK"));
+        }
+
+        [Fact]
+        public void SnapshotApplied_WithAMismatchedDigest_ReportsItLoudly()
+        {
+            var effects = Welcomed().Handle(new SnapshotAppliedEvent(3, 2, "abc", "def"));
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("STILL DIVERGED"));
+        }
+
+        [Fact]
+        public void SnapshotApplied_ChangesNoState()
+        {
+            var client = Welcomed();
+            client.Handle(new SnapshotAppliedEvent(3, 2, "abc", "abc"));
+            Assert.Equal(ClientSessionState.Planning, client.State);
+        }
+
+        // --- keepalive ---
+
+        [Fact]
+        public void Ping_IsAnsweredWithAMatchingPong()
+        {
+            var pong = Assert.IsType<PongMessage>(
+                Single<SendEffect>(Welcomed().HandleMessage(ClientSession.HostConnectionId, new PingMessage(42))).Message);
+            Assert.Equal(42, pong.Nonce);
+        }
+
+        [Fact]
+        public void Ping_DuringTheHandshake_IsAnsweredRatherThanTreatedAsAViolation()
+        {
+            // Refusing would have the host reap a peer that is perfectly alive.
+            var client = Client();
+            client.Start();
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, new PingMessage(1));
+            Assert.IsType<PongMessage>(Single<SendEffect>(effects).Message);
+            Assert.Equal(ClientSessionState.Handshaking, client.State);
+        }
+
+        [Fact]
+        public void Ping_ChangesNoState()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, new PingMessage(1));
+            Assert.Equal(ClientSessionState.Planning, client.State);
+            Assert.Equal(3, client.Turn);
+        }
+
+        [Fact]
+        public void Tick_FirstOne_SeedsRatherThanJudging()
+        {
+            Assert.Empty(Welcomed().Handle(new TickEvent(9_999_999)));
+        }
+
+        [Fact]
+        public void Tick_AfterTheHostTimeout_FaultsAndUnlocksExecution()
+        {
+            var client = Welcomed();
+            client.Handle(new TickEvent(1000));
+
+            var effects = client.Handle(new TickEvent(1000 + PbjProtocol.HostTimeoutSeconds));
+            Assert.Equal(ClientSessionState.Faulted, client.State);
+            Assert.False(Single<SetExecutionLockEffect>(effects).Locked);
+        }
+
+        [Fact]
+        public void Tick_BeforeTheHostTimeout_DoesNothing()
+        {
+            var client = Welcomed();
+            client.Handle(new TickEvent(1000));
+
+            Assert.Empty(client.Handle(new TickEvent(1000 + PbjProtocol.HostTimeoutSeconds - 1)));
+            Assert.Equal(ClientSessionState.Planning, client.State);
+        }
+
+        [Fact]
+        public void AnyInboundMessage_KeepsTheHostAlive()
+        {
+            var client = Welcomed();
+            client.Handle(new TickEvent(1000));
+            client.Handle(new TickEvent(1025));
+            client.HandleMessage(ClientSession.HostConnectionId, new PingMessage(1));
+
+            Assert.Empty(client.Handle(new TickEvent(1040)));
+            Assert.Equal(ClientSessionState.Planning, client.State);
+        }
+
+        [Fact]
+        public void HostTimeout_IsLongerThanThePeerTimeout()
+        {
+            // The host is the side that hitches, and a client fault is terminal.
+            Assert.True(PbjProtocol.HostTimeoutSeconds > PbjProtocol.PeerTimeoutSeconds);
+        }
+
         // --- loss of the host ---
 
         [Fact]
@@ -381,7 +673,7 @@ namespace PBAndJ.Core.Tests.Net
         {
             // A client does not simulate, so its own execution-end hook carries
             // no authority — the host's TurnComplete drives the cycle.
-            Assert.Empty(Welcomed().Handle(new LocalTurnCompleteEvent("d")));
+            Assert.Empty(Welcomed().Handle(new LocalTurnCompleteEvent("d", null)));
         }
 
         [Fact]

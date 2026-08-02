@@ -24,7 +24,7 @@ namespace PBAndJ.Core.Tests.Net
         public static IEnumerable<object[]> AllMessages()
         {
             yield return new object[] { new HelloMessage(PbjProtocol.Magic, 1, "0.2.0", "ally") };
-            yield return new object[] { new WelcomeMessage(1, "s", 1, "host", new[] { new PeerInfo(0, "host") }, 3) };
+            yield return new object[] { new WelcomeMessage(1, "s", 1, "host", new[] { new PeerInfo(0, "host") }, 3, "tok") };
             yield return new object[] { new RejectMessage(RejectReason.SessionFull, "full") };
             yield return new object[] { new PeerJoinedMessage(2, "ally2") };
             yield return new object[] { new PeerLeftMessage(2, "ally2") };
@@ -36,7 +36,25 @@ namespace PBAndJ.Core.Tests.Net
             {
                 new AssignmentsMessage(new[] { new PeerAssignment(0, new[] { "unit_a" }) }),
             };
+            yield return new object[] { new UnreadyMessage(3) };
+            yield return new object[]
+            {
+                new OrderResultMessage(3, 2, new[] { new RejectedOrder(1, OrderApplyResult.NotOwned) }),
+            };
+            yield return new object[] { new CombatStartMessage(0) };
+            yield return new object[] { new CombatEndMessage() };
+            yield return new object[] { new PingMessage(1) };
+            yield return new object[] { new PongMessage(1) };
+            yield return new object[] { new SnapshotMessage(3, "3f9c1a04", new[] { Snapshot("unit_a") }) };
+            yield return new object[]
+            {
+                new RejoinMessage(PbjProtocol.Magic, 2, "0.2.0", "ally", "7f3a91", 1, "tok"),
+            };
         }
+
+        private static UnitSnapshot Snapshot(string name) =>
+            new UnitSnapshot(name, new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
+                new Vec3(0f, 0f, 1f), 0.75f, false, 0f);
 
         [Theory]
         [MemberData(nameof(AllMessages))]
@@ -83,7 +101,7 @@ namespace PBAndJ.Core.Tests.Net
         public void RoundTrip_Welcome_PreservesFieldsAndPeerRoster()
         {
             var peers = new[] { new PeerInfo(0, "host"), new PeerInfo(1, "ally") };
-            var m = RoundTrip(new WelcomeMessage(1, "7f3a91", 1, "host", peers, 3));
+            var m = RoundTrip(new WelcomeMessage(1, "7f3a91", 1, "host", peers, 3, "tok"));
             Assert.Equal(1, m.ProtocolVersion);
             Assert.Equal("7f3a91", m.SessionId);
             Assert.Equal(1, m.AssignedPeerId);
@@ -97,7 +115,7 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void RoundTrip_Welcome_WithNoPeers_PreservesEmptyRoster()
         {
-            Assert.Empty(RoundTrip(new WelcomeMessage(1, "s", 0, "host", null, 0)).Peers);
+            Assert.Empty(RoundTrip(new WelcomeMessage(1, "s", 0, "host", null, 0, "tok")).Peers);
         }
 
         [Theory]
@@ -232,6 +250,171 @@ namespace PBAndJ.Core.Tests.Net
         public void RoundTrip_Bye_WithNullReason_PreservesNull()
         {
             Assert.Null(RoundTrip(new ByeMessage(null)).Reason);
+        }
+
+        [Fact]
+        public void RoundTrip_Unready_PreservesTurn()
+        {
+            Assert.Equal(9, RoundTrip(new UnreadyMessage(9)).Turn);
+        }
+
+        [Fact]
+        public void RoundTrip_OrderResult_PreservesCountsAndEveryRejection()
+        {
+            var m = RoundTrip(new OrderResultMessage(4, 2, new[]
+            {
+                new RejectedOrder(0, OrderApplyResult.NotOwned),
+                new RejectedOrder(3, OrderApplyResult.OutOfWindow),
+            }));
+
+            Assert.Equal(4, m.Turn);
+            Assert.Equal(2, m.Accepted);
+            Assert.Equal(2, m.Rejected.Count);
+            Assert.Equal(0, m.Rejected[0].Index);
+            Assert.Equal(OrderApplyResult.NotOwned, m.Rejected[0].Reason);
+            Assert.Equal(3, m.Rejected[1].Index);
+            Assert.Equal(OrderApplyResult.OutOfWindow, m.Rejected[1].Reason);
+        }
+
+        [Fact]
+        public void RoundTrip_OrderResult_WithNullRejections_PreservesEmpty()
+        {
+            Assert.Empty(RoundTrip(new OrderResultMessage(4, 0, null)).Rejected);
+        }
+
+        [Fact]
+        public void Decode_OrderResultWithTooManyRejections_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.OrderResult);
+            writer.WriteInt32(1);
+            writer.WriteInt32(0);
+            writer.WriteInt32(PbjMessageCodec.MaxOrdersPerReady + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        [Fact]
+        public void RoundTrip_CombatStart_PreservesTurn()
+        {
+            Assert.Equal(0, RoundTrip(new CombatStartMessage(0)).Turn);
+        }
+
+        [Fact]
+        public void Encode_CombatEnd_IsTypeByteOnly()
+        {
+            // The type byte is the whole message; adding a body later is a wire break.
+            Assert.Equal(new byte[] { (byte)PbjMessageType.CombatEnd }, PbjMessageCodec.Encode(new CombatEndMessage()));
+        }
+
+        [Fact]
+        public void RoundTrip_PingAndPong_PreserveTheNonce()
+        {
+            Assert.Equal(int.MaxValue, RoundTrip(new PingMessage(int.MaxValue)).Nonce);
+            Assert.Equal(-7, RoundTrip(new PongMessage(-7)).Nonce);
+        }
+
+        [Fact]
+        public void RoundTrip_Snapshot_PreservesEveryFieldOfEveryUnit()
+        {
+            var m = RoundTrip(new SnapshotMessage(4, "abc123", new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(1.5f, -2.25f, 3f), new Vec4(0.1f, 0.2f, 0.3f, 0.4f),
+                    new Vec3(0f, 0f, -1f), 0.625f, false, 0f),
+                new UnitSnapshot("pb_mech_02", new Vec3(-9f, 0f, 0.125f), new Vec4(1f, 0f, 0f, 0f),
+                    new Vec3(1f, 0f, 0f), 0f, true, 2.5f),
+            }));
+
+            Assert.Equal(4, m.Turn);
+            Assert.Equal("abc123", m.Digest);
+            Assert.Equal(2, m.Units.Count);
+
+            var alive = m.Units[0];
+            Assert.Equal("pb_mech_01", alive.Name);
+            Assert.Equal(1.5f, alive.Position.X);
+            Assert.Equal(-2.25f, alive.Position.Y);
+            Assert.Equal(3f, alive.Position.Z);
+            Assert.Equal(0.1f, alive.Rotation.X);
+            Assert.Equal(0.4f, alive.Rotation.W);
+            Assert.Equal(-1f, alive.Facing.Z);
+            Assert.Equal(0.625f, alive.Integrity);
+            Assert.False(alive.IsDead);
+
+            var dead = m.Units[1];
+            Assert.True(dead.IsDead);
+            Assert.Equal(2.5f, dead.DeathTime);
+            Assert.Equal(0.125f, dead.Position.Z);
+        }
+
+        [Fact]
+        public void RoundTrip_Snapshot_WithNoUnits_PreservesEmpty()
+        {
+            Assert.Empty(RoundTrip(new SnapshotMessage(1, null, null)).Units);
+        }
+
+        [Fact]
+        public void RoundTrip_Snapshot_PreservesNonFiniteFloatsExactly()
+        {
+            // Raw IEEE-754 bits, not quantised and never formatted — a wrecked
+            // unit can carry a NaN transform and it must survive the wire
+            // identically on Mono-under-Wine and .NET.
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("u", new Vec3(float.NaN, float.PositiveInfinity, float.NegativeInfinity),
+                    new Vec4(float.Epsilon, 0f, 0f, 1f), new Vec3(0f, 0f, 0f), float.NaN, false, 0f),
+            }));
+
+            Assert.True(float.IsNaN(m.Units[0].Position.X));
+            Assert.True(float.IsPositiveInfinity(m.Units[0].Position.Y));
+            Assert.True(float.IsNegativeInfinity(m.Units[0].Position.Z));
+            Assert.Equal(float.Epsilon, m.Units[0].Rotation.X);
+            Assert.True(float.IsNaN(m.Units[0].Integrity));
+        }
+
+        [Fact]
+        public void Decode_SnapshotWithTooManyUnits_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.Snapshot);
+            writer.WriteInt32(1);
+            writer.WriteString("d");
+            writer.WriteInt32(PbjMessageCodec.MaxUnitsPerSnapshot + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        [Fact]
+        public void Encode_SnapshotAtTheCap_StaysWellUnderTheFrameLimit()
+        {
+            // The size claim the whole "the writer thread is not a snapshot
+            // prerequisite" argument rests on.
+            var units = new UnitSnapshot[PbjMessageCodec.MaxUnitsPerSnapshot];
+            for (var i = 0; i < units.Length; i++)
+            {
+                units[i] = Snapshot("pb_mech_" + i.ToString("00"));
+            }
+
+            var bytes = PbjMessageCodec.Encode(new SnapshotMessage(1, "3f9c1a04", units));
+            Assert.True(bytes.Length < PbjRuntime.MaxFrameLength / 16,
+                $"a full snapshot was {bytes.Length} bytes, more than 1/16th of the frame limit");
+        }
+
+        [Fact]
+        public void RoundTrip_Welcome_PreservesTheResumeToken()
+        {
+            Assert.Equal("3f9c1a04",
+                RoundTrip(new WelcomeMessage(2, "s", 1, "h", null, 0, "3f9c1a04")).ResumeToken);
+        }
+
+        [Fact]
+        public void RoundTrip_Rejoin_PreservesEveryField()
+        {
+            var m = RoundTrip(new RejoinMessage(PbjProtocol.Magic, 2, "0.2.0", "ally", "7f3a91", 4, "tok"));
+            Assert.Equal(PbjProtocol.Magic, m.Magic);
+            Assert.Equal(2, m.ProtocolVersion);
+            Assert.Equal("0.2.0", m.ModVersion);
+            Assert.Equal("ally", m.PlayerName);
+            Assert.Equal("7f3a91", m.SessionId);
+            Assert.Equal(4, m.ClaimedPeerId);
+            Assert.Equal("tok", m.ResumeToken);
         }
 
         // --- guards ---

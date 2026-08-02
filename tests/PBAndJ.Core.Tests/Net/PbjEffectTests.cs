@@ -67,17 +67,46 @@ namespace PBAndJ.Core.Tests.Net
         public void ApplyOrder_RetainsFields()
         {
             var order = Order();
-            var effect = new ApplyOrderEffect(1, order);
+            var effect = new ApplyOrderEffect(1, 4, order);
             Assert.Equal(PbjEffectKind.ApplyOrder, effect.Kind);
             Assert.Equal(1, effect.PeerId);
+            Assert.Equal(4, effect.BatchIndex);
             Assert.Same(order, effect.Order);
         }
 
         [Fact]
         public void ApplyOrder_WithNullOrder_Throws()
         {
-            var ex = Assert.Throws<ArgumentNullException>(() => new ApplyOrderEffect(1, null!));
+            var ex = Assert.Throws<ArgumentNullException>(() => new ApplyOrderEffect(1, 0, null!));
             Assert.Equal("order", ex.ParamName);
+        }
+
+        [Fact]
+        public void ApplySnapshot_RetainsFields()
+        {
+            var units = new[]
+            {
+                new UnitSnapshot("u", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 0.5f, false, 0f),
+            };
+            var effect = new ApplySnapshotEffect(4, units, "abc");
+
+            Assert.Equal(PbjEffectKind.ApplySnapshot, effect.Kind);
+            Assert.Equal(4, effect.Turn);
+            Assert.Equal("abc", effect.ExpectedDigest);
+            Assert.Equal("u", Assert.Single(effect.Units).Name);
+        }
+
+        [Fact]
+        public void ApplySnapshot_WithNullUnits_IsEmpty()
+        {
+            Assert.Empty(new ApplySnapshotEffect(1, null, null).Units);
+        }
+
+        [Fact]
+        public void ClearLocalOrders_HasItsKind()
+        {
+            Assert.Equal(PbjEffectKind.ClearLocalOrders, new ClearLocalOrdersEffect().Kind);
         }
 
         [Fact]

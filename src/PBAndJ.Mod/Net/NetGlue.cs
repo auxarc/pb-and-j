@@ -22,10 +22,25 @@ namespace PBAndJ.Mod.Net
         private const int MailboxCapacity = 4096;
 
         private static PbjRuntime? runtime;
+
+        // The runtime's own bridge, kept rather than rebuilt per call. Building a
+        // throwaway was harmless while every field on it was static; it stopped
+        // being harmless once one call has to produce a snapshot and a digest
+        // that describe the same instant.
+        private static CombatGameBridge? bridge;
+
         private static TcpHostTransport? hostTransport;
         private static TcpClientTransport? clientTransport;
         private static int mainThreadId = -1;
         private static bool killed;
+
+        // Deliberately survives Shutdown: a reconnect has nothing to present if
+        // the credential dies with the session that issued it.
+        private static string? resumeToken;
+        private static string? resumeSessionId;
+        private static int resumePeerId = -1;
+        private static string? lastAddress;
+        private static int lastPort;
 
         internal sealed class UnityLog : IPbjLog
         {
@@ -44,13 +59,13 @@ namespace PBAndJ.Mod.Net
             }
             try
             {
-                var bridge = new CombatGameBridge();
+                bridge = new CombatGameBridge();
                 var mailbox = new PbjMailbox(MailboxCapacity);
                 var transport = new TcpHostTransport(mailbox, IPAddress.Loopback, port);
                 transport.Start();
                 hostTransport = transport;
 
-                var session = new HostSession(HostName(), NewSessionId(), MaxPeers, bridge);
+                var session = new HostSession(HostName(), NewSessionId(), MaxPeers, bridge, NewSessionSecret());
                 runtime = new PbjRuntime(transport, bridge, new UnityLog(), mailbox, session);
                 killed = false;
 
@@ -67,7 +82,26 @@ namespace PBAndJ.Mod.Net
 
         public static string Join(string address) => Join(address, DefaultPort);
 
-        public static string Join(string address, int port)
+        public static string Join(string address, int port) => Connect(address, port, resuming: false);
+
+        /// <summary>
+        /// Reconnects to the last host, reclaiming the units we held.
+        /// </summary>
+        /// <remarks>
+        /// Separate from <see cref="Join"/> because a client session is faulted
+        /// terminally by a disconnect — coming back means a fresh transport and a
+        /// fresh session, carrying the token the old one was issued.
+        /// </remarks>
+        public static string Rejoin()
+        {
+            if (resumeToken == null || lastAddress == null)
+            {
+                return "[pb-and-j] nothing to rejoin — no previous session on this launch";
+            }
+            return Connect(lastAddress, lastPort, resuming: true);
+        }
+
+        private static string Connect(string address, int port, bool resuming)
         {
             if (runtime != null)
             {
@@ -75,14 +109,18 @@ namespace PBAndJ.Mod.Net
             }
             try
             {
-                var bridge = new CombatGameBridge();
+                bridge = new CombatGameBridge();
                 var mailbox = new PbjMailbox(MailboxCapacity);
                 var transport = new TcpClientTransport(mailbox);
                 clientTransport = transport;
 
-                var session = new ClientSession(HostName(), ModVersion(), bridge);
+                var session = resuming
+                    ? new ClientSession(HostName(), ModVersion(), bridge, resumeSessionId, resumePeerId, resumeToken)
+                    : new ClientSession(HostName(), ModVersion(), bridge);
                 runtime = new PbjRuntime(transport, bridge, new UnityLog(), mailbox, session);
                 killed = false;
+                lastAddress = address;
+                lastPort = port;
 
                 transport.Connect(address, port);
                 var line = NetLog.ClientConnecting(address, port, HostName());
@@ -134,6 +172,23 @@ namespace PBAndJ.Mod.Net
             return "[pb-and-j] local ready posted";
         }
 
+        /// <summary>
+        /// Withdraws a submitted turn so it can be re-planned.
+        /// </summary>
+        /// <remarks>
+        /// A console command rather than a UI hook: the game has no un-ready
+        /// button to intercept, because single-player has nothing to wait for.
+        /// </remarks>
+        public static string Unready()
+        {
+            if (runtime == null)
+            {
+                return NetLog.NoSession();
+            }
+            runtime.Post(new LocalUnreadyEvent());
+            return "[pb-and-j] local un-ready posted";
+        }
+
         // --- hooks used by the execution patches ---
 
         internal static bool HasSession => runtime != null && !killed;
@@ -145,11 +200,16 @@ namespace PBAndJ.Mod.Net
 
         internal static void PostLocalTurnComplete()
         {
-            if (runtime == null)
+            if (runtime == null || bridge == null)
             {
                 return;
             }
-            runtime.Post(new LocalTurnCompleteEvent(new CombatGameBridge().ComputeStateDigest()));
+            // One capture, then the digest projected from it — so the digest
+            // describes exactly the state that goes on the wire. Reading the
+            // bridge twice, or building a throwaway one as this used to, would
+            // let the two drift apart between calls.
+            var snapshot = bridge.CaptureSnapshot();
+            runtime.Post(new LocalTurnCompleteEvent(bridge.ComputeStateDigest(), snapshot));
         }
 
         /// <summary>
@@ -190,7 +250,10 @@ namespace PBAndJ.Mod.Net
 
             try
             {
-                runtime.Pump(Time.realtimeSinceStartup);
+                // The double overload, not the float one: float seconds lose
+                // sub-millisecond resolution after a few hours of process
+                // uptime, and since M5c this value drives the timeout logic.
+                runtime.Pump(Time.realtimeSinceStartupAsDouble);
             }
             catch (Exception e)
             {
@@ -216,7 +279,15 @@ namespace PBAndJ.Mod.Net
             }
             finally
             {
+                // Capture the credential before the session holding it goes.
+                if (runtime?.Session is ClientSession leaving && leaving.ResumeToken != null)
+                {
+                    resumeToken = leaving.ResumeToken;
+                    resumeSessionId = leaving.SessionId;
+                    resumePeerId = leaving.PeerId;
+                }
                 runtime = null;
+                bridge = null;
                 hostTransport = null;
                 clientTransport = null;
                 CombatGameBridge.ResetLock();
@@ -236,6 +307,20 @@ namespace PBAndJ.Mod.Net
             return Guid.NewGuid().ToString("N").Substring(0, 6);
         }
 
+        /// <summary>
+        /// The per-session secret resume tokens are derived from.
+        /// </summary>
+        /// <remarks>
+        /// Minted here rather than in Core so the session stays a deterministic
+        /// pure machine, and never sent — which is the whole point. A token
+        /// derived from the session id or peer names would be computable by
+        /// anyone who has seen a Welcome.
+        /// </remarks>
+        private static string NewSessionSecret()
+        {
+            return Guid.NewGuid().ToString("N");
+        }
+
         internal static void RegisterConsoleCommands()
         {
             Add(nameof(Host), new Type[0], "pbj.host");
@@ -245,6 +330,8 @@ namespace PBAndJ.Mod.Net
             Add(nameof(NetStatus), new Type[0], "pbj.net-status");
             Add(nameof(NetStop), new Type[0], "pbj.net-stop");
             Add(nameof(Ready), new Type[0], "pbj.ready");
+            Add(nameof(Unready), new Type[0], "pbj.unready");
+            Add(nameof(Rejoin), new Type[0], "pbj.rejoin");
         }
 
         private static void Add(string methodName, Type[] parameters, string command)

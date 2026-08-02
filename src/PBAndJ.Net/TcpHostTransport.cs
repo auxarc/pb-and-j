@@ -9,14 +9,20 @@ using PBAndJ.Core.Net;
 namespace PBAndJ.Net
 {
     /// <summary>
-    /// Host-side TCP transport: one accept thread, one receive thread per
-    /// connection, and nothing else.
+    /// Host-side TCP transport: one accept thread, and one receive plus one send
+    /// thread per connection.
     /// </summary>
     /// <remarks>
     /// Excluded from the coverage gate by design — this is the socket-and-thread
     /// glue the humble-object split puts outside it. Every protocol decision
     /// happens in PBAndJ.Core, on the main thread; the threads in here only ever
     /// touch a Socket, a byte[] and the mailbox.
+    /// <para>
+    /// Sends are queued to a per-peer <see cref="PeerWriter"/> rather than
+    /// written inline, so an unresponsive peer can never stall the pump. See that
+    /// class for the backpressure policy and why closes go through the same
+    /// queue.
+    /// </para>
     /// <para>
     /// Blocking reads and writes only: no async, no SocketAsyncEventArgs, no
     /// Select. Under Wine the least exotic path is the best-tested one, which
@@ -31,6 +37,7 @@ namespace PBAndJ.Net
         private readonly IPbjInbox inbox;
         private readonly TcpListener listener;
         private readonly ConcurrentDictionary<int, TcpClient> clients = new ConcurrentDictionary<int, TcpClient>();
+        private readonly ConcurrentDictionary<int, PeerWriter> writers = new ConcurrentDictionary<int, PeerWriter>();
 
         private int nextPeerId;
         private volatile bool running;
@@ -51,21 +58,32 @@ namespace PBAndJ.Net
             StartThread("pbj-accept", AcceptLoop);
         }
 
+        /// <summary>
+        /// Queues one frame for a peer. Returns immediately — the per-peer
+        /// writer thread does the blocking write.
+        /// </summary>
         public void Send(int peerId, byte[] frame)
         {
-            if (!clients.TryGetValue(peerId, out var client))
+            if (!writers.TryGetValue(peerId, out var writer))
             {
+                inbox.Post(new TransportLogEvent(NetLog.SendAfterStop(peerId)));
                 return;
             }
-            // Synchronous on the main thread: every M4 message is small and
-            // SendTimeout bounds the worst case. An outbound queue is a hard
-            // prerequisite before state snapshots go over the wire (see
-            // docs/design/networking.md, known limitations).
-            client.GetStream().Write(frame, 0, frame.Length);
+            writer.Enqueue(frame);
         }
 
+        /// <summary>
+        /// Closes a peer's connection <em>behind</em> anything already queued for
+        /// it, so a Reject still reaches the peer it explains.
+        /// </summary>
         public void Disconnect(int peerId, string? reason)
         {
+            if (writers.TryGetValue(peerId, out var writer))
+            {
+                writer.EnqueueClose(reason ?? "disconnected");
+                return;
+            }
+            // No writer: nothing was ever queued, so close directly.
             if (clients.TryRemove(peerId, out var client))
             {
                 Close(client);
@@ -83,9 +101,29 @@ namespace PBAndJ.Net
             {
                 // already down
             }
+            foreach (var peerId in writers.Keys)
+            {
+                if (writers.TryGetValue(peerId, out var writer))
+                {
+                    writer.Stop();
+                }
+            }
             foreach (var peerId in clients.Keys)
             {
-                Disconnect(peerId, "session closed");
+                if (clients.TryRemove(peerId, out var client))
+                {
+                    Close(client);
+                }
+            }
+        }
+
+        /// <summary>Called by a writer thread once it has finished with a peer.</summary>
+        private void OnWriterClosed(int peerId, string reason)
+        {
+            writers.TryRemove(peerId, out _);
+            if (clients.TryRemove(peerId, out var client))
+            {
+                Close(client);
             }
         }
 
@@ -100,6 +138,10 @@ namespace PBAndJ.Net
                     client.NoDelay = true;
                     client.SendTimeout = 1000;
                     clients[peerId] = client;
+
+                    var writer = new PeerWriter(peerId, client, inbox, OnWriterClosed);
+                    writers[peerId] = writer;
+                    writer.Start();
 
                     var remote = client.Client.RemoteEndPoint?.ToString();
                     inbox.Post(new PeerConnectedEvent(peerId, remote));
@@ -141,6 +183,12 @@ namespace PBAndJ.Net
             }
             finally
             {
+                // Release the writer too, or its thread waits forever on a queue
+                // nobody will ever feed again.
+                if (writers.TryGetValue(peerId, out var writer))
+                {
+                    writer.EnqueueClose(reason);
+                }
                 clients.TryRemove(peerId, out _);
                 Close(client);
                 inbox.Post(new PeerDisconnectedEvent(peerId, reason));

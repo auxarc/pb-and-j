@@ -53,6 +53,42 @@ namespace PBAndJ.Core.Net
             }
             return false;
         }
+
+        /// <summary>
+        /// Moves one peer's units to a different peer id, leaving every other
+        /// peer's share exactly as it was.
+        /// </summary>
+        /// <remarks>
+        /// This is what makes a reconnect feel like a reconnect. Re-planning
+        /// through <see cref="UnitAssignmentPlanner.Plan"/> would deal the whole
+        /// combat again over the new peer set and reshuffle everybody's units
+        /// mid-fight, which is correct for a genuine join or leave and wrong for
+        /// a player who simply came back.
+        /// <para>
+        /// Returns a new instance; assignments are never mutated in place.
+        /// </para>
+        /// </remarks>
+        public UnitAssignments WithPeerRebound(int fromPeerId, int toPeerId)
+        {
+            if (!byPeer.TryGetValue(fromPeerId, out var units))
+            {
+                return this;
+            }
+
+            var moved = new Dictionary<int, string[]>(byPeer.Count);
+            foreach (var entry in byPeer)
+            {
+                if (entry.Key != fromPeerId)
+                {
+                    moved[entry.Key] = entry.Value;
+                }
+            }
+            moved[toPeerId] = units;
+
+            var ids = new List<int>(moved.Keys);
+            ids.Sort();
+            return new UnitAssignments(moved, ids.ToArray());
+        }
     }
 
     /// <summary>

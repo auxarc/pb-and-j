@@ -10,7 +10,7 @@ namespace PBAndJ.Core.Tests.Net
     {
         private readonly FakeGameBridge bridge = new FakeGameBridge();
 
-        private HostSession Host(int maxPeers = 3) => new HostSession("host", "7f3a91", maxPeers, bridge);
+        private HostSession Host(int maxPeers = 3) => new HostSession("host", "7f3a91", maxPeers, bridge, "secret");
 
         private static HelloMessage GoodHello(string name = "ally") =>
             new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", name);
@@ -65,21 +65,21 @@ namespace PBAndJ.Core.Tests.Net
         [InlineData("  ")]
         public void Constructor_WithBlankHostName_Throws(string? name)
         {
-            var ex = Assert.Throws<ArgumentException>(() => new HostSession(name!, "s", 3, bridge));
+            var ex = Assert.Throws<ArgumentException>(() => new HostSession(name!, "s", 3, bridge, "secret"));
             Assert.Equal("hostName", ex.ParamName);
         }
 
         [Fact]
         public void Constructor_WithBlankSessionId_Throws()
         {
-            var ex = Assert.Throws<ArgumentException>(() => new HostSession("h", " ", 3, bridge));
+            var ex = Assert.Throws<ArgumentException>(() => new HostSession("h", " ", 3, bridge, "secret"));
             Assert.Equal("sessionId", ex.ParamName);
         }
 
         [Fact]
         public void Constructor_WithNullBridge_Throws()
         {
-            var ex = Assert.Throws<ArgumentNullException>(() => new HostSession("h", "s", 3, null!));
+            var ex = Assert.Throws<ArgumentNullException>(() => new HostSession("h", "s", 3, null!, "secret"));
             Assert.Equal("bridge", ex.ParamName);
         }
 
@@ -180,7 +180,7 @@ namespace PBAndJ.Core.Tests.Net
             var effects = host.HandleMessage(1, new HelloMessage(PbjProtocol.Magic, 999, "0.2.0", "ally"));
             var reject = Assert.IsType<RejectMessage>(Single<SendEffect>(effects).Message);
             Assert.Equal(RejectReason.VersionMismatch, reject.Reason);
-            Assert.Equal("peer v999, host v1", reject.Detail);
+            Assert.Equal("peer v999, host v" + PbjProtocol.Version, reject.Detail);
         }
 
         [Fact]
@@ -280,6 +280,20 @@ namespace PBAndJ.Core.Tests.Net
         {
             var ex = Assert.Throws<ArgumentNullException>(() => Host().HandleMessage(1, null!));
             Assert.Equal("message", ex.ParamName);
+        }
+
+        [Fact]
+        public void Disconnect_ArrivingTwice_IsHandledOnce()
+        {
+            // Since M5b a peer has both a writer and a receive thread, and both
+            // post a PeerDisconnectedEvent when the socket goes. The second must
+            // be inert, not a second PeerLeft broadcast or a double unassign.
+            var host = WithPeer();
+            var first = host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            var second = host.Handle(new PeerDisconnectedEvent(1, "send failed"));
+
+            Assert.Single(All<BroadcastEffect>(first), b => b.Message is PeerLeftMessage);
+            Assert.Empty(second);
         }
 
         // --- the barrier ---
@@ -448,8 +462,9 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new CommitOutcomeEvent(3, true));
             bridge.CurrentTurn = 4;
 
-            var effects = host.Handle(new LocalTurnCompleteEvent("3f9c1a04"));
-            var complete = Assert.IsType<TurnCompleteMessage>(Single<BroadcastEffect>(effects).Message);
+            var effects = host.Handle(new LocalTurnCompleteEvent("3f9c1a04", null));
+            var complete = (TurnCompleteMessage)All<BroadcastEffect>(effects)
+                .Single(b => b.Message is TurnCompleteMessage).Message;
             Assert.Equal(3, complete.Turn);
             Assert.Equal("3f9c1a04", complete.Digest);
         }
@@ -463,7 +478,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new CommitOutcomeEvent(3, true));
             bridge.CurrentTurn = 4;
 
-            var effects = host.Handle(new LocalTurnCompleteEvent("d"));
+            var effects = host.Handle(new LocalTurnCompleteEvent("d", null));
             Assert.Equal(HostSessionState.Planning, host.State);
             Assert.Equal(4, host.Turn);
             Assert.Equal(0, host.ReadyCount);
@@ -473,7 +488,883 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void Handle_LocalTurnComplete_WhenNotExecuting_ProducesNoEffects()
         {
-            Assert.Empty(WithPeer().Handle(new LocalTurnCompleteEvent("d")));
+            Assert.Empty(WithPeer().Handle(new LocalTurnCompleteEvent("d", null)));
+        }
+
+        // --- un-ready ---
+
+        [Fact]
+        public void Unready_AfterReady_ClearsThatPeersReadiness()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b") }));
+            Assert.Equal(1, host.ReadyCount);
+
+            host.HandleMessage(1, new UnreadyMessage(3));
+            Assert.Equal(0, host.ReadyCount);
+        }
+
+        [Fact]
+        public void Unready_DiscardsTheSubmittedBatchSoItIsNotCommittedLater()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b") }));
+            host.HandleMessage(1, new UnreadyMessage(3));
+
+            // Host readies alone; the barrier is satisfied because the peer is
+            // no longer ready... it is, so nothing commits. Re-ready with nothing.
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            var effects = host.Handle(new LocalReadyEvent());
+            Assert.Empty(All<ApplyOrderEffect>(effects));
+        }
+
+        [Fact]
+        public void Unready_WhenNotReady_IsANoOp()
+        {
+            var host = WithPeer();
+            var effects = host.HandleMessage(1, new UnreadyMessage(3));
+
+            Assert.Equal(0, host.ReadyCount);
+            Assert.Empty(All<DisconnectEffect>(effects));
+        }
+
+        [Fact]
+        public void Unready_IsIdempotent()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            host.HandleMessage(1, new UnreadyMessage(3));
+            host.HandleMessage(1, new UnreadyMessage(3));
+
+            Assert.Equal(0, host.ReadyCount);
+            Assert.Equal(HostSessionState.Planning, host.State);
+        }
+
+        [Fact]
+        public void Unready_ForAnotherTurn_IsIgnored()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            host.HandleMessage(1, new UnreadyMessage(2));
+
+            Assert.Equal(1, host.ReadyCount);
+        }
+
+        [Fact]
+        public void Unready_WhileExecuting_IsIgnored()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            host.Handle(new LocalReadyEvent());
+            host.Handle(new CommitOutcomeEvent(3, true));
+            Assert.Equal(HostSessionState.Executing, host.State);
+
+            var effects = host.HandleMessage(1, new UnreadyMessage(3));
+            Assert.Empty(All<DisconnectEffect>(effects));
+            Assert.Equal(HostSessionState.Executing, host.State);
+        }
+
+        [Fact]
+        public void LocalUnready_AfterTheHostReadied_ClearsItAndUnlocks()
+        {
+            var host = WithPeer();
+            host.Handle(new LocalReadyEvent());
+            Assert.Equal(1, host.ReadyCount);
+
+            var effects = host.Handle(new LocalUnreadyEvent());
+            Assert.Equal(0, host.ReadyCount);
+            Assert.False(Single<SetExecutionLockEffect>(effects).Locked);
+        }
+
+        [Fact]
+        public void LocalUnready_WhenTheHostWasNotReady_IsANoOp()
+        {
+            Assert.Empty(WithPeer().Handle(new LocalUnreadyEvent()));
+        }
+
+        [Fact]
+        public void LocalUnready_WhileExecuting_IsIgnored()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            host.Handle(new LocalReadyEvent());
+            host.Handle(new CommitOutcomeEvent(3, true));
+
+            Assert.Empty(host.Handle(new LocalUnreadyEvent()));
+            Assert.Equal(HostSessionState.Executing, host.State);
+        }
+
+        [Fact]
+        public void LocalUnready_StopsATurnThatWouldOtherwiseHaveCommitted()
+        {
+            var host = WithPeer();
+            host.Handle(new LocalReadyEvent());
+            host.Handle(new LocalUnreadyEvent());
+
+            // The peer readying should no longer fill the barrier.
+            var effects = host.HandleMessage(1, new ReadyMessage(3, null));
+            Assert.Empty(All<CommitTurnEffect>(effects));
+        }
+
+        [Fact]
+        public void Unready_FromAnUnregisteredPeer_DisconnectsIt()
+        {
+            var host = Host();
+            host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+
+            var effects = host.HandleMessage(1, new UnreadyMessage(3));
+            Assert.Equal(1, Single<DisconnectEffect>(effects).PeerId);
+        }
+
+        // --- order results ---
+
+        [Fact]
+        public void Commit_SendsEachSubmittingPeerAnOrderResult()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b") }));
+            var effects = host.Handle(new LocalReadyEvent());
+
+            // The apply effects fold their outcomes back before the commit runs;
+            // the runtime does that, so drive it by hand here.
+            foreach (var apply in All<ApplyOrderEffect>(effects))
+            {
+                host.Handle(new OrderAppliedEvent(apply.PeerId, apply.BatchIndex, OrderApplyResult.Applied));
+            }
+            var outcome = host.Handle(new CommitOutcomeEvent(3, true));
+
+            var result = (OrderResultMessage)Single<SendEffect>(outcome).Message;
+            Assert.Equal(3, result.Turn);
+            Assert.Equal(1, result.Accepted);
+            Assert.Empty(result.Rejected);
+        }
+
+        [Fact]
+        public void Commit_ReportsAnUnownedOrderByItsBatchIndex()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b"), Order("unit_a") }));
+            var effects = host.Handle(new LocalReadyEvent());
+            foreach (var apply in All<ApplyOrderEffect>(effects))
+            {
+                host.Handle(new OrderAppliedEvent(apply.PeerId, apply.BatchIndex, OrderApplyResult.Applied));
+            }
+            var result = (OrderResultMessage)Single<SendEffect>(host.Handle(new CommitOutcomeEvent(3, true))).Message;
+
+            Assert.Equal(1, result.Accepted);
+            var rejected = Assert.Single(result.Rejected);
+            Assert.Equal(1, rejected.Index);
+            Assert.Equal(OrderApplyResult.NotOwned, rejected.Reason);
+        }
+
+        [Fact]
+        public void Commit_ReportsAGameRejectionByItsBatchIndex()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b"), Order("unit_b") }));
+            var effects = host.Handle(new LocalReadyEvent());
+            var applies = All<ApplyOrderEffect>(effects).ToList();
+            host.Handle(new OrderAppliedEvent(1, applies[0].BatchIndex, OrderApplyResult.Applied));
+            host.Handle(new OrderAppliedEvent(1, applies[1].BatchIndex, OrderApplyResult.Invalid));
+
+            var result = (OrderResultMessage)Single<SendEffect>(host.Handle(new CommitOutcomeEvent(3, true))).Message;
+            Assert.Equal(1, result.Accepted);
+            var rejected = Assert.Single(result.Rejected);
+            Assert.Equal(1, rejected.Index);
+            Assert.Equal(OrderApplyResult.Invalid, rejected.Reason);
+        }
+
+        [Fact]
+        public void Commit_SendsAnOrderResultEvenToAPeerThatSubmittedNothing()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            host.Handle(new LocalReadyEvent());
+
+            var result = (OrderResultMessage)Single<SendEffect>(host.Handle(new CommitOutcomeEvent(3, true))).Message;
+            Assert.Equal(0, result.Accepted);
+            Assert.Empty(result.Rejected);
+        }
+
+        [Fact]
+        public void Commit_SendsOrderResultsBeforeBroadcastingTurnCommit()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b") }));
+            host.Handle(new LocalReadyEvent());
+            var effects = host.Handle(new CommitOutcomeEvent(3, true)).ToList();
+
+            var resultAt = effects.FindIndex(e => e is SendEffect send && send.Message is OrderResultMessage);
+            var commitAt = effects.FindIndex(e => e is BroadcastEffect b && b.Message is TurnCommitMessage);
+            Assert.True(resultAt >= 0 && commitAt >= 0);
+            Assert.True(resultAt < commitAt, "OrderResult must reach the peer before it is told execution began.");
+        }
+
+        [Fact]
+        public void RefusedCommit_SendsNoOrderResult()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b") }));
+            host.Handle(new LocalReadyEvent());
+
+            var effects = host.Handle(new CommitOutcomeEvent(3, false));
+            Assert.Empty(All<SendEffect>(effects));
+        }
+
+        [Fact]
+        public void RefusedCommit_DiscardsAccumulatedResultsSoTheyDoNotLeakIntoTheNextCommit()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_a") }));
+            host.Handle(new LocalReadyEvent());
+            host.Handle(new CommitOutcomeEvent(3, false));
+
+            // Re-ready with a clean, fully-owned batch: the earlier unowned
+            // rejection must not still be attached to this peer.
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b") }));
+            var effects = host.Handle(new LocalReadyEvent());
+            foreach (var apply in All<ApplyOrderEffect>(effects))
+            {
+                host.Handle(new OrderAppliedEvent(apply.PeerId, apply.BatchIndex, OrderApplyResult.Applied));
+            }
+
+            var result = (OrderResultMessage)Single<SendEffect>(host.Handle(new CommitOutcomeEvent(3, true))).Message;
+            Assert.Empty(result.Rejected);
+            Assert.Equal(1, result.Accepted);
+        }
+
+        [Fact]
+        public void Disconnect_DiscardsThatPeersAccumulatedResults()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_a") }));
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+
+            // The departed peer is gone, so the host commits alone and there is
+            // nobody left to send a result to.
+            var effects = host.Handle(new CommitOutcomeEvent(3, true));
+            Assert.Empty(All<SendEffect>(effects));
+        }
+
+        [Fact]
+        public void OrderApplied_ProducesNoEffectsOfItsOwn()
+        {
+            var host = WithPeer();
+            Assert.Empty(host.Handle(new OrderAppliedEvent(1, 0, OrderApplyResult.Applied)));
+        }
+
+        // --- reconnect ---
+
+        /// <summary>A peer that has handshaken and been ticked, so it can be held.</summary>
+        private HostSession WithTickedPeer(out string token, int peerId = 1, string name = "ally")
+        {
+            var host = Host();
+            host.Handle(new TickEvent(1000));
+            host.Handle(new PeerConnectedEvent(peerId, "127.0.0.1:1"));
+            var welcome = (WelcomeMessage)Single<SendEffect>(host.HandleMessage(peerId, GoodHello(name))).Message;
+            token = welcome.ResumeToken!;
+            return host;
+        }
+
+        private static RejoinMessage Rejoin(string token, int claimedPeerId = 1, string name = "ally",
+            string session = "7f3a91") =>
+            new RejoinMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", name, session, claimedPeerId, token);
+
+        [Fact]
+        public void Welcome_IssuesAResumeToken()
+        {
+            WithTickedPeer(out var token);
+            Assert.False(string.IsNullOrEmpty(token));
+        }
+
+        [Fact]
+        public void ResumeToken_IsNotDerivableFromAnythingOnTheWire()
+        {
+            // Two sessions identical but for their secret must issue different
+            // tokens, or the token is no credential at all — session id, peer id
+            // and player name all reach every client.
+            var a = new HostSession("host", "7f3a91", 3, bridge, "secret-a");
+            var b = new HostSession("host", "7f3a91", 3, bridge, "secret-b");
+            a.Handle(new TickEvent(1000));
+            b.Handle(new TickEvent(1000));
+
+            var tokenA = ((WelcomeMessage)Single<SendEffect>(a.HandleMessage(1, GoodHello())).Message).ResumeToken;
+            var tokenB = ((WelcomeMessage)Single<SendEffect>(b.HandleMessage(1, GoodHello())).Message).ResumeToken;
+            Assert.NotEqual(tokenA, tokenB);
+        }
+
+        [Fact]
+        public void Disconnect_HoldsThePeersUnitsInsteadOfReassigning()
+        {
+            // Reassigning here would deal the combat again over the remaining
+            // peers and destroy the binding a rejoin needs.
+            var host = WithTickedPeer(out _);
+            var before = host.Assignments.UnitsFor(1);
+            Assert.NotEmpty(before);
+
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            Assert.Equal(before, host.Assignments.UnitsFor(1));
+        }
+
+        [Fact]
+        public void Disconnect_StillFreesTheBarrierImmediately()
+        {
+            // Holding units must not mean holding the turn.
+            var host = WithTickedPeer(out _);
+            Assert.Equal(2, host.ParticipantCount);
+
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            Assert.Equal(1, host.ParticipantCount);
+            Assert.Empty(host.Peers);
+        }
+
+        [Fact]
+        public void Rejoin_RebindsTheSameUnitsToTheNewPeerId()
+        {
+            var host = WithTickedPeer(out var token);
+            var held = host.Assignments.UnitsFor(1);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            var effects = host.HandleMessage(2, Rejoin(token));
+
+            Assert.Equal(held, host.Assignments.UnitsFor(2));
+            Assert.Empty(host.Assignments.UnitsFor(1));
+            var welcome = (WelcomeMessage)All<SendEffect>(effects).Select(s => s.Message)
+                .OfType<WelcomeMessage>().Single();
+            Assert.Equal(2, welcome.AssignedPeerId);
+        }
+
+        [Fact]
+        public void Rejoin_DoesNotReshuffleEveryoneElse()
+        {
+            var host = WithTickedPeer(out var token);
+            var hostUnitsBefore = host.Assignments.UnitsFor(0);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            host.HandleMessage(2, Rejoin(token));
+
+            Assert.Equal(hostUnitsBefore, host.Assignments.UnitsFor(0));
+        }
+
+        [Fact]
+        public void Rejoin_IssuesAFreshTokenForTheNewId()
+        {
+            var host = WithTickedPeer(out var token);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+
+            var welcome = (WelcomeMessage)All<SendEffect>(host.HandleMessage(2, Rejoin(token)))
+                .Select(s => s.Message).OfType<WelcomeMessage>().Single();
+            Assert.NotEqual(token, welcome.ResumeToken);
+        }
+
+        [Fact]
+        public void Rejoin_WithAWrongToken_IsRefused()
+        {
+            var host = WithTickedPeer(out _);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+
+            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, Rejoin("not-the-token"))).Message;
+            Assert.Equal(RejectReason.BadResumeToken, reject.Reason);
+        }
+
+        [Fact]
+        public void Rejoin_ClaimingAPeerIdThatNeverLeft_IsRefused()
+        {
+            var host = WithTickedPeer(out var token);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+
+            var reject = (RejectMessage)Single<SendEffect>(
+                host.HandleMessage(2, Rejoin(token, claimedPeerId: 7))).Message;
+            Assert.Equal(RejectReason.BadResumeToken, reject.Reason);
+        }
+
+        [Fact]
+        public void Rejoin_ToAnotherSession_IsRefused()
+        {
+            var host = WithTickedPeer(out var token);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+
+            var reject = (RejectMessage)Single<SendEffect>(
+                host.HandleMessage(2, Rejoin(token, session: "someone-else"))).Message;
+            Assert.Equal(RejectReason.UnknownSession, reject.Reason);
+        }
+
+        [Fact]
+        public void Rejoin_WithABadProtocolVersion_IsRefused()
+        {
+            var host = WithTickedPeer(out var token);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+
+            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, new RejoinMessage(
+                PbjProtocol.Magic, 999, "0.2.0", "ally", "7f3a91", 1, token))).Message;
+            Assert.Equal(RejectReason.VersionMismatch, reject.Reason);
+        }
+
+        [Fact]
+        public void Rejoin_WithBadMagic_IsRefusedWithNoVersionDetail()
+        {
+            var host = WithTickedPeer(out var token);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+
+            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, new RejoinMessage(
+                0xDEAD, PbjProtocol.Version, "0.2.0", "ally", "7f3a91", 1, token))).Message;
+            Assert.Equal(RejectReason.BadMagic, reject.Reason);
+            Assert.Null(reject.Detail);
+        }
+
+        [Fact]
+        public void Rejoin_FromAnAlreadyRegisteredConnection_IsAViolation()
+        {
+            var host = WithTickedPeer(out var token);
+            var effects = host.HandleMessage(1, Rejoin(token));
+            Assert.Single(All<DisconnectEffect>(effects));
+        }
+
+        [Fact]
+        public void Rejoin_WhileExecuting_TellsThePeerTheTurnIsAlreadyRunning()
+        {
+            var host = WithTickedPeer(out var token);
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            host.Handle(new LocalReadyEvent());
+            host.Handle(new CommitOutcomeEvent(3, true));
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+
+            var sent = All<SendEffect>(host.HandleMessage(2, Rejoin(token))).Select(s => s.Message).ToList();
+            Assert.Contains(sent, m => m is TurnCommitMessage);
+        }
+
+        [Fact]
+        public void Hello_CannotTakeAHeldPlayersNameDuringTheGraceWindow()
+        {
+            // Otherwise a stranger steals the name and the real owner's rejoin
+            // is refused as a duplicate through no fault of its own.
+            var host = WithTickedPeer(out _);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+
+            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, GoodHello("ally"))).Message;
+            Assert.Equal(RejectReason.DuplicateName, reject.Reason);
+            Assert.Equal("reserved for a reconnect", reject.Detail);
+        }
+
+        [Fact]
+        public void Hello_WithADifferentName_IsStillAcceptedDuringAHold()
+        {
+            var host = WithTickedPeer(out _);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+
+            var welcome = All<SendEffect>(host.HandleMessage(2, GoodHello("someone-else")))
+                .Select(s => s.Message).OfType<WelcomeMessage>().SingleOrDefault();
+            Assert.NotNull(welcome);
+        }
+
+        [Fact]
+        public void GraceExpiry_ReleasesTheUnitsAndReassigns()
+        {
+            // Pruning is not bookkeeping — it is the only path that puts a
+            // permanently-gone player's units back into play.
+            var host = WithTickedPeer(out _);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            Assert.NotEmpty(host.Assignments.UnitsFor(1));
+
+            var effects = host.Handle(new TickEvent(1000 + PbjProtocol.ReconnectGraceSeconds));
+            Assert.Empty(host.Assignments.UnitsFor(1));
+            Assert.Contains(All<BroadcastEffect>(effects), b => b.Message is AssignmentsMessage);
+        }
+
+        [Fact]
+        public void GraceExpiry_GivesTheUnitsBackToTheRemainingPlayers()
+        {
+            var host = WithTickedPeer(out _);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new TickEvent(1000 + PbjProtocol.ReconnectGraceSeconds));
+
+            Assert.Equal(new[] { "unit_a", "unit_b", "unit_c" }, host.Assignments.UnitsFor(0));
+        }
+
+        [Fact]
+        public void Rejoin_AfterTheGraceExpired_IsRefused()
+        {
+            var host = WithTickedPeer(out var token);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new TickEvent(1000 + PbjProtocol.ReconnectGraceSeconds));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+
+            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, Rejoin(token))).Message;
+            Assert.Equal(RejectReason.BadResumeToken, reject.Reason);
+        }
+
+        [Fact]
+        public void GraceExpiry_BeforeTheDeadline_ChangesNothing()
+        {
+            var host = WithTickedPeer(out _);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+
+            host.Handle(new TickEvent(1000 + PbjProtocol.ReconnectGraceSeconds - 1));
+            Assert.NotEmpty(host.Assignments.UnitsFor(1));
+        }
+
+        [Fact]
+        public void Tick_WithNoHolds_DoesNoExpiryWork()
+        {
+            var host = WithTickedPeer(out _);
+            // Inside the peer timeout, so the only thing that could broadcast
+            // here is expiry work — and there is none pending.
+            Assert.Empty(All<BroadcastEffect>(host.Handle(new TickEvent(1001))));
+        }
+
+        [Fact]
+        public void Disconnect_OutOfCombat_HoldsNothing()
+        {
+            // No units are assigned outside combat, so there is nothing to hold
+            // and the normal reassign path applies.
+            bridge.InCombat = false;
+            var host = Host();
+            host.Handle(new TickEvent(1000));
+            host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            host.HandleMessage(1, GoodHello());
+
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            var welcome = All<SendEffect>(host.HandleMessage(2, GoodHello("ally")))
+                .Select(s => s.Message).OfType<WelcomeMessage>().SingleOrDefault();
+            Assert.NotNull(welcome);
+        }
+
+        [Fact]
+        public void Rejoin_WhenTheSessionFilledUpMeanwhile_IsRefused()
+        {
+            var host = new HostSession("host", "7f3a91", 1, bridge, "secret");
+            host.Handle(new TickEvent(1000));
+            host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            var token = ((WelcomeMessage)Single<SendEffect>(host.HandleMessage(1, GoodHello())).Message).ResumeToken!;
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+
+            // Someone else takes the only slot while the hold stands.
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            host.HandleMessage(2, GoodHello("other"));
+
+            host.Handle(new PeerConnectedEvent(3, "127.0.0.1:3"));
+            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(3, Rejoin(token))).Message;
+            Assert.Equal(RejectReason.SessionFull, reject.Reason);
+        }
+
+        [Fact]
+        public void Hello_WithNoName_IsNotConfusedWithAHeldName()
+        {
+            var host = WithTickedPeer(out _);
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+
+            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2,
+                new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", null))).Message;
+            Assert.Equal(RejectReason.InvalidName, reject.Reason);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("  ")]
+        public void Constructor_WithBlankSessionSecret_Throws(string? secret)
+        {
+            var ex = Assert.Throws<ArgumentException>(() => new HostSession("h", "s", 3, bridge, secret!));
+            Assert.Equal("sessionSecret", ex.ParamName);
+        }
+
+        [Fact]
+        public void Disconnect_BeforeAnyTick_HoldsNothing()
+        {
+            // Without a tick there is no clock to expire a hold with, so holding
+            // one would strand those units for the rest of the combat.
+            var host = WithPeer();
+            host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            Assert.Empty(host.Assignments.UnitsFor(1));
+        }
+
+        // --- snapshots ---
+
+        private static UnitSnapshot Snap(string name) =>
+            new UnitSnapshot(name, new Vec3(1f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                new Vec3(0f, 0f, 1f), 1f, false, 0f);
+
+        private HostSession Executing()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            host.Handle(new LocalReadyEvent());
+            host.Handle(new CommitOutcomeEvent(3, true));
+            return host;
+        }
+
+        [Fact]
+        public void TurnComplete_BroadcastsTheSnapshotAfterTurnComplete()
+        {
+            // Snapshot-first would make the client's digest already match when it
+            // compared, silencing the divergence diagnostic permanently.
+            var effects = Executing()
+                .Handle(new LocalTurnCompleteEvent("abc", new[] { Snap("unit_a") }))
+                .ToList();
+
+            var completeAt = effects.FindIndex(e => e is BroadcastEffect b && b.Message is TurnCompleteMessage);
+            var snapshotAt = effects.FindIndex(e => e is BroadcastEffect b && b.Message is SnapshotMessage);
+            Assert.True(completeAt >= 0 && snapshotAt > completeAt);
+        }
+
+        [Fact]
+        public void TurnComplete_SnapshotCarriesTheExecutedTurnAndTheSameDigest()
+        {
+            var effects = Executing().Handle(new LocalTurnCompleteEvent("abc", new[] { Snap("unit_a") }));
+            var snapshot = (SnapshotMessage)All<BroadcastEffect>(effects)
+                .Single(b => b.Message is SnapshotMessage).Message;
+
+            // The executed turn, captured at commit time — not read back from the
+            // bridge, which has already advanced.
+            Assert.Equal(3, snapshot.Turn);
+            Assert.Equal("abc", snapshot.Digest);
+            Assert.Equal("unit_a", Assert.Single(snapshot.Units).Name);
+        }
+
+        [Fact]
+        public void TurnComplete_WithNoUnits_StillBroadcastsASnapshot()
+        {
+            var effects = Executing().Handle(new LocalTurnCompleteEvent("abc", null));
+            var snapshot = (SnapshotMessage)All<BroadcastEffect>(effects)
+                .Single(b => b.Message is SnapshotMessage).Message;
+            Assert.Empty(snapshot.Units);
+        }
+
+        [Fact]
+        public void SnapshotApplied_IsIgnoredOnTheHost()
+        {
+            Assert.Empty(WithPeer().Handle(new SnapshotAppliedEvent(3, 1, "a", "a")));
+        }
+
+        // --- keepalive ---
+
+        [Fact]
+        public void Tick_FirstOne_SeedsPeersRatherThanJudgingThem()
+        {
+            // In-game the clock is the process uptime, so it can be enormous at
+            // session start. An unseeded peer would look silent since zero.
+            var host = WithPeer();
+            var effects = host.Handle(new TickEvent(9_999_999));
+
+            Assert.Empty(All<DisconnectEffect>(effects));
+            Assert.Single(host.Peers);
+        }
+
+        [Fact]
+        public void Tick_AfterAPeerFirstSpokeBetweenTicks_DoesNotThrow()
+        {
+            // The realistic order in-game: the runtime ticks on its first pump,
+            // then the peer's Hello arrives. That stamps the inbound clock, so
+            // the next tick skips the seeding path — and must still find a ping
+            // clock to compare against.
+            var host = Host();
+            host.Handle(new TickEvent(1000));
+            host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            host.HandleMessage(1, GoodHello());
+
+            Assert.Empty(All<DisconnectEffect>(host.Handle(new TickEvent(1001))));
+        }
+
+        [Fact]
+        public void Tick_AfterThePingInterval_PingsAQuietPeer()
+        {
+            var host = WithPeer();
+            host.Handle(new TickEvent(1000));
+
+            var ping = Assert.IsType<PingMessage>(
+                Single<SendEffect>(host.Handle(new TickEvent(1000 + PbjProtocol.PingIntervalSeconds))).Message);
+            Assert.Equal(0, ping.Nonce);
+
+            var next = Assert.IsType<PingMessage>(
+                Single<SendEffect>(host.Handle(new TickEvent(1000 + 2 * PbjProtocol.PingIntervalSeconds))).Message);
+            Assert.Equal(1, next.Nonce);
+        }
+
+        [Fact]
+        public void Tick_BeforeThePingInterval_SendsNothing()
+        {
+            var host = WithPeer();
+            host.Handle(new TickEvent(1000));
+            Assert.Empty(All<SendEffect>(host.Handle(new TickEvent(1001))));
+        }
+
+        [Fact]
+        public void Tick_AfterTheTimeout_DropsTheSilentPeer()
+        {
+            var host = WithPeer();
+            host.Handle(new TickEvent(1000));
+
+            var effects = host.Handle(new TickEvent(1000 + PbjProtocol.PeerTimeoutSeconds));
+            Assert.Equal(1, Single<DisconnectEffect>(effects).PeerId);
+            Assert.Empty(host.Peers);
+            Assert.Contains(All<BroadcastEffect>(effects), b => b.Message is PeerLeftMessage);
+        }
+
+        [Fact]
+        public void Tick_TimingOutTheLastBlockingPeer_CommitsTheTurn()
+        {
+            // A dead peer must never wedge the session.
+            var host = WithPeer();
+            host.Handle(new TickEvent(1000));
+            host.Handle(new LocalReadyEvent());
+
+            var effects = host.Handle(new TickEvent(1000 + PbjProtocol.PeerTimeoutSeconds));
+            Assert.Single(All<CommitTurnEffect>(effects));
+        }
+
+        [Fact]
+        public void Tick_WhileExecuting_StillTimesOutASilentPeer()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            host.Handle(new LocalReadyEvent());
+            host.Handle(new CommitOutcomeEvent(3, true));
+            Assert.Equal(HostSessionState.Executing, host.State);
+            host.Handle(new TickEvent(1000));
+
+            var effects = host.Handle(new TickEvent(1000 + PbjProtocol.PeerTimeoutSeconds));
+            Assert.Equal(1, Single<DisconnectEffect>(effects).PeerId);
+        }
+
+        [Fact]
+        public void AnyInboundMessage_KeepsAPeerAlive()
+        {
+            var host = WithPeer();
+            host.Handle(new TickEvent(1000));
+            host.Handle(new TickEvent(1015));
+
+            // Silent for 15s, then speaks — the clock restarts from there.
+            host.HandleMessage(1, new UnreadyMessage(3));
+            Assert.Empty(All<DisconnectEffect>(host.Handle(new TickEvent(1025))));
+        }
+
+        [Fact]
+        public void Pong_CountsAsTrafficAndProducesNothing()
+        {
+            var host = WithPeer();
+            host.Handle(new TickEvent(1000));
+            host.Handle(new TickEvent(1015));
+
+            Assert.Empty(host.HandleMessage(1, new PongMessage(7)));
+            Assert.Empty(All<DisconnectEffect>(host.Handle(new TickEvent(1025))));
+        }
+
+        [Fact]
+        public void Tick_WithNoPeers_DoesNothing()
+        {
+            Assert.Empty(Host().Handle(new TickEvent(1000)));
+        }
+
+        // --- combat edges ---
+
+        [Fact]
+        public void CombatEntered_BroadcastsCombatStartThenAssignments()
+        {
+            bridge.InCombat = false;
+            var host = WithPeer();
+            bridge.InCombat = true;
+            bridge.CurrentTurn = 0;
+
+            var effects = host.Handle(new CombatEnteredEvent()).ToList();
+            var broadcasts = All<BroadcastEffect>(effects).ToList();
+            var startAt = broadcasts.FindIndex(b => b.Message is CombatStartMessage);
+            var assignAt = broadcasts.FindIndex(b => b.Message is AssignmentsMessage);
+
+            Assert.True(startAt >= 0, "combat entry must announce itself");
+            Assert.True(assignAt > startAt, "Assignments must follow CombatStart immediately");
+            Assert.Equal(0, ((CombatStartMessage)broadcasts[startAt].Message).Turn);
+        }
+
+        [Fact]
+        public void CombatEntered_MovesToPlanningAndResetsTheBarrier()
+        {
+            bridge.InCombat = false;
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(-1, null));
+            bridge.InCombat = true;
+            bridge.CurrentTurn = 0;
+            host.Handle(new CombatEnteredEvent());
+
+            Assert.Equal(HostSessionState.Planning, host.State);
+            Assert.Equal(0, host.Turn);
+            Assert.Equal(0, host.ReadyCount);
+        }
+
+        [Fact]
+        public void CombatExited_BroadcastsCombatEndAndUnlocksEveryone()
+        {
+            var host = WithPeer();
+            bridge.InCombat = false;
+
+            var effects = host.Handle(new CombatExitedEvent());
+            Assert.IsType<CombatEndMessage>(Single<BroadcastEffect>(effects).Message);
+            Assert.False(Single<SetExecutionLockEffect>(effects).Locked);
+            Assert.Equal(HostSessionState.Lobby, host.State);
+        }
+
+        [Fact]
+        public void CombatExited_WhileAPeerSitsReady_StillUnlocksIt()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            bridge.InCombat = false;
+            host.Handle(new CombatExitedEvent());
+
+            Assert.Equal(0, host.ReadyCount);
+            Assert.Empty(host.Assignments.PeerIds);
+        }
+
+        [Fact]
+        public void CombatExited_WhileExecuting_LeavesExecutionUnlocked()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            host.Handle(new LocalReadyEvent());
+            host.Handle(new CommitOutcomeEvent(3, true));
+            bridge.InCombat = false;
+
+            var effects = host.Handle(new CombatExitedEvent());
+            Assert.False(Single<SetExecutionLockEffect>(effects).Locked);
+            Assert.Equal(HostSessionState.Lobby, host.State);
+        }
+
+        // --- joining mid-execution ---
+
+        [Fact]
+        public void Hello_WhileExecuting_TellsTheNewPeerExecutionIsAlreadyUnderway()
+        {
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, null));
+            host.Handle(new LocalReadyEvent());
+            host.Handle(new CommitOutcomeEvent(3, true));
+
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            var effects = host.HandleMessage(2, GoodHello("ally2"));
+
+            var sent = All<SendEffect>(effects).Where(s => s.PeerId == 2).Select(s => s.Message).ToList();
+            Assert.Contains(sent, m => m is WelcomeMessage);
+            Assert.Contains(sent, m => m is TurnCommitMessage);
+        }
+
+        [Fact]
+        public void Hello_WhilePlanning_SendsNoTurnCommit()
+        {
+            var host = Host();
+            host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            var effects = host.HandleMessage(1, GoodHello());
+
+            Assert.DoesNotContain(All<SendEffect>(effects).Select(s => s.Message), m => m is TurnCommitMessage);
         }
 
         // --- transport failure and teardown ---

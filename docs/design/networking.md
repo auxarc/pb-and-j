@@ -3,7 +3,7 @@
 Our design, not reverse-engineering — `docs/notes/` holds the game research this builds on.
 Game facts cited here are verified against decompiled `Assembly-CSharp.dll` for 2.2.2-b8339.
 
-Status: written for M4. Sections marked **(M5+)** describe the intended path, not what ships now.
+Status: current as of M5e. Sections marked **(M6+)** describe the intended path, not what ships now.
 
 ## Topology
 
@@ -45,8 +45,8 @@ Handshake:
 `Ready { turn }` at all.
 
 Peer ids: host is always `0`; clients get monotonically increasing ids from `1`, **never reused
-within a session**. Consequence: reconnect-after-drop is not supported in M4 — a rejoining player
-is a new peer with no units until assignment re-binding exists **(M5+)**.
+within a session**. That invariant still holds after M5e — see [Reconnect](#reconnect-m5e), which
+works around it rather than amending it.
 
 Mid-combat join is not supported in M4–M6. Late join would ride the combat-save transfer path
 (`docs/notes/save-and-replay.md` establishes that a planning-phase save is near-lossless).
@@ -60,6 +60,26 @@ exit. Assignment travels in exactly one message type so there is one way to expr
 
 - `TurnBarrier` resets on `CombatStart`.
 - `CombatEnd` unlocks every peer — including any sitting Ready when the host's combat resolves.
+
+**The edge is observed *after* the mailbox drain, not before** (M5a). When the last turn's
+execution is what ended the combat, the queued `LocalTurnComplete` and the already-cleared
+`InCombat` flag arrive in the same pump. Observing the edge first moves the host to `Lobby`, and
+the drained `LocalTurnComplete` is then swallowed by its "only while executing" guard — taking the
+final turn's `TurnComplete`, and from M5d its snapshot, with it. Draining first delivers the
+results and takes the exit edge on the next pump. `PbjRuntime` seeds `lastInCombat` from the bridge
+in its constructor, so a session started mid-combat reports no spurious entry.
+
+A client acts on `CombatStart`/`CombatEnd` from the host, never on its own edge — its local combat
+state carries no authority. It still has arms for its own edges so the event cannot throw.
+
+Remaining gap: a client joining a host that is **already** in combat still derives Planning/Lobby
+from its own `bridge.InCombat` in `HandleWelcome`. `CombatStart` fixes the edge case, not the
+join-time case.
+
+`Unready` withdraws a submitted batch so a peer can re-plan. It is idempotent, is ignored while the
+host is executing or when it names a turn other than the current one, and has no UI hook — the game
+has no un-ready button to intercept, because single-player has nothing to wait for. The console
+command `pbj.unready` and the harness's `unready` are the PoC affordances.
 
 ## The turn barrier
 
@@ -164,8 +184,33 @@ itself. Type bytes are assigned once and never reused.
 | 9 | `Bye` | both | reason |
 | 10 | `Assignments` | down | per-peer unit lists |
 
-**Deferred to M5 (type bytes 11+ reserved):** `Unready`, `OrderResult`, `CombatStart`,
-`CombatEnd`, `Ping`, `Pong`.
+**Added in M5a (types 11–14):**
+
+| # | Message | Direction | Payload |
+|---|---|---|---|
+| 11 | `Unready` | up | turn |
+| 12 | `OrderResult` | down | turn, accepted, rejected[] |
+| 13 | `CombatStart` | down | turn |
+| 14 | `CombatEnd` | down | *(none — the type byte is the whole message)* |
+
+**Added in M5c (types 15–16):** `Ping` (down, nonce) and `Pong` (up, nonce). A nonce rather than a
+timestamp, because Core never reads a clock and putting one process's time on the wire would imply
+a clock synchronisation the protocol does not have; it costs nothing now and makes a
+round-trip-time measurement possible later with no wire change.
+
+**Added in M5d (type 17):** `Snapshot` (down: turn, digest, units[]).
+
+**Added in M5e (type 18):** `Rejoin` (up: magic, protocolVersion, modVersion, playerName,
+sessionId, claimedPeerId, resumeToken). `Welcome` also gained `ResumeToken` — a layout change, and
+the reason `PbjProtocol.Version` is now **2**.
+
+**Unallocated:** type bytes 19+.
+
+Adding message types does not bump `PbjProtocol.Version`, which pins *layout*. It is not a
+compatibility guarantee either way: a v1 host that receives a `Pong` hits `HandleMessage`'s
+`default:` arm and disconnects the peer. Both binaries are built from one tree by `make deploy`
+and gated by `peer-selftest`, so mixed versions do not arise; if the mod and the harness are ever
+distributed separately, bump on every wire change instead.
 
 `Assignments` was originally deferred and then pulled forward during 4e: without it a client is
 never told which units it may plan, which makes it unusable as anything but a harness driven from
@@ -181,6 +226,22 @@ Orders have no stable ID — that is the whole reason for batch-at-ready. `Order
 replies to one specific `Ready` with an accepted count plus `rejected: [(index, reason)]`, indexing
 into the submitted batch. Echoing `(ownerName, blueprint)` instead would be self-describing in logs
 but ambiguous the moment a unit has two orders of the same type in one turn.
+
+The index makes the round trip on the existing effect/event pair rather than in session state:
+`ApplyOrderEffect` carries a `BatchIndex` out, and `OrderAppliedEvent` carries the verdict back.
+**The ordering guarantee is not the effect queue's FIFO order — it is that `PbjRuntime.Execute`
+calls `session.Handle` synchronously before returning.** Every order's fate has therefore folded
+into the accumulator before the `CommitTurnEffect` queued behind it is dequeued. A refactor that
+posted `OrderAppliedEvent` to the mailbox instead would break this silently, so a test pins it.
+
+Ownership rejection reuses the same reason enum as the game's, as `OrderApplyResult.NotOwned`. No
+bridge ever returns it — the host produces it before the order is handed to the game — but keeping
+one reason set means one wire encoding and one `default:`-arm risk.
+
+**`OrderResult` is sent only after a commit succeeds.** A refused commit re-opens planning, so
+those orders have no outcome yet; reporting an accepted count for a turn that never ran would be a
+lie. The accumulator is discarded on a refused commit and when a peer leaves, so a stale rejection
+can never attach itself to the next commit or to a departed peer.
 
 ### Messages do not validate; sessions do
 
@@ -203,8 +264,57 @@ execution diverges visibly within a single turn.
 | Milestone | Client sees |
 |---|---|
 | M4 | Nothing — no state stream. `TurnCommit`/`TurnComplete` only; the client is a harness. |
-| M5 | **Snapshot correction** (the guaranteed floor): a "resolving…" overlay during the execution window, then a compact authoritative state (positions, rotations, integrity, statuses, dead units) hard-set on arrival. |
+| M5 | **Snapshot correction** (the guaranteed floor): compact authoritative state hard-set on arrival — shipped in M5d, see below. |
 | M6 | **Keyframe streaming** (the target): the host serializes the pure-data subset of `CombatReplayHelper`'s per-unit transform/state/pose keyframes and the client applies them with the same scrubber the replay UI uses. |
+
+### Snapshot correction (M5d)
+
+`SnapshotMessage` carries the executed turn, the host's digest, and a `UnitSnapshot` per unit:
+name, position, rotation, facing, integrity, dead flag, death time. Broadcast immediately *after*
+`TurnComplete`, never before — see that message's remarks.
+
+**Why hard-setting works on a client and would not on a host.** A client never sets
+`combat.Simulating`, so `ActionPlaybackSystem` is not driving transforms and a direct component
+write is not overwritten on the next tick. The same call on a simulating host would be a losing
+battle. That asymmetry is the entire reason snapshot correction is viable as the client-side floor.
+
+**The client verifies its own correction, in pure Core.** `ApplySnapshotEffect` hard-sets, the
+runtime recomputes the local digest, and a `SnapshotAppliedEvent` carries expected-vs-actual back
+into the session — the same effect/outcome shape `CommitTurnEffect` already uses. The comparison
+therefore lives inside the coverage gate rather than in the glue.
+
+**Capture and digest are one walk, not two.** `ComputeStateDigest` is a projection of
+`CaptureSnapshot` via `UnitSnapshot.ToUnitState`. If they were independent walks they could
+disagree about which units exist, and a client would fail its post-correction check for reasons
+having nothing to do with correction. Capture covers every unit with a resolvable name — hostiles
+included, not just `AssignableUnitNames`.
+
+**Wire floats are raw, not quantised.** Quantisation is a *digest* rule: the digest compares values
+across two runtimes and so must never touch float formatting. There is no formatting on the wire —
+`PbjWriter.WriteSingle` reinterprets the bits and emits them with explicit little-endian shifts, so
+the bytes are identical under Mono-on-Wine and .NET, NaN payloads included.
+
+**Size.** ~85 bytes a unit; the 128-unit cap lands near 11 KB, about 1% of `MaxFrameLength`. Over
+the cap, capture clamps and logs loudly rather than letting the encoder build a frame the far side
+would reject — a silently truncated snapshot reads as a correct one.
+
+**Stale client orders are cleared first.** A client plans real `ActionEntity`s that never execute,
+so left alone they accumulate and `CaptureLocalOrders` starts re-submitting orders the host already
+ran. `ClearLocalOrdersEffect` runs immediately before the hard-set. The disposal cascade does not
+bite, because applying a snapshot writes components, not actions.
+
+**The "resolving…" overlay was cut.** It would have been invisible: the raise and the lower both
+happen inside one `PbjRuntime.Run` loop — one pump, one frame, nothing rendered between — and the
+window it was meant to cover is already covered by the execution lock set at `TurnCommit`. A
+visible overlay is a Mod-side presentation change, not a Core effect.
+
+**Two things a snapshot cannot fix**, both worth knowing before reading a `STILL DIVERGED` line as
+a bug:
+
+- Entities are never created from a snapshot. If the two sides disagree about which units exist,
+  no amount of position-setting helps; the mismatch is reported and skipped.
+- A client's own `combat.currentTurn` never advances, because it never commits. Harmless for a
+  harness client; it is one of the reasons a second real game instance is hard.
 
 ### Divergence detection (ships in M4)
 
@@ -313,6 +423,65 @@ Consequences:
 (Incidental: that loop has a `return` where it means `continue` when the owner lookup fails, so one
 dead unit in a disposal batch aborts processing of the rest. Not ours to fix, but worth knowing.)
 
+## Reconnect (M5e)
+
+**The player is continuous. The peer id is not.** The barrier, assignments, submissions and
+keepalive clocks are all keyed on peer id, so rebinding one entry is far cheaper than making the id
+space reusable — and it keeps the invariant that a peer id always addresses exactly one socket.
+
+### Grace-deferred reassignment
+
+Through M5d, `HandleDisconnect` called `Reassign` unconditionally, which re-plans from scratch over
+the remaining peers. That is right for a genuine departure and fatal for a reconnect: by the time
+the player returns, the units it held have already been dealt to someone else and there is nothing
+left to rebind. So:
+
+- **On disconnect inside the grace window, the host does not reassign.** It records a departure and
+  leaves `assignments` alone. Those units stay bound to a peer id no live connection holds, so
+  `IsOwnedBy` refuses everyone — reserved, visible, uncommandable.
+- Registry, barrier and submissions are still cleared immediately. Holding units must never mean
+  holding the turn; a dead peer cannot wedge the barrier.
+- **On rejoin, `UnitAssignments.WithPeerRebound` moves that one peer's share to the new id** and
+  leaves everybody else exactly as they were. `UnitAssignmentPlanner.Plan` remains the path for
+  genuine joins and leaves.
+- **On grace expiry, the hold is dropped *and* a reassignment runs.** This is not bookkeeping — it
+  is the only path that puts a permanently-gone player's units back into play.
+
+A hold is only taken when the session has ticked at least once (there is otherwise no clock to
+expire it with) and the peer actually held units.
+
+### The resume token
+
+`Welcome` carries a `ResumeToken`; `Rejoin` presents it along with the session id and the peer id
+it claims. Both must match, so possessing a token is not on its own enough to claim a departure.
+
+**The token is derived from a per-session secret that the host mints and never sends.** The obvious
+cheaper scheme — hash the session id, peer id and player name — is worthless, because every one of
+those reaches every client in `Welcome`, the roster and `PeerJoined`. Any peer could compute a
+departed player's token and steal its units, which is exactly the attack that rules out plain
+name-based reconnect. Deriving from a secret keeps `HostSession` a deterministic pure machine
+(tests pass a fixed secret) without adding a randomness seam to `Seams.cs`.
+
+This is a PoC-grade credential, not a cryptographic one: FNV-1a, 32 bits, on a listener that binds
+`127.0.0.1` by default. It binds a returning player to its own units; it is not a defence against
+someone who can already reach the socket and is willing to brute-force.
+
+**A held player's name is reserved — against `Hello`, not against `Rejoin`.** Otherwise a stranger
+takes the name during the grace window and the real owner's rejoin is refused as a duplicate
+through no fault of its own. The check lives in `HandleHello` alone; by the time a rejoin is
+handled the departed peer has already left the registry, so the name is free at that level and the
+token is what authorises the claim. Both halves are verified: the harness self-test pins the
+impostor refusal, and the in-game run below pins the legitimate return.
+
+A returning peer that arrives mid-execution is sent the current `TurnCommit`, so it goes to
+`Watching` rather than letting its player plan a turn already running. Its submitted orders are
+never restored — they either committed already or belong to a turn that must be re-planned.
+
+Client side: a disconnect faults a `ClientSession` terminally, so returning means a fresh transport
+and a fresh session carrying the old one's token. The glue therefore keeps the token, session id
+and peer id *outside* the session, surviving `Shutdown` — a credential that dies with the session
+that issued it is no use. `pbj.rejoin` in the game, `--token/--session/--peer-id` on the harness.
+
 ## Failure and disconnect
 
 | Event | Host | Client |
@@ -327,13 +496,39 @@ dead unit in a disposal batch aborts processing of the rest. Not ours to fix, bu
 
 A lost host must never leave the local execute button permanently disabled.
 
-Keepalive: the host pings each peer periodically; each side tracks last-inbound-traffic time.
-**Time is passed into Core as an explicit `double nowSeconds` argument on every `Pump` call — Core
-never reads a clock.** The Mod passes `Time.realtimeSinceStartupAsDouble`; the harness passes a
-`Stopwatch`. This is what keeps timeout logic a pure, non-flaky unit test.
+### Keepalive (M5c)
 
-Keepalive is deferred if M4 runs long: TCP FIN/RST already covers graceful close and process kill,
-which is everything the smoke checklist exercises. It only matters for cable-pull and NAT idle.
+The host pings each quiet peer; each side tracks last-inbound-traffic time. **Time is passed into
+Core as an explicit `double nowSeconds` argument on every `Pump` call — Core never reads a clock.**
+The Mod passes `Time.realtimeSinceStartupAsDouble`; the harness passes a `Stopwatch` plus a skew it
+can advance at will, which is what lets it exercise a 20-second timeout in milliseconds.
+
+Time reaches a session as a synthesized `TickEvent`, not as an `IPbjSession.Tick(double)` method —
+see that event's remarks for why. `PbjRuntime` throttles it to `TickIntervalSeconds` so the timeout
+machinery does not allocate an effect list 60 times a second to learn that nothing has expired.
+
+Because a tick is the only place a clock enters a session, `HandleMessage` has no `now` of its own:
+it stamps with the time carried by the last tick, at most a quarter second stale against a
+twenty-second timeout.
+
+**The timeouts are deliberately asymmetric — peer 20s, host 30s.** The host is the side that
+hitches (scenario loads, shader compilation under Proton), and a client `Fault` is terminal with no
+automatic recovery, so symmetric timeouts would let one long host hitch permanently kill every
+client. Only the host pings; the client's `Pong` keeps the host's timer alive and the host's `Ping`
+keeps the client's.
+
+**Both sides seed on their first tick rather than judging.** In-game the clock is process uptime,
+so it can be in the thousands at session start; anything defaulting to zero would read as "silent
+since time zero" and reap every peer on the very first tick.
+
+**Keepalive is also the fix for the missing `ReceiveTimeout`.** Neither transport sets one, and it
+would be wrong to — a blocking `Read` with a timeout throws on a healthy idle connection. A
+cable-pull is now caught by the Core timeout, which issues a `DisconnectEffect`, which closes the
+socket, which makes the blocked `Read` throw.
+
+Known gap: only *registered* peers are timed out. A socket that connects and never sends `Hello` is
+never reaped. It holds an accept slot but not a peer slot, and the listener binds `127.0.0.1` by
+default, so this is noted rather than solved.
 
 ## Threading
 
@@ -460,13 +655,54 @@ This section exists because the README commits to it under Brace Yourself Games'
 
 | Limitation | Milestone to fix |
 |---|---|
-| Sends are synchronous from the main thread. Accepted for M4 (every message < 4 KB, bounded by `SendTimeout`). **An outbound queue + writer thread is a hard prerequisite before state snapshots — potentially megabytes — go over the wire.** | M5, blocking |
-| No client state stream; the client cannot watch execution | M5 (snapshot), M6 (keyframes) |
-| No reconnect-after-drop; peer ids are never reused | M5 |
+| ~~Sends are synchronous from the main thread~~ | **fixed in M5b** — see [The outbound queue](#the-outbound-queue) |
+| ~~No client state stream~~ | **snapshot correction shipped in M5d**; keyframes still M6 |
+| A client's own `combat.currentTurn` never advances | unscheduled |
+| ~~No reconnect-after-drop~~ | **fixed in M5e** — see [Reconnect](#reconnect-m5e) |
+| Resume tokens are FNV-1a/32-bit, not a cryptographic credential | unscheduled |
 | No mid-combat join | M6+ |
+| A client joining a host already in combat derives its own combat state | unscheduled |
 | Host player can edit peers' applied orders during host planning | unscheduled |
 | Assignments not pruned when a unit dies | unscheduled |
-| No keepalive; relies on TCP FIN/RST | M5 |
+| ~~No keepalive; relies on TCP FIN/RST~~ | **fixed in M5c** |
+| A socket that connects and never sends `Hello` is never timed out | unscheduled |
+
+## The outbound queue
+
+Each connection owns a `PeerWriter`: a bounded queue plus one thread that drains it into the
+socket. `IPbjTransport.Send` enqueues and returns; it never writes.
+
+**The reason is not snapshot size.** M4 recorded the writer thread as a hard prerequisite for
+snapshots on the assumption they would be megabytes. They are not — a `UnitSnapshot` is ~85 bytes,
+so a 128-unit cap is ~11 KB and a realistic combat is ~2.6 KB, well under `MaxFrameLength`'s 1 MiB.
+The real problem was always the M4 path itself: `Send` wrote synchronously from the pump with a 1s
+`SendTimeout`, and `BroadcastEffect` loops peers, so three unresponsive peers meant a three-second
+frame. It also made keepalive self-defeating — the main thread would sit blocked writing to the
+very peer the timeout was trying to reap.
+
+**Per-peer, never shared.** A shared queue reintroduces head-of-line blocking across peers, the
+exact failure being removed. The host already runs one receive thread per connection.
+
+**Backpressure is: disconnect. Never drop, never block.** Dropping a frame is not available — the
+protocol is a stateful stream with no resend and no sequence numbers, so a silently dropped
+`TurnCommit` strands that client forever with nothing on either side able to notice. Blocking the
+enqueue puts the main-thread stall straight back. So a peer that exceeds 4 MiB or 1024 queued
+frames is dropped; one that cannot absorb 4 MiB of a 3 KB/turn protocol is gone regardless.
+Crossing 256 KiB posts a single latched warning so a slow link is visible before it is fatal.
+
+**Closes go through the same queue as frames.** `HostSession.Reject` emits the `Reject` and then a
+disconnect; closing the socket out of band would turn every rejection into a bare RST, and a peer
+sending a bad protocol version would never learn why. A null frame is the close sentinel, so Core's
+effect ordering is preserved with no change to Core.
+
+Writer threads report through the existing `TransportLogEvent` channel — added in M4 and, until
+now, never posted by anything. A background thread must not touch the log sink, but composing a
+`NetLog` string touches nothing but the string.
+
+Consequence worth knowing: a peer can now produce **two** `PeerDisconnectedEvent`s, one from the
+writer and one from the receive loop. Both sessions already tolerate it — `HandleDisconnect`
+early-returns for a peer no longer registered, and the client's is terminal-state guarded — and a
+test pins that, because it is exactly the invariant a later edit would break silently.
 
 ## Verified environment facts
 
@@ -487,6 +723,18 @@ This section exists because the README commits to it under Brace Yourself Games'
   succeeded. A peer claiming protocol v999 got `VersionMismatch (peer v999, host v1)`.
 - With no session started, a whole launch produces zero networking lines and M3 behaviour is
   unchanged, so the opt-in guarantee holds in practice.
+- **Snapshot correction works against the real game (M5d, 2026-08-02).** An 18-unit `move_run`
+  for `pb_mech_02` was authored in `pbj-peer`, accepted by the host, executed, and the resulting
+  state broadcast — after which the harness's *independently recomputed* digest matched the
+  host's. That single comparison is what proves the whole chain: ECS capture, the binary codec,
+  the socket, the hard-set, and — because the digest is built from integer quantisations on both
+  sides while the wire carries raw IEEE-754 bits — that neither the Mono-under-Wine host nor the
+  .NET harness disagrees about a float.
+- **Reconnect works against the real game (M5e, 2026-08-02).** A dropped peer returned inside the
+  grace window under the same player name, was issued a fresh peer id (`rejoined as #4 (was #3)`),
+  and `pb_mech_02` came back with it. Confirms both that the id space stays append-only while the
+  *player* is continuous, and that the name reservation refuses an impostor's `Hello` without
+  standing in the way of the owner's `Rejoin`.
 - A plain C# `lock` block does **not** strand the 100% branch gate. It lowers to
   `Monitor.Enter(o, ref lockTaken)` plus `if (lockTaken)` in the finally, but coverlet 6.0.2
   accounts for that generated branch — measured 2026-08-02 on `PbjMailbox.Post`: 4 branches, 0

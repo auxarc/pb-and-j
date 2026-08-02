@@ -169,6 +169,46 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(new[] { 0, 1, 2 }, assignments.PeerIds.ToArray());
         }
 
+        // --- rebinding for a reconnect ---
+
+        [Fact]
+        public void WithPeerRebound_MovesOnlyThatPeersUnits()
+        {
+            var original = UnitAssignmentPlanner.Plan(new[] { 0, 1 }, new[] { "a", "b", "c" });
+            var hostUnits = original.UnitsFor(0);
+            var peerUnits = original.UnitsFor(1);
+
+            var rebound = original.WithPeerRebound(1, 5);
+
+            Assert.Equal(peerUnits, rebound.UnitsFor(5));
+            Assert.Equal(hostUnits, rebound.UnitsFor(0));
+            Assert.Empty(rebound.UnitsFor(1));
+            Assert.Equal(new[] { 0, 5 }, rebound.PeerIds.ToArray());
+        }
+
+        [Fact]
+        public void WithPeerRebound_MovesOwnershipWithTheUnits()
+        {
+            var rebound = UnitAssignmentPlanner.Plan(new[] { 0, 1 }, new[] { "a", "b" }).WithPeerRebound(1, 5);
+            Assert.True(rebound.IsOwnedBy(5, "b"));
+            Assert.False(rebound.IsOwnedBy(1, "b"));
+        }
+
+        [Fact]
+        public void WithPeerRebound_ForAPeerThatOwnsNothing_ChangesNothing()
+        {
+            var original = UnitAssignmentPlanner.Plan(new[] { 0 }, new[] { "a" });
+            Assert.Same(original, original.WithPeerRebound(9, 10));
+        }
+
+        [Fact]
+        public void WithPeerRebound_DoesNotMutateTheOriginal()
+        {
+            var original = UnitAssignmentPlanner.Plan(new[] { 0, 1 }, new[] { "a", "b" });
+            original.WithPeerRebound(1, 5);
+            Assert.NotEmpty(original.UnitsFor(1));
+        }
+
         [Fact]
         public void Empty_HasNoPeersAndOwnsNothing()
         {

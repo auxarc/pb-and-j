@@ -82,6 +82,53 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void OrderApplied_RetainsFields()
+        {
+            var e = new OrderAppliedEvent(2, 5, OrderApplyResult.NotOwned);
+            Assert.Equal(PbjInboundEventKind.OrderApplied, e.Kind);
+            Assert.Equal(2, e.PeerId);
+            Assert.Equal(5, e.BatchIndex);
+            Assert.Equal(OrderApplyResult.NotOwned, e.Result);
+        }
+
+        [Fact]
+        public void SnapshotApplied_RetainsFields()
+        {
+            var e = new SnapshotAppliedEvent(4, 12, "host", "local");
+            Assert.Equal(PbjInboundEventKind.SnapshotApplied, e.Kind);
+            Assert.Equal(4, e.Turn);
+            Assert.Equal(12, e.UnitCount);
+            Assert.Equal("host", e.ExpectedDigest);
+            Assert.Equal("local", e.ActualDigest);
+        }
+
+        [Fact]
+        public void LocalUnready_HasItsKind()
+        {
+            Assert.Equal(PbjInboundEventKind.LocalUnready, new LocalUnreadyEvent().Kind);
+        }
+
+        [Fact]
+        public void CombatEntered_HasItsKind()
+        {
+            Assert.Equal(PbjInboundEventKind.CombatEntered, new CombatEnteredEvent().Kind);
+        }
+
+        [Fact]
+        public void CombatExited_HasItsKind()
+        {
+            Assert.Equal(PbjInboundEventKind.CombatExited, new CombatExitedEvent().Kind);
+        }
+
+        [Fact]
+        public void Tick_RetainsItsTime()
+        {
+            var e = new TickEvent(1234.5);
+            Assert.Equal(PbjInboundEventKind.Tick, e.Kind);
+            Assert.Equal(1234.5, e.NowSeconds);
+        }
+
+        [Fact]
         public void LocalReady_HasItsKind()
         {
             Assert.Equal(PbjInboundEventKind.LocalReady, new LocalReadyEvent().Kind);
@@ -100,7 +147,7 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void LocalTurnComplete_RetainsFields()
         {
-            var e = new LocalTurnCompleteEvent("3f9c1a04");
+            var e = new LocalTurnCompleteEvent("3f9c1a04", null);
             Assert.Equal(PbjInboundEventKind.LocalTurnComplete, e.Kind);
             Assert.Equal("3f9c1a04", e.Digest);
         }
@@ -108,7 +155,7 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void LocalTurnComplete_WithNullDigest_IsAccepted()
         {
-            Assert.Null(new LocalTurnCompleteEvent(null).Digest);
+            Assert.Null(new LocalTurnCompleteEvent(null, null).Digest);
         }
     }
 }

@@ -24,6 +24,17 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Start time falls outside the current turn's placement window.</summary>
         OutOfWindow = 4,
+
+        /// <summary>
+        /// The submitting peer does not own that unit.
+        /// </summary>
+        /// <remarks>
+        /// No bridge ever returns this — the host session produces it, before
+        /// the order is ever handed to the game. It lives in this enum so that
+        /// one reason set covers every way an order can fail, on the wire and
+        /// in the logs alike.
+        /// </remarks>
+        NotOwned = 5,
     }
 
     /// <summary>
@@ -119,5 +130,31 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Order-independent fingerprint of post-turn unit state.</summary>
         string ComputeStateDigest();
+
+        /// <summary>
+        /// Every unit's authoritative state after execution. Host only.
+        /// </summary>
+        /// <remarks>
+        /// Must cover exactly the units <see cref="ComputeStateDigest"/> covers —
+        /// all combat units with a resolvable name, hostile ones included, not
+        /// just <see cref="AssignableUnitNames"/>. Narrowing it would both drop
+        /// enemies out of correction and silently change what the digest means.
+        /// </remarks>
+        IReadOnlyList<UnitSnapshot> CaptureSnapshot();
+
+        /// <summary>
+        /// Hard-sets local units to the host's state. Client only.
+        /// </summary>
+        /// <remarks>
+        /// Safe precisely because a client never sets <c>combat.Simulating</c>,
+        /// so no playback system is driving transforms to overwrite the write on
+        /// the next tick. The same call on a simulating host would be a losing
+        /// battle, which is why snapshot correction is viable as the client-side
+        /// floor and useless as a host-side one.
+        /// </remarks>
+        void ApplySnapshot(IReadOnlyList<UnitSnapshot> units);
+
+        /// <summary>Disposes the local player's planned orders. Client only.</summary>
+        void ClearLocalOrders();
     }
 }
