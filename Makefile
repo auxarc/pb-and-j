@@ -10,7 +10,24 @@ MODS_DIR    := $(HOME)/.local/share/Steam/steamapps/compatdata/553540/pfx/drive_
 PINNED_SHA  := $(shell grep -o '`[a-f0-9]\{64\}`' GAME_BUILD.md | tr -d '`')
 PLAYER_LOG  := $(HOME)/.local/share/Steam/steamapps/compatdata/553540/pfx/drive_c/users/steamuser/AppData/LocalLow/Brace Yourself Games/Phantom Brigade/Player.log
 
-.PHONY: test build dist deploy check-game-hash clean log peer peer-selftest peer-connect peer-listen
+MOD_VER     := $(shell grep '^ver:' mod/metadata.yaml | awk '{print $$2}')
+CORE_VER    := $(shell grep -o 'ModVersion = "[^"]*"' src/PBAndJ.Core/Net/PbjProtocol.cs | sed 's/.*"\(.*\)"/\1/')
+PKG_DIR     := dist/package
+
+.PHONY: test build dist deploy check-game-hash check-mod-version clean log peer peer-selftest peer-connect peer-listen package
+
+# metadata.yaml is the one place PbjProtocol.ModVersion cannot reach, and a
+# disagreement between them is invisible until a peer is refused by a host —
+# on someone else's machine, which is where this first went wrong.
+check-mod-version:
+	@test -n "$(CORE_VER)" || { echo "FATAL: could not read ModVersion from PbjProtocol.cs"; exit 1; }
+	@if [ "$(MOD_VER)" != "$(CORE_VER)" ]; then \
+		echo "FATAL: mod version mismatch — peers would refuse each other."; \
+		echo "  mod/metadata.yaml ver:       $(MOD_VER)"; \
+		echo "  PbjProtocol.ModVersion:      $(CORE_VER)"; \
+		exit 1; \
+	fi
+	@echo "mod version OK ($(MOD_VER))"
 
 test:
 	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet test tests/PBAndJ.Core.Tests \
@@ -20,7 +37,7 @@ test:
 build: test
 	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet build src/PBAndJ.Mod -c Release'
 
-dist: build
+dist: build check-mod-version
 	rm -rf dist/$(MOD_ID)
 	mkdir -p dist/$(MOD_ID)/Libraries
 	cp mod/metadata.yaml dist/$(MOD_ID)/
@@ -65,6 +82,27 @@ deploy: dist check-game-hash peer-selftest
 	rm -rf "$(MODS_DIR)/$(MOD_ID)"
 	cp -r dist/$(MOD_ID) "$(MODS_DIR)/$(MOD_ID)"
 	@echo "deployed to $(MODS_DIR)/$(MOD_ID)"
+
+# What gets sent to someone on another machine. Gated on the same things deploy
+# is, because a package that fails the gate is worse than no package: the person
+# receiving it cannot tell a protocol bug from their own setup.
+package: dist check-game-hash peer-selftest
+	rm -rf $(PKG_DIR)
+	mkdir -p $(PKG_DIR)
+	cd dist && zip -qr ../$(PKG_DIR)/$(MOD_ID)-mod-v$(MOD_VER).zip $(MOD_ID)
+	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet publish tools/pbj-peer \
+		-c Release -r win-x64 --self-contained -p:PublishSingleFile=true \
+		-o $(PKG_DIR)/peer-win-x64'
+	rm -f $(PKG_DIR)/peer-win-x64/*.pdb
+	cd $(PKG_DIR)/peer-win-x64 && zip -qr ../pbj-peer-win-x64-v$(MOD_VER).zip .
+	rm -rf $(PKG_DIR)/peer-win-x64
+	cp mod/FRIEND-README.md $(PKG_DIR)/README.md
+	@echo "--- package ready in $(PKG_DIR) ---"
+	@ls -lh $(PKG_DIR)
+	@echo
+	@echo "Game build the friend must match:"
+	@grep 'buildinfo.yaml' GAME_BUILD.md
+	@echo "Send the two zips + README.md. Passphrase and address go separately."
 
 log:
 	tail -n 100 -f "$(PLAYER_LOG)"

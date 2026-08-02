@@ -158,6 +158,65 @@ namespace PBAndJ.Peer
             staged.Clear();
         }
 
+        /// <summary>
+        /// What CaptureKeyframes hands back. Settable so the self-test can stand
+        /// in for a real recorder.
+        /// </summary>
+        /// <remarks>
+        /// The harness has no replay recorder and, as a client, would never
+        /// capture anyway — but the host half of the self-test drives this same
+        /// bridge, so it needs somewhere for a scripted turn's motion to come
+        /// from.
+        /// </remarks>
+        public KeyframeCapture Keyframes { get; set; } = KeyframeCapture.None;
+
+        /// <summary>The last playback started, for the self-test's assertions.</summary>
+        public KeyframeCapture? Played { get; private set; }
+
+        public int PlayedTurn { get; private set; } = -1;
+
+        public int StopKeyframesCalls { get; private set; }
+
+        public KeyframeCapture CaptureKeyframes() => Keyframes;
+
+        /// <summary>
+        /// Records the playback and settles the model at its end state.
+        /// </summary>
+        /// <remarks>
+        /// A real client animates over the window; the harness has no frames to
+        /// animate across, so it jumps to where the track ends. That end state is
+        /// exactly what the self-test checks against the snapshot.
+        /// </remarks>
+        public void PlayKeyframes(int turn, KeyframeCapture capture)
+        {
+            Played = capture;
+            PlayedTurn = turn;
+
+            foreach (var track in capture.Tracks)
+            {
+                if (string.IsNullOrEmpty(track.Name)
+                    || !KeyframePlayback.TrySample(track, capture.WindowEnd, out var position, out var rotation))
+                {
+                    continue;
+                }
+                foreach (var unit in units)
+                {
+                    if (unit.Name == track.Name)
+                    {
+                        unit.Position = position;
+                        unit.Rotation = rotation;
+                    }
+                }
+            }
+        }
+
+        public void StopKeyframes()
+        {
+            StopKeyframesCalls++;
+            Played = null;
+            PlayedTurn = -1;
+        }
+
         private UnitState[] ToUnitStates()
         {
             var states = new UnitState[units.Count];

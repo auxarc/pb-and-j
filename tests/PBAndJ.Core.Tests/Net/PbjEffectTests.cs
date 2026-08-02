@@ -110,6 +110,32 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void PlayKeyframes_RetainsTheTurnAndTheCapture()
+        {
+            var capture = new KeyframeCapture(15f, 20f, new[] { new UnitTrack("u", null) });
+            var effect = new PlayKeyframesEffect(4, capture);
+
+            Assert.Equal(PbjEffectKind.PlayKeyframes, effect.Kind);
+            Assert.Equal(4, effect.Turn);
+            Assert.Same(capture, effect.Capture);
+        }
+
+        // No null-capture convenience: an absent capture means "send nothing",
+        // decided at the host, so one arriving here is a caller bug.
+        [Fact]
+        public void PlayKeyframes_WithNullCapture_Throws()
+        {
+            var ex = Assert.Throws<ArgumentNullException>(() => new PlayKeyframesEffect(1, null!));
+            Assert.Equal("capture", ex.ParamName);
+        }
+
+        [Fact]
+        public void StopKeyframes_HasItsKind()
+        {
+            Assert.Equal(PbjEffectKind.StopKeyframes, new StopKeyframesEffect().Kind);
+        }
+
+        [Fact]
         public void CommitTurn_RetainsTurn()
         {
             var effect = new CommitTurnEffect(7);

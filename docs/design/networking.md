@@ -265,7 +265,7 @@ execution diverges visibly within a single turn.
 |---|---|
 | M4 | Nothing — no state stream. `TurnCommit`/`TurnComplete` only; the client is a harness. |
 | M5 | **Snapshot correction** (the guaranteed floor): compact authoritative state hard-set on arrival — shipped in M5d, see below. |
-| M6 | **Keyframe streaming** (the target): the host serializes the pure-data subset of `CombatReplayHelper`'s per-unit transform/state/pose keyframes and the client applies them with the same scrubber the replay UI uses. |
+| M6 | **Keyframe streaming** (the target): the host serializes `CombatReplayHelper`'s per-unit transform track for the executed turn and the client animates its view along it — shipped in M6, see below. Presentation only; the snapshot remains the correction. |
 
 ### Snapshot correction (M5d)
 
@@ -308,6 +308,12 @@ happen inside one `PbjRuntime.Run` loop — one pump, one frame, nothing rendere
 window it was meant to cover is already covered by the execution lock set at `TurnCommit`. A
 visible overlay is a Mod-side presentation change, not a Core effect.
 
+**Writing components is enough to render it.** `PositionLinkSystem` and `RotationLinkSystem` are
+reactive on `CombatMatcher.Position` / `.Rotation` and call `CombatView.OnPosition`/`OnRotation`,
+which set the view transform; neither is gated on the simulation running, so a correction arriving
+between turns is visible immediately. M6 briefly assumed otherwise — see finding 4 under "Keyframe
+streaming (M6)" for why `TransformLinkSystem` is a red herring for units.
+
 **Two things a snapshot cannot fix**, both worth knowing before reading a `STILL DIVERGED` line as
 a bug:
 
@@ -328,44 +334,318 @@ is .NET 9 on Linux. Float-to-string formatting differs between those runtimes, s
 string-formatting-shaped digest — which this codebase's "one invariant-culture test per formatter"
 convention naturally invites — would report permanent false divergence.
 
-### Keyframe streaming (M6) — starting points
+### Keyframe streaming (M6)
 
-Reconnaissance only. Verified against decompiled 2.2.2-b8339; no design decisions taken yet.
+The host records everything the replay UI scrubs through, in `CombatReplayHelper.units` — a
+`static Dictionary<int, ReplayUnit>` of parallel keyframe lists. M6 serialises the transform track
+so a client watches the turn rather than being teleported to its outcome.
 
-The host already records everything the replay UI scrubs through, in
-`CombatReplayHelper.units` — a `static Dictionary<int, ReplayUnit>`. Each `ReplayUnit` holds
-parallel keyframe lists, and the interesting ones are plain data:
+**Transforms only.** `ReplayKeyframeUnitState` (heat plus six part integrities) and
+`ReplayKeyframeUnitPose` (two sync bools and a `ReplayKeyframeUnitJoint[]`) are both deliberately
+out. Poses are orders of magnitude heavier and need the puppet machinery the replay UI turns on;
+state keys would double the wire to drive damage *decals* when frame integrity already travels in
+the snapshot. `TransformKey` maps onto the `Vec3`/`Vec4` M5d added, with no new primitives.
 
-| Type | Fields |
+#### The four things the game does that capture has to work around
+
+Each of these was verified against decompiled 2.2.2-b8339, and each one reverses a decision that
+looked obvious beforehand.
+
+**1. Tracks accumulate for the whole combat, not per turn.** `experimentalMode` is `true`
+(`CombatReplayHelper.cs:26`) and `OnExecutionStart` only clears `units` when it is *false* (line
+279). Capture therefore slices to the current turn — **by list index**, walking back from the end
+to the key `OnExecutionStart` wrote, never by comparing times against `turnStartTime`. That value is
+`Mathf.RoundToInt(GetSimulationTime())` (line 240) while `OnExecutionEnd` stamps its key with the
+unrounded time (line 346), so a time comparison can drag the previous turn's final key into this
+turn's window and produce an out-of-order track.
+
+**2. The recorder is already switched off when we run, and its last key is the wrong position.**
+`OnExecutionEnd` clears `recordingAllowed` (line 416), and it runs *earlier in the same frame* than
+our capture hook: `CombatUILinkSimulationEnd` sits in `CombatUISystems` (slot 72 of
+`CombatSystems.cs`), ahead of `CombatExecutionEndLateSystem` (slot 93), both reacting to the same
+`Simulating.Removed()` collector. Two consequences:
+
+- Capture must **not** gate on `CombatReplayHelper.IsRecordingAllowed()`. It is false every turn by
+  the time we look, and gating on it would ship the feature inert while every test still passed.
+- `CombatExecutionEndLateSystem`'s own `OnUnitSnapshot(entity, timeChecked: false)` call
+  (`CombatExecutionEndLateSystem.cs:65`), which happens after `ForceUnitPosition` snaps the unit to
+  its projected path, is a **no-op** for the same reason. So the recorder's final key predates the
+  force-set and does not match what `CaptureSnapshot` reads.
+
+Capture therefore **appends its own final key** at `windowEnd`, read from the same
+`unit.position`/`unit.rotation` the snapshot reads, in the same call. That is what makes *the last
+key of every track equals the snapshot for that unit* true by construction rather than by hope — and
+that equality is the entire reason playback and correction cannot fight each other.
+
+**3. Recording is conditional on prediction.** `OnExecutionStart` is only called when
+`ScenarioUtility.predictionEnabled` (`CombatUILinkSimulationStart.cs:64`). With prediction off there
+are no tracks at all; capture logs `no keyframes recorded this turn` once and the host broadcasts
+nothing. The turn still completes and snapshot correction still lands, so the degraded case is
+exactly M5 behaviour.
+
+**4. Units are driven by `CombatView`, not `TransformLink` — and ECS writes do render.**
+`TransformLinkSystem` looks like the ECS→view path and is gated on `CombatMatcher.SimulationTime`
+(`TransformLinkSystem.cs:29`), which nothing replaces outside the simulating branch of
+`SimulationTimeSystem.cs:112`. That reading led to a wrong prediction — that corrections were
+invisible between turns — and to a `hasTransformLink` filter that silently matched **zero units**,
+which is how it was caught: `pbj.replay-last` reported "no recorded unit is present in this combat"
+despite a perfectly good capture.
+
+`CombatEntity.ReplaceTransformLink` is never called anywhere in the game. No combat unit has that
+component, so `TransformLinkSystem` never sees one. Units are driven by **`PositionLinkSystem` /
+`RotationLinkSystem`** (registered via `CombatViewLinkSystems`, `CombatSystems.cs:63`), which are
+reactive on `CombatMatcher.Position` / `.Rotation` and call `CombatView.OnPosition` /
+`OnRotation` — a plain `transform.position = v`. **Nothing gates them on the simulation running**, so
+`ApplySnapshot`'s component writes have always rendered. M5d was never broken.
+
+The correct handle for a unit's rendered transform is `unit.combatView.view.transform`, which is
+exactly what the game's own `ApplyTimeToUnit` writes (`CombatReplayHelper.cs:1090-1091`).
+
+#### Playback writes the view transform, never the ECS
+
+We reject `CombatReplayHelper`'s *activation machinery* — `SetReplayActive` sleeps puppets and
+disables ragdoll physics, and is gated behind `IsReplayAllowed()`: scenario `replayUsed`, an
+unlocked `feature_combat_replay`, and `Unit_Selection` UI mode (lines 193-203), none of which a
+client can assume. But we adopt its *write target*: `ApplyTimeToUnit` writes
+`view.transform.position/rotation` (lines 1109-1110), and so does `KeyframePlayer`.
+
+Writing the view rather than the ECS is a choice, not a necessity — finding 4 established that ECS
+writes render too. It is the right choice for three reasons:
+
+- It is genuinely presentation. ECS position feeds order authoring, scenario state volumes and the
+  state digest, so animating it sixty times a second would let a player author orders from
+  historical positions and would put a half-played animation into the correction check.
+- It self-heals. The next `ReplacePosition` on a unit — from execution, or from the next snapshot
+  correction — fires `PositionLinkSystem` and snaps its view straight back to ECS truth, so an
+  abandoned playback cannot leave anything permanently displaced.
+- It makes `pbj.replay-last` safe on a host, which is what gives M6 an in-game gate with only one
+  game instance: authoritative state is never touched.
+
+#### Ordering: no deferral machinery
+
+`TurnComplete` → `Snapshot` → `Keyframes`. The snapshot hard-sets and verifies its digest exactly as
+in M5d — that path is untouched — and playback then animates the view from the turn's start towards
+the same final state. Because the last key equals the snapshot, the two agree at the end. Nothing in
+`PbjRuntime` became asynchronous, `ClientSession` gained no new state, and a playback interrupted
+mid-flight is corrected by the next turn's snapshot anyway.
+
+`PlayKeyframesEffect` reports nothing back, unlike `ApplySnapshotEffect`: there is no correctness
+claim to verify. `StopKeyframesEffect` fires on `CombatEnd`, on `Bye` and on `Fault` — the last of
+these matters most, because a faulted session handles nothing further, so a playback left running
+there would never be stopped by anything else.
+
+#### Size
+
+`unitSamplingInterval` is `0.1f`, so a 5-second turn is ~53 keys per unit. At 32 bytes a key
+(time plus `Vec3` plus `Vec4`, raw floats) that is ~1.7 KB per unit, i.e. ~51 KB for a 30-unit
+combat — two orders of magnitude above a snapshot, which is where 5b's outbound queue starts
+genuinely earning its place. `MaxTracksPerKeyframes` is 128 (mirroring `MaxUnitsPerSnapshot`) and
+`MaxKeysPerTrack` is 192, bounding a message near 786 KB, under `MaxFrameLength`; a test pins the
+arithmetic rather than trusting it. Note that a worst-case frame crosses the 256 KiB slow-link
+warning threshold, so that warning can fire on a perfectly healthy link during a large turn.
+
+Over the per-track cap, capture **decimates rather than truncates** — it keeps the first and last
+key and thins between them, so a long turn loses temporal resolution instead of its ending. A track
+truncated at the tail would end playback short of the state everyone was just corrected to.
+
+#### Verification, and what it does not cover
+
+Two gates, neither sufficient alone:
+
+- `make peer-selftest` scenario 5 drives **synthetic** tracks through the real codec and asserts the
+  wire fidelity, that sampling at `windowEnd` reproduces the snapshot exactly, that sampling at
+  `windowStart` does not (so the test cannot pass on a constant track), and that `CombatEnd` stops
+  playback. It pins the protocol and the sampler; it cannot prove capture is right.
+- `pbj.replay-last` in the running game is the real-data half. It round-trips a genuine capture
+  through `PbjMessageCodec.Encode`/`Decode` before playing it, so one command exercises capture,
+  re-key, slicing, codec, sampler and render together. Expect units to slide rather than walk —
+  poses are out of scope, and sliding is exactly what a client sees today.
+
+#### Why playback slides instead of walking, and what it would take
+
+Confirmed by eye on the host via `pbj.replay-last`: units translate along their real paths in an idle
+pose. Expected — M6 moves the root transform and nothing drives the animator. Two routes out, with
+the costs measured rather than guessed:
+
+**Streaming poses does not fit.** `ReplayKeyframeUnitJoint` is a `Vector3` plus a `Quaternion`, 28
+bytes, and `recordedBones` is built from every equipped part's `jointsLookup`
+(`UnitVisualManagerSimple.RefreshRecordedBones`) — dozens per mech. At ~30 bones × 28 B × ~53 keys
+that is ~44 KB *per unit per turn*, so a 30-unit combat lands near 1.3 MB: **over
+`PbjRuntime.MaxFrameLength`**. It would also need the bones not to be fought by the animator, which
+is what `SetReplayActive`'s puppet-sleeping does — the machinery M6 deliberately avoided because it
+is gated behind `IsReplayAllowed()`.
+
+**Driving the animator locally is nearly free.** `MechAnimationSystem.UpdateUnit` is `public static`,
+and the walk blend it feeds — `currentMovementSpeed`, `currentMovementSpeedFlattened`,
+`speedNormalized`, `isMoving` — reads `actor.velocity.v`, an ECS component
+(`MechAnimationSystem.cs:1322-1334`). A client can compute velocity exactly, as the derivative of
+the transform track it is already receiving, and write that one component. Zero extra bytes on the
+wire, and velocity is not part of `UnitState`, so it cannot disturb the digest.
+
+The caveat is that `UpdateUnit` is a ~200-line method that also handles melee, navigation links, IK
+weights and aim angles, reading action entities a client does not have. Whether it can be called
+safely on a client, or whether only the handful of animator parameters should be set directly, needs
+checking before this is promised.
+
+### Replay handoff (M8) — the intended answer to "why does it slide"
+
+**Do not stream poses. Hand the client the host's replay and let the game play it.**
+
+The game already owns a system that turns recorded combat into a visually complete playback — poses,
+particles, beams, projectiles, terrain destruction, audio, the lot. Re-implementing any part of that
+is the wrong trade. M8's shape is: reconstruct the host's `CombatReplayHelper` state on the client,
+call `SetReplayActive(true)`, and let `CombatReplayHelper.Update` drive it.
+
+This also fits what a client already is. It is inherently one turn behind — it never simulates, and
+it is corrected at end of turn — and the host sits in planning waiting for it to ready. There is a
+natural window in which the client can watch the turn it just missed, as if the combat were playing
+out for the first time.
+
+#### The activation gate is satisfiable, which M6 got wrong
+
+M6 rejected the scrubber partly because it is "gated behind `IsReplayAllowed()`". That is true —
+`SetReplayActive` self-gates (`CombatReplayHelper.cs:578`) — but the gate was never examined:
+
+| Condition | On a client, post-turn |
 |---|---|
-| `ReplayKeyframe` (base) | `float time` |
-| `ReplayKeyframeTransform` | `Vector3 position`, `Quaternion rotation` |
-| `ReplayKeyframeUnitState` | `heat` plus six part integrities (core, secondary, L/R optional, L/R equipment) |
-| `ReplayKeyframeUnitPose` | two sync bools, `ReplayKeyframeUnitJoint[] joints` |
+| `activationAllowed` | True — set at `OnExecutionEnd`, which is exactly when playback would start |
+| UI mode is `Unit_Selection` | True — where a client sits after a turn |
+| scenario `coreProc.replayUsed` | Same scenario as the host, when both loaded the same save |
+| `feature_combat_replay` unlocked | Same campaign as the host, when both loaded the same save |
 
-Transform and state map onto the `Vec3`/`Vec4` already added for M5d with no new primitives.
-Poses are much heavier and should be a separate decision, not assumed in.
+The last two hold **because of** the save-file transfer that stage 2 already requires. And all four
+are reachable from a Harmony patch if one ever does not. The gate is not the obstacle; it was
+assumed to be one without being read.
 
-**The tracks are keyed by `combatEntity.id.id` (`CombatReplayHelper.cs:294`) — a process-local ECS
-id.** That does not survive a hop between processes, so capture must re-key to
-`persistent.nameInternal.s`, the same join key snapshot correction uses and for the same reason.
-This is the first thing that would break if it were assumed to be portable.
+#### Joint identity must travel, because bone order is positional and derived
 
-Sampling is `unitSamplingInterval = 0.1f`, so a 5-second turn is ~50 transform keyframes per unit.
-At the M5d wire cost of a transform (28 bytes plus time) that is ~1.5 KB per unit per turn, i.e.
-roughly 45 KB for a 30-unit combat — still well under `MaxFrameLength`, but two orders of magnitude
-above a snapshot, which is where 5b's outbound queue starts genuinely earning its place.
+This is the part most likely to fail silently and horribly. `ApplyTimeToUnit` writes
+`recordedBones[l].localPosition = joints[l].position` — a **positional** correspondence between the
+pose array and a list rebuilt per-unit from its equipment. `RefreshRecordedBones`
+(`UnitVisualManagerSimple.cs:2062`) composes that list from, in order:
 
-Open questions, none of them answered here:
+1. every `visualsWithJoints[].jointsLookup` entry — a `Dictionary<string, Transform>`, so these
+   have **real string keys**;
+2. socket-mapped skinned-mesh bones — which contribute nothing: the guard is
+   `skinnedMeshRenderer.bones.Length == 0` and the loop then runs to `bones.Length`, so the body is
+   unreachable. Appears to be a bug in the game; harmless, but do not rely on it staying that way;
+3. `visualLegGroupComposite.legs[]`, or failing that every `visualLegGroups[].legs[]`, each
+   contributing `jointYawRoot`, `jointPitchRoot`, `jointPitchMid`, and `jointPitchLow` when
+   `tripleMode` — **unnamed, purely positional**.
 
-- Whether the client can drive `CombatReplayHelper`'s existing scrubber directly, or whether the
-  keyframes must be applied by the same hard-set path M5d uses.
-- What happens to a client whose entity set differs — the same structural mismatch that limits
-  snapshot correction applies, and keyframes cannot fix it either.
-- Whether `combat.currentTurn` not advancing on a client (see M5d's consequences) becomes a real
-  problem once playback is time-based rather than a single end-of-turn correction.
+With identical saves the two sides have identical equipment, and the orders would almost certainly
+agree. "Almost certainly" is doing far too much work: group 1 depends on `Dictionary` enumeration
+order, which is an implementation detail rather than a guarantee, and groups 3 and 4 depend on leg
+enumeration and on `tripleMode` matching per leg. A mismatch does not throw — it writes the elbow's
+transform onto the knee, for every frame of playback.
 
-Reserved space is already allocated: `PbjEffectKind` 10+, `PbjMessageType` 19+.
+**So capture a stable identity per bone alongside the pose, and remap on arrival.** The identity is
+available or derivable for every contributing group:
+
+- group 1 → the `jointsLookup` key, prefixed by the owning visual's index to keep it unique across
+  parts, e.g. `v2:joint_shoulder_l`;
+- group 3/4 → a composed structural key, e.g. `leg3:pitchMid`, from the leg's index and its role.
+
+The wire then carries `(key, position, rotation)` per joint. The client builds the same key list
+from its own `recordedBones`, resolves an index map once per unit per turn, and applies by name. A
+key present on one side and not the other is reported and skipped — the same "structural mismatch is
+reported, never papered over" rule `ApplySnapshot` already follows. That turns the worst failure
+mode of this design from silent visual nonsense into a log line.
+
+#### Volume, and why it is the least interesting problem
+
+Poses dominate: ~28 bytes a joint, dozens of joints per mech, ~53 samples a turn — call it 44 KB per
+unit per turn, ~1.5 MB for a 30-unit combat, before the level, projectile and beam tracks. That is
+over `MaxFrameLength`, but that constant is ours and the payload chunks naturally along turn and
+unit boundaries. It arrives during the host's planning phase, which is dead time on the wire, and
+5b's outbound queue and writer thread exist precisely so a payload this size cannot stall a frame.
+
+#### Making it look like execution, not like a replay
+
+The obvious way to do this is the trap. **Do not advance `combat.simulationTime` on a client.**
+
+It looks like the right lever — it is what drives the execution HUD, the timeline, the shader
+globals and the animation clock — but `CombatMatcher.SimulationTime` is the trigger for **~38
+reactive systems**, and only a minority check whether they should be simulating:
+
+| Self-gates on `combat.Simulating` | Does **not** |
+|---|---|
+| `ActionPlaybackSystem`, `ScheduledAttackSystem` | `CombatDamageSystem`, `ProjectileCollisionSystem`, `PhysicsSystem`, `HeatDissipationSystem`, `BarrierRegenerationSystem`, `OverheatingSystem`, `UnitStatusBuildupSystem`, `CombatCrashingSystem`, … |
+
+So replacing `simulationTime` runs most of the combat simulation, `Simulating` flag or not — on a
+client, against a non-deterministic sim, which is the exact divergence the whole architecture exists
+to prevent. The M5d note that "a client never sets `combat.Simulating`" is necessary but it is not
+sufficient: the clock is the real switch, and it is wired to far more than presentation.
+
+**Drive the presentation hooks directly instead.** Every element of the execution look is reachable
+without the clock:
+
+| Element | How |
+|---|---|
+| Execution HUD state | `input.ReplaceCombatUIMode(CombatUIModes.Simulating)` — a component write |
+| Unit motion | already shipped: M6 keyframes onto `combatView.view.transform` |
+| Unit animation | `MechAnimationSystem` **already runs during planning** — its non-reactive path calls `UpdateAnimationsForAll(Time.deltaTime)` under `!combat.Simulating` (`MechAnimationSystem.cs:123`). It only needs `velocity` written to animate |
+| Timeline scrubbing | `CIViewCombatTimeline.ins.OnTimeChange(t)` — imperative, callable with the playback cursor |
+| Simulation-time shader globals | `Shader.SetGlobalFloat`/`SetGlobalVector` directly |
+| Projectiles, beams, VFX | the replay tracks — nothing else can supply these without the sim |
+
+#### Call `SetReplayActive`'s pieces, not `SetReplayActive`
+
+This is what makes "looks like the battle, not like a replay" achievable. `SetReplayActive` is a
+sequence of separable statements, and only two of them are the drawing:
+
+- `PrepareUnitForReplay(entity)` per unit — sleeps the puppet and disables ragdoll so bone writes
+  are not fought. **Required.**
+- `ins.ApplyTime(t, timeCheck, applyShaderProperties)` each frame — the actual playback.
+
+Everything else is replay-mode dressing we simply do not perform: `ReplaceCombatUIMode(Replay)`, the
+`ui_combat_replay_start` audio sting, `CIViewCombatTimeControl.OnReplayActive`,
+`CombatSceneHelper.OnReplayActive`, `CIHelperOverlays.OnReplayEnabled`. Skipping those and setting
+`CombatUIModes.Simulating` ourselves gives the visuals of the host's turn inside the execution HUD.
+
+Both entry points are private (`CombatReplayHelper.cs:748` and `:955`), so this needs
+`AccessTools`/reflection rather than a direct call — ordinary practice for a Harmony mod, and
+cheaper than the alternatives by a wide margin. It also sidesteps the `IsReplayAllowed()` gate
+entirely, since that is checked in `SetReplayActive` and nowhere further down.
+
+The cost of going around the front door is that we own the invariants `SetReplayActive` maintains:
+puppets must be woken again afterwards, `activeLast` stays false so the game does not believe it is
+in replay mode, and `CombatReplayHelper.Update` will not be driving `previewTime` for us — our own
+playback cursor does. Those are worth listing in the implementation, not discovering.
+
+#### What a client session should feel like
+
+Two coherent answers, and they should be chosen rather than inherited:
+
+- **"It is a replay"** — call `SetReplayActive(true)` and accept its UI: replay mode, scrub bar,
+  audio stings, input suspended. Honest about what is happening, cheapest to build, and the client
+  is unmistakably a spectator for those five seconds.
+- **"It is the battle"** — drive `PrepareUnitForReplay` + `ApplyTime` under
+  `CombatUIModes.Simulating`, as above. More work, more invariants owned by us, and the client
+  experiences the turn the way the host does.
+
+The second is the point of the exercise, but the first is a legitimate stepping stone and shares
+almost all its machinery — the difference is which statements around `ApplyTime` get made.
+
+#### Dependency
+
+None of this is worth building before stage 2. The gate analysis, the equipment match that makes
+joint remapping tractable, and the shared scenario all rest on both machines having loaded the same
+save. Prove stage 2 with M6's sliding playback first; it is the precondition, not a detour.
+
+#### Still open
+
+- A client whose entity set differs from the host's is the same structural mismatch that limits
+  snapshot correction, and keyframes cannot fix it either.
+- A client's `combat.currentTurn` still never advances, because it never commits. Playback is driven
+  by the window on the wire rather than by local turn state, so this does not bite yet.
+- Units spawned mid-turn are never in `CombatReplayHelper.units`, which is seeded from the
+  `OnExecutionStart` roster, so they have no track and simply appear at their corrected position.
+- `keyframeReveal`/`keyframeHidden` are not carried, so a unit revealed mid-turn is visible for the
+  whole playback.
+
+Allocated by M6: `PbjMessageType.Keyframes = 19`, `PbjEffectKind.PlayKeyframes = 10` and
+`StopKeyframes = 11`. `PbjMessageType` 20+ and `PbjEffectKind` 12+ remain unallocated.
 
 ## Unit ownership and assignment
 
@@ -685,26 +965,96 @@ case — zero conditional code.
 No listener, no thread, and no socket exists unless the user explicitly starts a session with
 `pbj.host` or `pbj.join`. With no session, the mod behaves byte-identically to M3.
 
-Binds `127.0.0.1` by default; `0.0.0.0` requires an explicit argument. No telemetry, no third-party
-service.
+Binds `127.0.0.1` by default. Reaching the network requires the three-argument form,
+`pbj.host <bind> <port> <passphrase>`, which **refuses to start without a passphrase** and logs a
+warning naming the exposure. No telemetry, no third-party service.
 
 This section exists because the README commits to it under Brace Yourself Games' mod policy.
+
+## Remote play (M7)
+
+Everything before M7 assumed the other peer was another process on the same machine. Playing with
+someone who is not raises three problems that had nothing to do with the protocol working.
+
+### Builds must be checked, or a mismatch reads as a netcode bug
+
+Through M6 the handshake validated the magic number and the wire version. `modVersion` travelled in
+`Hello` and was *logged and ignored*, and nothing described the game build at all. Two peers on
+different builds therefore connected perfectly and then reported `DIVERGED` every turn — the single
+most misleading failure this system can produce, and the worst one to diagnose with someone waiting
+at the other end of a phone call.
+
+Wire v3 carries the game build and a session passphrase in `Hello` and `Rejoin`, and
+`PbjProtocol.CheckCompatibility` refuses mismatches with a reason that names both sides. The game
+build comes from `BuildInfoHelper.GetBuildInfo()` — the whole string, unparsed, because two peers
+only need to agree and the raw value separates builds that share a version number.
+
+**An absent value is "cannot say", never "does not match"**, for both the mod version and the game
+build. That rule is load-bearing rather than lenient: the standalone harness declares neither and is
+the peer every in-game gate since M4 has been run with. A real host and a real client both declare
+both, so the check still bites exactly where it was added to bite.
+
+The passphrase is checked **first**, so a caller that cannot authenticate learns nothing about our
+mod version or game build.
+
+### An exposed listener needs a door, and the door is not a safe
+
+The passphrase is compared in the clear over plain TCP. It stops anything that finds the port from
+joining — this protocol is public and an accepted peer can submit orders for the units it is dealt —
+and it is **not** confidentiality against anyone on the network path. Documented that way rather
+than dressed up: the honest mitigation for the path is an overlay VPN or a tunnel, and the honest
+description of this is a door lock.
+
+Requiring it for any non-loopback bind is deliberate. It removes the state where someone opens a
+port "just to try it" and leaves it open.
+
+### A socket that says nothing must be reaped
+
+`HandshakeTimeoutSeconds` (10s) drops connections that arrive and never send `Hello`. This was a
+listed limitation and an acceptable one while the listener was loopback-only; it stops being
+acceptable the moment the port is reachable, because such a socket costs a connection slot for free
+and nothing else was tracking it — an accepted socket is not a peer and never entered the registry.
+Deliberately shorter than `PeerTimeoutSeconds`: an established peer has proven it speaks the
+protocol and gets the benefit of the doubt through a hitch; a mute stranger has proven nothing.
+
+### Scenario transfer, and the correction to the 5f record
+
+M5 recorded 5f — two real game instances — as blocked because "there is no scenario transfer, so
+both processes would have to independently enter an identical combat". **That was wrong, and the
+mechanism had already been built in M3a.** `pbj.combat-save` writes `SavedGames/pbj_combat_test/`, a
+plain directory beside `Mods/`. Copy it to the other machine's `SavedGames/`, run `pbj.combat-load`,
+and both processes hold the same combat with the same `persistent.nameInternal` values — which is
+exactly the join key snapshot correction and keyframe playback are built on. M3a verified the
+round-trip at 37/37 planned actions restored, diff MATCH.
+
+It is manual and it transfers a whole campaign save, so both players are playing the host's
+campaign. For a test session that is fine. It is not mid-combat join, which remains unsupported.
+
+### Staging
+
+The standalone `pbj-peer` publishes as a self-contained single-file `win-x64` executable, so the
+network path between two machines can be proven with no game, no save transfer and no mod install on
+the far side. Doing that first separates "our routers can talk" from "our games agree", which are
+otherwise diagnosed together and badly.
 
 ## Known limitations
 
 | Limitation | Milestone to fix |
 |---|---|
 | ~~Sends are synchronous from the main thread~~ | **fixed in M5b** — see [The outbound queue](#the-outbound-queue) |
-| ~~No client state stream~~ | **snapshot correction shipped in M5d**; keyframes still M6 |
+| ~~No client state stream~~ | **snapshot correction shipped in M5d**, ~~keyframe streaming in M6~~ |
+| Keyframes carry no poses, so playback slides rather than walks | M8 — [replay handoff](#replay-handoff-m8--the-intended-answer-to-why-does-it-slide), gated on stage 2 |
+| Units spawned mid-turn have no track and simply appear | unscheduled |
 | A client's own `combat.currentTurn` never advances | unscheduled |
 | ~~No reconnect-after-drop~~ | **fixed in M5e** — see [Reconnect](#reconnect-m5e) |
 | Resume tokens are FNV-1a/32-bit, not a cryptographic credential | unscheduled |
+| The session passphrase travels in the clear over plain TCP | unscheduled — an overlay VPN or tunnel is the real answer |
 | No mid-combat join | M6+ |
 | A client joining a host already in combat derives its own combat state | unscheduled |
 | Host player can edit peers' applied orders during host planning | unscheduled |
 | Assignments not pruned when a unit dies | unscheduled |
 | ~~No keepalive; relies on TCP FIN/RST~~ | **fixed in M5c** |
-| A socket that connects and never sends `Hello` is never timed out | unscheduled |
+| ~~A socket that connects and never sends `Hello` is never timed out~~ | **fixed in M7** — see [Remote play](#remote-play-m7) |
 
 ## The outbound queue
 

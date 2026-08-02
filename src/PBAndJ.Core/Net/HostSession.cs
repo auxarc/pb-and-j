@@ -58,6 +58,18 @@ namespace PBAndJ.Core.Net
         private readonly Dictionary<int, DepartedPeer> departed = new Dictionary<int, DepartedPeer>();
 
         private readonly string sessionSecret;
+        private readonly SessionRequirements requirements;
+
+        /// <summary>
+        /// Sockets that have connected but not yet handshook, and when they did.
+        /// </summary>
+        /// <remarks>
+        /// An accepted socket is not a peer and is not in the registry, so
+        /// nothing else was tracking these. On a loopback listener that is
+        /// harmless; on an internet-facing one, anything that connects and stays
+        /// mute would sit here forever and cost a connection slot for free.
+        /// </remarks>
+        private readonly Dictionary<int, double> pendingHandshakes = new Dictionary<int, double>();
 
         private UnitAssignments assignments = UnitAssignments.Empty;
         private int committedTurn = -1;
@@ -92,7 +104,12 @@ namespace PBAndJ.Core.Net
         /// one) without needing a randomness seam.
         /// </param>
         public HostSession(
-            string hostName, string sessionId, int maxPeers, IPbjGameBridge bridge, string sessionSecret)
+            string hostName,
+            string sessionId,
+            int maxPeers,
+            IPbjGameBridge bridge,
+            string sessionSecret,
+            SessionRequirements requirements)
         {
             if (string.IsNullOrWhiteSpace(hostName))
             {
@@ -108,6 +125,7 @@ namespace PBAndJ.Core.Net
             }
             this.bridge = bridge ?? throw new ArgumentNullException(nameof(bridge));
             this.sessionSecret = sessionSecret;
+            this.requirements = requirements ?? throw new ArgumentNullException(nameof(requirements));
 
             HostName = hostName;
             SessionId = sessionId;
@@ -155,7 +173,9 @@ namespace PBAndJ.Core.Net
             switch (evt)
             {
                 case PeerConnectedEvent connected:
-                    // Nothing happens until Hello — an accepted socket is not yet a peer.
+                    // Nothing happens until Hello — an accepted socket is not yet
+                    // a peer. It does start a clock, though: see pendingHandshakes.
+                    pendingHandshakes[connected.PeerId] = nowSeconds;
                     effects.Add(new LogEffect(NetLog.PeerConnected(connected.PeerId, connected.Remote)));
                     break;
 
@@ -164,6 +184,7 @@ namespace PBAndJ.Core.Net
                     break;
 
                 case PeerDisconnectedEvent disconnected:
+                    pendingHandshakes.Remove(disconnected.PeerId);
                     HandleDisconnect(disconnected.PeerId, disconnected.Reason, effects);
                     break;
 
@@ -300,6 +321,12 @@ namespace PBAndJ.Core.Net
                 return;
             }
 
+            if (RefuseIncompatible(
+                    peerId, hello.PlayerName, hello.ModVersion, hello.GameBuild, hello.Passphrase, effects))
+            {
+                return;
+            }
+
             // A held departure keeps its name. Otherwise a stranger could take a
             // dropped player's name during the grace window, and the real owner's
             // rejoin would be refused as a duplicate through no fault of its own.
@@ -316,6 +343,8 @@ namespace PBAndJ.Core.Net
                 return;
             }
 
+            // It handshook, so it is a peer now and the registry tracks it.
+            pendingHandshakes.Remove(peerId);
             barrier.AddParticipant(peerId);
 
             effects.Add(new SendEffect(peerId, new WelcomeMessage(
@@ -347,6 +376,49 @@ namespace PBAndJ.Core.Net
         /// reusable, and it keeps the invariant that a peer id always addresses
         /// exactly one socket.
         /// </remarks>
+        /// <summary>
+        /// Refuses a peer this host cannot actually play with. True if it did.
+        /// </summary>
+        /// <remarks>
+        /// Shared by Hello and Rejoin because a returning peer is exactly as
+        /// unauthenticated as a new one — the resume token establishes which
+        /// departure this is, not that the sender belongs on this listener.
+        /// </remarks>
+        private bool RefuseIncompatible(
+            int peerId,
+            string? playerName,
+            string? modVersion,
+            string? gameBuild,
+            string? passphrase,
+            List<PbjEffect> effects)
+        {
+            var fault = PbjProtocol.CheckCompatibility(
+                requirements.ModVersion, modVersion,
+                requirements.GameBuild, gameBuild,
+                requirements.Passphrase, passphrase);
+            if (fault == null)
+            {
+                return false;
+            }
+
+            // The detail names both sides for the mismatches, because the whole
+            // point is that the operator can see what to change. The passphrase
+            // case says nothing extra: a caller that failed it gets no free
+            // information about this host.
+            string? detail = null;
+            if (fault == RejectReason.ModVersionMismatch)
+            {
+                detail = "peer " + Describe(modVersion) + ", host " + Describe(requirements.ModVersion);
+            }
+            else if (fault == RejectReason.GameBuildMismatch)
+            {
+                detail = "peer " + Describe(gameBuild) + ", host " + Describe(requirements.GameBuild);
+            }
+
+            Reject(peerId, playerName, fault.Value, detail, effects);
+            return true;
+        }
+
         private void HandleRejoin(int peerId, RejoinMessage rejoin, List<PbjEffect> effects)
         {
             if (registry.TryGet(peerId, out _))
@@ -364,6 +436,12 @@ namespace PBAndJ.Core.Net
                     ? "peer v" + rejoin.ProtocolVersion + ", host v" + PbjProtocol.Version
                     : null;
                 Reject(peerId, rejoin.PlayerName, protocolFault.Value, detail, effects);
+                return;
+            }
+
+            if (RefuseIncompatible(
+                    peerId, rejoin.PlayerName, rejoin.ModVersion, rejoin.GameBuild, rejoin.Passphrase, effects))
+            {
                 return;
             }
 
@@ -393,6 +471,8 @@ namespace PBAndJ.Core.Net
             }
 
             departed.Remove(previous.PeerId);
+            // It handshook, so it is a peer now and the registry tracks it.
+            pendingHandshakes.Remove(peerId);
             barrier.AddParticipant(peerId);
             MarkAlive(peerId);
 
@@ -432,6 +512,9 @@ namespace PBAndJ.Core.Net
 
         private void Reject(int peerId, string? name, RejectReason reason, string? detail, List<PbjEffect> effects)
         {
+            // Already on its way out; the handshake deadline must not queue a
+            // second disconnect for the same socket on the next tick.
+            pendingHandshakes.Remove(peerId);
             effects.Add(new SendEffect(peerId, new RejectMessage(reason, detail)));
             effects.Add(new LogEffect(NetLog.HandshakeRejected(name, reason, detail)));
             effects.Add(new DisconnectEffect(peerId, reason.ToString()));
@@ -554,11 +637,47 @@ namespace PBAndJ.Core.Net
         /// pumping while the simulation runs, and a peer that dies mid-execution
         /// must still be reaped rather than discovered at the next barrier.
         /// </remarks>
+        /// <summary>
+        /// Drops sockets that connected and then said nothing.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately not folded into the peer-timeout loop below: that walks
+        /// the registry, and these are precisely the sockets that never made it
+        /// into the registry. Before M7 nothing timed them out at all, which was
+        /// a listed limitation and stopped being an acceptable one the moment the
+        /// listener could be reached from off the machine.
+        /// </remarks>
+        private void ExpireSilentHandshakes(List<PbjEffect> effects)
+        {
+            List<int>? expired = null;
+            foreach (var pending in pendingHandshakes)
+            {
+                if (nowSeconds - pending.Value >= PbjProtocol.HandshakeTimeoutSeconds)
+                {
+                    expired ??= new List<int>();
+                    expired.Add(pending.Key);
+                }
+            }
+            if (expired == null)
+            {
+                return;
+            }
+
+            foreach (var peerId in expired)
+            {
+                pendingHandshakes.Remove(peerId);
+                effects.Add(new LogEffect(NetLog.HandshakeTimedOut(
+                    peerId, PbjProtocol.HandshakeTimeoutSeconds)));
+                effects.Add(new DisconnectEffect(peerId, "never handshook"));
+            }
+        }
+
         private void HandleTick(TickEvent tick, List<PbjEffect> effects)
         {
             nowSeconds = tick.NowSeconds;
             ticked = true;
             ExpireReconnectHolds(effects);
+            ExpireSilentHandshakes(effects);
 
             // Copied, because timing a peer out removes it from the registry.
             var peers = new List<PbjPeer>(registry.Peers);
@@ -803,6 +922,26 @@ namespace PBAndJ.Core.Net
             effects.Add(new LogEffect(NetLog.SnapshotSent(committedTurn, complete.Units.Count, registry.Count)));
             effects.Add(new BroadcastEffect(
                 new SnapshotMessage(committedTurn, complete.Digest, complete.Units)));
+
+            // Keyframes last. They are presentation, and the correction the
+            // digest is checked against must never queue behind them. A turn
+            // with nothing recorded — prediction disabled, so the game never
+            // started its replay recorder — sends nothing at all rather than an
+            // empty message a client would have to special-case.
+            var keyframes = complete.Keyframes;
+            if (keyframes.Tracks.Count > 0)
+            {
+                var keyCount = 0;
+                for (var i = 0; i < keyframes.Tracks.Count; i++)
+                {
+                    keyCount += keyframes.Tracks[i].Transforms.Count;
+                }
+                effects.Add(new LogEffect(NetLog.KeyframesSent(
+                    committedTurn, keyframes.Tracks.Count, keyCount,
+                    keyframes.WindowStart, keyframes.WindowEnd, registry.Count)));
+                effects.Add(new BroadcastEffect(new KeyframesMessage(
+                    committedTurn, keyframes.WindowStart, keyframes.WindowEnd, keyframes.Tracks)));
+            }
 
             barrier.AdvanceTo(bridge.CurrentTurn);
             State = HostSessionState.Planning;

@@ -41,12 +41,14 @@ namespace PBAndJ.Peer
             "pbj-peer — standalone peer for the pb-and-j protocol\n" +
             "\n" +
             "  pbj-peer connect --host 127.0.0.1 --port 27600 --name ally [--protocol N] [--auto-ready]\n" +
+            "                   [--passphrase P] [--game-build B] [--mod-version V]\n" +
             "                   [--token T --session S --peer-id N]   reclaim units after a drop\n" +
             "  pbj-peer listen  --bind 127.0.0.1 --port 27600 --name host [--peers 3]\n" +
+            "                   [--passphrase P] [--game-build B] [--mod-version V]\n" +
             "  pbj-peer selftest\n" +
             "\n" +
             "REPL commands: status, units, order <unit> <dx> <dy> <dz>, orders, clear,\n" +
-            "               ready, unready, digest, snapshot, quit\n" +
+            "               ready, unready, digest, snapshot, keyframes, quit\n" +
             "  order coordinates are an OFFSET from the unit's current position";
 
         private static int Connect(Options options)
@@ -65,6 +67,8 @@ namespace PBAndJ.Peer
                 ? new ClientSession(options.Name, options.ModVersion, bridge)
                 : new ClientSession(options.Name, options.ModVersion, bridge,
                     options.ResumeSession, options.ResumePeerId, options.ResumeToken);
+            session.GameBuild = options.GameBuild;
+            session.Passphrase = options.Passphrase;
             var runtime = new PbjRuntime(transport, bridge, new ConsoleLog(), mailbox, session);
 
             Console.WriteLine(NetLog.ClientConnecting(options.Host, options.Port, options.Name));
@@ -110,7 +114,8 @@ namespace PBAndJ.Peer
 
             var stream = client.GetStream();
             var hello = FrameEncoder.Encode(PbjMessageCodec.Encode(
-                new HelloMessage(PbjProtocol.Magic, version, options.ModVersion, options.Name)));
+                new HelloMessage(PbjProtocol.Magic, version, options.ModVersion, options.Name,
+                    options.GameBuild, options.Passphrase)));
             stream.Write(hello, 0, hello.Length);
 
             var decoder = new FrameDecoder(PbjRuntime.MaxFrameLength);
@@ -153,7 +158,9 @@ namespace PBAndJ.Peer
             var transport = new TcpHostTransport(mailbox, IPAddress.Parse(options.Bind), options.Port);
             transport.Start();
 
-            var session = new HostSession(options.Name, "peer01", options.Peers, bridge, Guid.NewGuid().ToString("N"));
+            var session = new HostSession(
+                options.Name, "peer01", options.Peers, bridge, Guid.NewGuid().ToString("N"),
+                new SessionRequirements(options.ModVersion, options.GameBuild, options.Passphrase));
             var runtime = new PbjRuntime(transport, bridge, new ConsoleLog(), mailbox, session);
 
             Console.WriteLine(NetLog.HostListening(options.Bind, transport.Port, PbjProtocol.Version, options.Peers));
@@ -271,6 +278,10 @@ namespace PBAndJ.Peer
                     PrintSnapshot(bridge);
                     break;
 
+                case "keyframes":
+                    PrintKeyframes(bridge);
+                    break;
+
                 default:
                     Console.WriteLine(Usage);
                     break;
@@ -289,6 +300,55 @@ namespace PBAndJ.Peer
         /// host logged, the whole path is proven including the Mono-vs-.NET float
         /// question.
         /// </remarks>
+        /// <summary>
+        /// Dumps the last turn's received motion, track by track.
+        /// </summary>
+        /// <remarks>
+        /// The M6 counterpart to <c>snapshot</c>. Against a real game the numbers
+        /// here should match the <c>keyframes sent</c> line the host logged, and
+        /// each track's final key should agree with the same unit's line in
+        /// <c>snapshot</c> — that agreement is the whole invariant capture is
+        /// built to uphold.
+        /// </remarks>
+        private static void PrintKeyframes(ScriptedGameBridge bridge)
+        {
+            var played = bridge.Played;
+            if (played == null || played.Tracks.Count == 0)
+            {
+                Console.WriteLine("[pbj-peer] no keyframes received yet");
+                return;
+            }
+
+            var keys = 0;
+            foreach (var track in played.Tracks)
+            {
+                keys += track.Transforms.Count;
+            }
+
+            Console.WriteLine(
+                $"[pbj-peer] turn {bridge.PlayedTurn}: {played.Tracks.Count} track(s), {keys} key(s), " +
+                $"window {played.WindowStart.ToString("F2", CultureInfo.InvariantCulture)}s-" +
+                $"{played.WindowEnd.ToString("F2", CultureInfo.InvariantCulture)}s");
+
+            foreach (var track in played.Tracks)
+            {
+                if (!KeyframePlayback.TrySample(track, played.WindowEnd, out var end, out _))
+                {
+                    Console.WriteLine($"  {track.Name,-16} (no keys)");
+                    continue;
+                }
+                KeyframePlayback.TrySample(track, played.WindowStart, out var began, out _);
+                Console.WriteLine(
+                    $"  {track.Name,-16} {track.Transforms.Count,4} keys  " +
+                    $"({began.X.ToString("F2", CultureInfo.InvariantCulture)}, " +
+                    $"{began.Y.ToString("F2", CultureInfo.InvariantCulture)}, " +
+                    $"{began.Z.ToString("F2", CultureInfo.InvariantCulture)}) -> " +
+                    $"({end.X.ToString("F2", CultureInfo.InvariantCulture)}, " +
+                    $"{end.Y.ToString("F2", CultureInfo.InvariantCulture)}, " +
+                    $"{end.Z.ToString("F2", CultureInfo.InvariantCulture)})");
+            }
+        }
+
         private static void PrintSnapshot(ScriptedGameBridge bridge)
         {
             if (bridge.Units.Count == 0)
@@ -365,8 +425,26 @@ namespace PBAndJ.Peer
             public int Port { get; private set; } = 27600;
             public string Name { get; private set; } = "ally";
             public int Peers { get; private set; } = 3;
-            public string ModVersion { get; private set; } = "0.2.0";
+            /// <summary>
+            /// Defaults to the build this harness was compiled against, never a
+            /// literal: a packaged harness announcing a stale version is refused
+            /// by a current host, and the refusal happens on the far machine.
+            /// </summary>
+            public string ModVersion { get; private set; } = PbjProtocol.ModVersion;
             public bool AutoReady { get; private set; }
+
+            /// <summary>
+            /// What this peer claims its Phantom Brigade build is.
+            /// </summary>
+            /// <remarks>
+            /// Unset by default and that is the honest answer — the harness has
+            /// no game. Set it to rehearse the host's build check, in either
+            /// direction, without needing two installs.
+            /// </remarks>
+            public string? GameBuild { get; private set; }
+
+            /// <summary>The session passphrase, when the host requires one.</summary>
+            public string? Passphrase { get; private set; }
 
             /// <summary>Set only by --protocol, to exercise the reject path.</summary>
             public int? ProtocolVersion { get; private set; }
@@ -399,6 +477,9 @@ namespace PBAndJ.Peer
                             i++;
                             break;
                         case "--auto-ready": options.AutoReady = true; break;
+                        case "--game-build": options.GameBuild = next!; i++; break;
+                        case "--passphrase": options.Passphrase = next!; i++; break;
+                        case "--mod-version": options.ModVersion = next!; i++; break;
                         case "--token": options.ResumeToken = next!; i++; break;
                         case "--session": options.ResumeSession = next!; i++; break;
                         case "--peer-id":

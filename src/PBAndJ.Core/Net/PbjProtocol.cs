@@ -1,3 +1,5 @@
+using System;
+
 namespace PBAndJ.Core.Net
 {
     /// <summary>Why a host refused a connection.</summary>
@@ -16,6 +18,55 @@ namespace PBAndJ.Core.Net
 
         /// <summary>A rejoin's token did not match the departure it claimed.</summary>
         BadResumeToken = 8,
+
+        /// <summary>Peer is running a different build of this mod.</summary>
+        ModVersionMismatch = 9,
+
+        /// <summary>Peer's Phantom Brigade build differs from the host's.</summary>
+        GameBuildMismatch = 10,
+
+        /// <summary>Peer did not present the session passphrase.</summary>
+        BadPassphrase = 11,
+    }
+
+    /// <summary>
+    /// What a host demands of anything that connects to it.
+    /// </summary>
+    /// <remarks>
+    /// Grouped rather than passed as three more constructor arguments, because
+    /// they are one decision: "who is allowed into this session". They only
+    /// started mattering when a peer stopped being another process on the same
+    /// machine.
+    /// </remarks>
+    public sealed class SessionRequirements
+    {
+        /// <summary>Accepts any build and needs no passphrase — the loopback default.</summary>
+        public static readonly SessionRequirements None = new SessionRequirements(null, null, null);
+
+        public SessionRequirements(string? modVersion, string? gameBuild, string? passphrase)
+        {
+            ModVersion = modVersion;
+            GameBuild = gameBuild;
+            Passphrase = passphrase;
+        }
+
+        /// <summary>This host's mod build. A peer must match it exactly.</summary>
+        public string? ModVersion { get; }
+
+        /// <summary>
+        /// This host's Phantom Brigade build, or null if it has no game.
+        /// </summary>
+        /// <remarks>
+        /// Null on both sides is how the harness plays against itself. Null on
+        /// either side skips the check rather than failing it.
+        /// </remarks>
+        public string? GameBuild { get; }
+
+        /// <summary>Null or empty means the listener is open to anyone who reaches it.</summary>
+        public string? Passphrase { get; }
+
+        /// <summary>Whether a peer has to present anything to be let in.</summary>
+        public bool RequiresPassphrase => !string.IsNullOrEmpty(Passphrase);
     }
 
     /// <summary>
@@ -35,8 +86,29 @@ namespace PBAndJ.Core.Net
         /// The M5 message types added before that — 11 through 17 — left every
         /// existing layout untouched and so kept v1, matching how
         /// <c>Assignments</c> was pulled forward during M4.
+        /// <para>
+        /// v3 (M7) added <c>GameBuild</c> and <c>Passphrase</c> to
+        /// <see cref="HelloMessage"/> and <see cref="RejoinMessage"/>, for play
+        /// between two machines that are not the same machine. M6's
+        /// <c>Keyframes</c> did not bump it: a new message type leaves every
+        /// existing layout untouched.
+        /// </para>
         /// </remarks>
-        public const int Version = 2;
+        public const int Version = 3;
+
+        /// <summary>
+        /// This build of the mod, as peers announce it to each other.
+        /// </summary>
+        /// <remarks>
+        /// Lives in Core because both things that report it — the mod's glue and
+        /// the standalone harness — reference Core and nothing else in common.
+        /// It used to be a literal in each of them, which is how a packaged
+        /// harness went out announcing 0.2.0 against a 0.3.0 host and was refused
+        /// on someone else's machine. Must be kept equal to <c>ver:</c> in
+        /// mod/metadata.yaml; the Makefile refuses to build a distributable when
+        /// they disagree, since that is the one file this constant cannot reach.
+        /// </remarks>
+        public const string ModVersion = "0.3.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.
@@ -75,6 +147,88 @@ namespace PBAndJ.Core.Net
         /// hitch permanently kill every client.
         /// </remarks>
         public const double HostTimeoutSeconds = 30.0;
+
+        /// <summary>
+        /// How long a connected socket may go without sending a handshake.
+        /// </summary>
+        /// <remarks>
+        /// Shorter than <see cref="PeerTimeoutSeconds"/> on purpose: an accepted
+        /// peer has proven it speaks the protocol and gets the benefit of the
+        /// doubt through a hitch, while a socket that has said nothing at all has
+        /// proven nothing. On a loopback-only listener this barely matters; on an
+        /// internet-facing one it is the difference between a bounded connection
+        /// table and an unbounded one, since anything that connects and stays
+        /// mute would otherwise sit there forever.
+        /// </remarks>
+        public const double HandshakeTimeoutSeconds = 10.0;
+
+        /// <summary>
+        /// Checks that a peer is running something we can actually play with.
+        /// </summary>
+        /// <remarks>
+        /// Separate from <see cref="Check"/>, which answers "does this speak our
+        /// protocol at all". This answers "and is it the same build" — a
+        /// distinction that only started mattering when peers stopped being the
+        /// same machine. Without it a friend on a different game patch connects
+        /// perfectly and then diverges on every single turn, which reads as a
+        /// netcode bug and is miserable to diagnose remotely.
+        /// <para>
+        /// The passphrase is checked <em>first</em> so a peer that cannot
+        /// authenticate learns only that, rather than our exact mod version and
+        /// game build. It is compared in the clear over plain TCP: it keeps
+        /// opportunistic connections out, and is not confidentiality against
+        /// anyone on the path.
+        /// </para>
+        /// <para>
+        /// A missing game build is "cannot say", not "does not match" — the
+        /// standalone harness has no game and is a legitimate peer, which is how
+        /// every in-game gate since M4 has been run.
+        /// </para>
+        /// </remarks>
+        public static RejectReason? CheckCompatibility(
+            string? hostModVersion,
+            string? peerModVersion,
+            string? hostGameBuild,
+            string? peerGameBuild,
+            string? requiredPassphrase,
+            string? offeredPassphrase)
+        {
+            if (!string.IsNullOrEmpty(requiredPassphrase)
+                && !string.Equals(requiredPassphrase, offeredPassphrase, StringComparison.Ordinal))
+            {
+                return RejectReason.BadPassphrase;
+            }
+
+            if (Differs(hostModVersion, peerModVersion))
+            {
+                return RejectReason.ModVersionMismatch;
+            }
+
+            if (Differs(hostGameBuild, peerGameBuild))
+            {
+                return RejectReason.GameBuildMismatch;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Whether two declared identities positively disagree.
+        /// </summary>
+        /// <remarks>
+        /// An absent value on either side means "cannot say", never "does not
+        /// match" — a rule that has to hold for both fields or the harness stops
+        /// being able to connect to anything. It declares neither a mod version
+        /// nor a game build, and it is the peer every in-game gate since M4 has
+        /// been run with. A real host and a real client both declare both, so the
+        /// check still bites exactly where it was added to bite.
+        /// </remarks>
+        private static bool Differs(string? mine, string? theirs)
+        {
+            return !string.IsNullOrEmpty(mine)
+                && !string.IsNullOrEmpty(theirs)
+                && !string.Equals(mine, theirs, StringComparison.Ordinal);
+        }
 
         public static RejectReason? Check(int magic, int protocolVersion)
         {

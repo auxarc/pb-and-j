@@ -156,5 +156,34 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Disposes the local player's planned orders. Client only.</summary>
         void ClearLocalOrders();
+
+        /// <summary>
+        /// How every unit moved during the turn that just executed. Host only.
+        /// </summary>
+        /// <remarks>
+        /// Returns <see cref="KeyframeCapture.None"/> rather than throwing when
+        /// there is nothing recorded — a client never captures, and a host whose
+        /// scenario disables prediction never gets a recorder started. Callers
+        /// treat an empty capture as "send no keyframes this turn", not as a
+        /// failure: snapshot correction remains the floor regardless.
+        /// <para>
+        /// Must be read in the same call as <see cref="CaptureSnapshot"/>, so the
+        /// last key of every track and the snapshot describe one instant.
+        /// </para>
+        /// </remarks>
+        KeyframeCapture CaptureKeyframes();
+
+        /// <summary>
+        /// Starts presenting a received turn's motion. Client only.
+        /// </summary>
+        /// <remarks>
+        /// Presentation, not state: an implementation must not write anything the
+        /// digest is computed over, or a client would verify its correction
+        /// against a half-played animation. Replaces any run already in progress.
+        /// </remarks>
+        void PlayKeyframes(int turn, KeyframeCapture capture);
+
+        /// <summary>Abandons any playback in progress. Client only.</summary>
+        void StopKeyframes();
     }
 }

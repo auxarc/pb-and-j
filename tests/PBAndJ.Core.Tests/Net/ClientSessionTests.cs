@@ -484,6 +484,76 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal("unit_b", Assert.Single(apply.Units).Name);
         }
 
+        // --- keyframes (M6) ---
+
+        private static KeyframesMessage Motion(int turn = 3) =>
+            new KeyframesMessage(turn, 15f, 20f, new[]
+            {
+                new UnitTrack("unit_b", new[]
+                {
+                    new TransformKey(15f, new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f)),
+                    new TransformKey(20f, new Vec3(9f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f)),
+                }),
+            });
+
+        [Fact]
+        public void Keyframes_StartPlaybackCarryingTheTurnAndTheWindow()
+        {
+            var play = Single<PlayKeyframesEffect>(
+                Welcomed().HandleMessage(ClientSession.HostConnectionId, Motion()));
+
+            Assert.Equal(3, play.Turn);
+            Assert.Equal(15f, play.Capture.WindowStart);
+            Assert.Equal(20f, play.Capture.WindowEnd);
+            Assert.Equal("unit_b", Assert.Single(play.Capture.Tracks).Name);
+        }
+
+        [Fact]
+        public void Keyframes_AreReported()
+        {
+            var effects = Welcomed().HandleMessage(ClientSession.HostConnectionId, Motion());
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("keyframes received"));
+        }
+
+        // Playback is presentation only, so receiving it must not move the
+        // client's own idea of the turn or unlock anything.
+        [Fact]
+        public void Keyframes_ChangeNoSessionState()
+        {
+            var client = Welcomed();
+            var before = client.State;
+            var turn = client.Turn;
+
+            client.HandleMessage(ClientSession.HostConnectionId, Motion());
+
+            Assert.Equal(before, client.State);
+            Assert.Equal(turn, client.Turn);
+        }
+
+        // A turn ending, a host vanishing or a session closing all leave a
+        // playback mid-flight. Each one has to stop it, or units keep sliding
+        // through whatever comes next.
+        [Fact]
+        public void CombatEnd_StopsAnyPlaybackInFlight()
+        {
+            var effects = Welcomed().HandleMessage(ClientSession.HostConnectionId, new CombatEndMessage());
+            Assert.Single(All<StopKeyframesEffect>(effects));
+        }
+
+        [Fact]
+        public void Bye_StopsAnyPlaybackInFlight()
+        {
+            var effects = Welcomed().HandleMessage(ClientSession.HostConnectionId, new ByeMessage("done"));
+            Assert.Single(All<StopKeyframesEffect>(effects));
+        }
+
+        [Fact]
+        public void AFaultingHost_StopsAnyPlaybackInFlight()
+        {
+            var effects = Welcomed().Handle(new TransportFailedEvent("socket died"));
+            Assert.Single(All<StopKeyframesEffect>(effects));
+        }
+
         [Fact]
         public void SnapshotApplied_WithAMatchingDigest_ReportsTheCorrectionVerified()
         {
@@ -673,7 +743,7 @@ namespace PBAndJ.Core.Tests.Net
         {
             // A client does not simulate, so its own execution-end hook carries
             // no authority — the host's TurnComplete drives the cycle.
-            Assert.Empty(Welcomed().Handle(new LocalTurnCompleteEvent("d", null)));
+            Assert.Empty(Welcomed().Handle(new LocalTurnCompleteEvent("d", null, null)));
         }
 
         [Fact]

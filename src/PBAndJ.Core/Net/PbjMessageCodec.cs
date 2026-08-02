@@ -30,6 +30,26 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public const int MaxUnitsPerSnapshot = 128;
 
+        /// <summary>Cap on tracks in one <see cref="KeyframesMessage"/>.</summary>
+        /// <remarks>
+        /// Mirrors <see cref="MaxUnitsPerSnapshot"/> on purpose: keyframes cover
+        /// the same unit set the snapshot does, so a combat that fits one fits
+        /// the other.
+        /// </remarks>
+        public const int MaxTracksPerKeyframes = 128;
+
+        /// <summary>
+        /// Cap on transform keys in one <see cref="UnitTrack"/>.
+        /// </summary>
+        /// <remarks>
+        /// The host samples every 0.1 s, so a 5 s turn records about 53 keys —
+        /// this leaves room for a longer turn and the unsampled keys written at
+        /// execution start and end. At 32 bytes a key the two caps together bound
+        /// a message near 786 KB, under <see cref="PbjRuntime.MaxFrameLength"/>,
+        /// which a test pins rather than trusting the arithmetic.
+        /// </remarks>
+        public const int MaxKeysPerTrack = 192;
+
         public static byte[] Encode(PbjMessage message)
         {
             if (message == null)
@@ -47,6 +67,8 @@ namespace PBAndJ.Core.Net
                     writer.WriteInt32(hello.ProtocolVersion);
                     writer.WriteString(hello.ModVersion);
                     writer.WriteString(hello.PlayerName);
+                    writer.WriteString(hello.GameBuild);
+                    writer.WriteString(hello.Passphrase);
                     break;
 
                 case WelcomeMessage welcome:
@@ -72,6 +94,8 @@ namespace PBAndJ.Core.Net
                     writer.WriteString(rejoin.SessionId);
                     writer.WriteInt32(rejoin.ClaimedPeerId);
                     writer.WriteString(rejoin.ResumeToken);
+                    writer.WriteString(rejoin.GameBuild);
+                    writer.WriteString(rejoin.Passphrase);
                     break;
 
                 case RejectMessage reject:
@@ -154,6 +178,23 @@ namespace PBAndJ.Core.Net
                     }
                     break;
 
+                case KeyframesMessage keyframes:
+                    writer.WriteInt32(keyframes.Turn);
+                    writer.WriteSingle(keyframes.WindowStart);
+                    writer.WriteSingle(keyframes.WindowEnd);
+                    writer.WriteInt32(keyframes.Tracks.Count);
+                    for (var i = 0; i < keyframes.Tracks.Count; i++)
+                    {
+                        var track = keyframes.Tracks[i];
+                        writer.WriteString(track.Name);
+                        writer.WriteInt32(track.Transforms.Count);
+                        for (var k = 0; k < track.Transforms.Count; k++)
+                        {
+                            WriteTransformKey(writer, track.Transforms[k]);
+                        }
+                    }
+                    break;
+
                 case PingMessage ping:
                     writer.WriteInt32(ping.Nonce);
                     break;
@@ -194,7 +235,8 @@ namespace PBAndJ.Core.Net
             {
                 case PbjMessageType.Hello:
                     return new HelloMessage(
-                        reader.ReadInt32(), reader.ReadInt32(), reader.ReadString(), reader.ReadString());
+                        reader.ReadInt32(), reader.ReadInt32(), reader.ReadString(), reader.ReadString(),
+                        reader.ReadString(), reader.ReadString());
 
                 case PbjMessageType.Welcome:
                 {
@@ -222,7 +264,8 @@ namespace PBAndJ.Core.Net
                     var sessionId = reader.ReadString();
                     return new RejoinMessage(
                         magic, protocolVersion, modVersion, playerName, sessionId,
-                        reader.ReadInt32(), reader.ReadString());
+                        reader.ReadInt32(), reader.ReadString(),
+                        reader.ReadString(), reader.ReadString());
                 }
 
                 case PbjMessageType.Reject:
@@ -307,6 +350,27 @@ namespace PBAndJ.Core.Net
                     return new SnapshotMessage(turn, digest, units);
                 }
 
+                case PbjMessageType.Keyframes:
+                {
+                    var turn = reader.ReadInt32();
+                    var windowStart = reader.ReadSingle();
+                    var windowEnd = reader.ReadSingle();
+                    var trackCount = ReadCount(reader, MaxTracksPerKeyframes, "track");
+                    var tracks = new UnitTrack[trackCount];
+                    for (var i = 0; i < trackCount; i++)
+                    {
+                        var name = reader.ReadString();
+                        var keyCount = ReadCount(reader, MaxKeysPerTrack, "transform key");
+                        var keys = new TransformKey[keyCount];
+                        for (var k = 0; k < keyCount; k++)
+                        {
+                            keys[k] = ReadTransformKey(reader);
+                        }
+                        tracks[i] = new UnitTrack(name, keys);
+                    }
+                    return new KeyframesMessage(turn, windowStart, windowEnd, tracks);
+                }
+
                 case PbjMessageType.Ping:
                     return new PingMessage(reader.ReadInt32());
 
@@ -357,6 +421,28 @@ namespace PBAndJ.Core.Net
             return new UnitSnapshot(
                 name, position, rotation, facing,
                 reader.ReadSingle(), reader.ReadBool(), reader.ReadSingle());
+        }
+
+        /// <summary>
+        /// 32 bytes: time, position, rotation — raw float bits throughout, for
+        /// the same reason <see cref="WriteUnitSnapshot"/> is unquantised.
+        /// </summary>
+        private static void WriteTransformKey(PbjWriter writer, TransformKey key)
+        {
+            writer.WriteSingle(key.Time);
+            WriteVec3(writer, key.Position);
+            writer.WriteSingle(key.Rotation.X);
+            writer.WriteSingle(key.Rotation.Y);
+            writer.WriteSingle(key.Rotation.Z);
+            writer.WriteSingle(key.Rotation.W);
+        }
+
+        private static TransformKey ReadTransformKey(PbjReader reader)
+        {
+            var time = reader.ReadSingle();
+            var position = ReadVec3(reader);
+            return new TransformKey(time, position, new Vec4(
+                reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()));
         }
 
         private static void WriteVec3(PbjWriter writer, Vec3 value)
