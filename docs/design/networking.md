@@ -328,6 +328,45 @@ is .NET 9 on Linux. Float-to-string formatting differs between those runtimes, s
 string-formatting-shaped digest — which this codebase's "one invariant-culture test per formatter"
 convention naturally invites — would report permanent false divergence.
 
+### Keyframe streaming (M6) — starting points
+
+Reconnaissance only. Verified against decompiled 2.2.2-b8339; no design decisions taken yet.
+
+The host already records everything the replay UI scrubs through, in
+`CombatReplayHelper.units` — a `static Dictionary<int, ReplayUnit>`. Each `ReplayUnit` holds
+parallel keyframe lists, and the interesting ones are plain data:
+
+| Type | Fields |
+|---|---|
+| `ReplayKeyframe` (base) | `float time` |
+| `ReplayKeyframeTransform` | `Vector3 position`, `Quaternion rotation` |
+| `ReplayKeyframeUnitState` | `heat` plus six part integrities (core, secondary, L/R optional, L/R equipment) |
+| `ReplayKeyframeUnitPose` | two sync bools, `ReplayKeyframeUnitJoint[] joints` |
+
+Transform and state map onto the `Vec3`/`Vec4` already added for M5d with no new primitives.
+Poses are much heavier and should be a separate decision, not assumed in.
+
+**The tracks are keyed by `combatEntity.id.id` (`CombatReplayHelper.cs:294`) — a process-local ECS
+id.** That does not survive a hop between processes, so capture must re-key to
+`persistent.nameInternal.s`, the same join key snapshot correction uses and for the same reason.
+This is the first thing that would break if it were assumed to be portable.
+
+Sampling is `unitSamplingInterval = 0.1f`, so a 5-second turn is ~50 transform keyframes per unit.
+At the M5d wire cost of a transform (28 bytes plus time) that is ~1.5 KB per unit per turn, i.e.
+roughly 45 KB for a 30-unit combat — still well under `MaxFrameLength`, but two orders of magnitude
+above a snapshot, which is where 5b's outbound queue starts genuinely earning its place.
+
+Open questions, none of them answered here:
+
+- Whether the client can drive `CombatReplayHelper`'s existing scrubber directly, or whether the
+  keyframes must be applied by the same hard-set path M5d uses.
+- What happens to a client whose entity set differs — the same structural mismatch that limits
+  snapshot correction applies, and keyframes cannot fix it either.
+- Whether `combat.currentTurn` not advancing on a client (see M5d's consequences) becomes a real
+  problem once playback is time-based rather than a single end-of-turn correction.
+
+Reserved space is already allocated: `PbjEffectKind` 10+, `PbjMessageType` 19+.
+
 ## Unit ownership and assignment
 
 Assignment is per-session, decided by the host, sent as `Assignments` at combat start.
