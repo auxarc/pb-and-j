@@ -1,0 +1,24 @@
+# Vendored game assemblies — never commit game code
+vendor/
+
+# Decompiled reference output — never commit
+decompiled/
+
+# Cloned third-party reference mods — not ours to commit
+references/
+
+# Local machine-specific build config
+*.local.props
+GamePath.props
+
+# Build output
+bin/
+obj/
+dist/
+
+# Project-local NuGet cache (shared ~/.nuget has container-ownership issues)
+.packages/
+
+# Test artifacts
+coverage.json
+TestResults/

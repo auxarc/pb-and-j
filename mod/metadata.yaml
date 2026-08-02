@@ -1,0 +1,8 @@
+id: pb-and-j
+ver: 0.1.0
+name: PB and J
+desc: Proof-of-concept groundwork for Phantom Brigade multiplayer. Currently just verifies the library-mod pipeline (hello-world Harmony patch).
+url: https://github.com/auxarc/pb-and-j
+includesLibraries: true
+gameVersion2Compatible: true
+gameVersionMin: 2.0.0
