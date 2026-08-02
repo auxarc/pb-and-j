@@ -453,6 +453,14 @@ This section exists because the README commits to it under Brace Yourself Games'
   [The disposal cascade](#the-disposal-cascade)).
 - `CombatUtilities.ConfirmExecution` silently refuses while simulating (M4 Step 0b — see
   [Commit sequence](#commit-sequence-apply--commit--verify--broadcast)).
+- The full handshake works between a native-Linux process and the Wine-hosted game (M4 4d,
+  2026-08-02): `peer connected: #1 from 127.0.0.1:36968`, `handshake ok: #1 'ally'`,
+  `assignment: #0 <- pb_mech_01, workshop_utl_unit_frame | #1 <- pb_mech_02, workshop_utl_unit_frame_2`.
+  Assignment used real ECS units, so the `isPlayerControllable && IsUnitFriendly` filter is correct
+  in-game. `pbj.net-stop` released the port cleanly — re-hosting on 27600 immediately afterwards
+  succeeded. A peer claiming protocol v999 got `VersionMismatch (peer v999, host v1)`.
+- With no session started, a whole launch produces zero networking lines and M3 behaviour is
+  unchanged, so the opt-in guarantee holds in practice.
 - A plain C# `lock` block does **not** strand the 100% branch gate. It lowers to
   `Monitor.Enter(o, ref lockTaken)` plus `if (lockTaken)` in the finally, but coverlet 6.0.2
   accounts for that generated branch — measured 2026-08-02 on `PbjMailbox.Post`: 4 branches, 0

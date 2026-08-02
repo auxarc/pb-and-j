@@ -33,7 +33,9 @@ this code mod is open source (MIT) and any networking will be strictly opt-in.
   - [x] 4a: architecture recorded in `docs/design/networking.md`
   - [x] 4b/4c: protocol and session state machines, 518 tests at 100% line/branch/method
   - [x] 4d: TCP transports, `pbj-peer` harness — `make peer-selftest` walks a full turn
-        cycle over real loopback sockets with no game running
+        cycle over real loopback sockets with no game running; verified in-game 2026-08-02
+        (harness handshook with the running game, real units assigned, bad protocol rejected,
+        port released cleanly on stop)
   - [ ] 4e: order relay end to end in-game
 
 **Feasibility verdict: proven.**
