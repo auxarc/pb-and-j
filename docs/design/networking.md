@@ -264,6 +264,25 @@ time-window validation on that path.
 So the bridge **pre-validates** with `IsValid` plus a turn-window check and reports those as
 rejections. Otherwise `OrderResult` would report success for orders that never execute.
 
+### Movement geometry and duration are host-authoritative
+
+Two fields of a movement order are **never trusted**, because the game's load path applies them
+verbatim while `ActionUtility.CreatePathAction` — the path a local order actually goes through —
+derives both:
+
+- **Duration is recomputed** from `pathLength / (movementSpeedCurrent * movementSpeedScalar)`, then
+  floored at 0.25s. Trusting the wire value lets any peer slide a unit any distance in any time.
+- **The path is re-anchored** so its first point is the unit's pathing origin *on the host*, with
+  the whole path translated by the same delta. Otherwise a unit teleports to wherever the path
+  happens to start.
+
+Both are no-ops for an honest client: it computed the same duration from the same unit at the same
+speed over the same path, and its path already started at that unit's pathing origin. They only bite
+a peer that is lying or desynced.
+
+Found the hard way in 4e — a synthetic harness order with a hardcoded origin and a 2s duration made
+a mech slide across the entire map instead of walking.
+
 ### The disposal cascade
 
 `ActionDisposalSystem` is reactive on `ActionMatcher.Disposed.Added()`, so it runs on the *next*

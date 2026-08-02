@@ -20,6 +20,9 @@ namespace PBAndJ.Mod.Net
     [ExcludeFromCodeCoverage]
     internal static class OrderMapper
     {
+        /// <summary>Shortest action the game accepts.</summary>
+        private const float MinimumDuration = 0.25f;
+
         /// <summary>ActionEntity -> OrderPayload. Mirrors SaveFromECS.</summary>
         internal static OrderPayload? Capture(ActionEntity action)
         {
@@ -176,7 +179,7 @@ namespace PBAndJ.Mod.Net
                 return OrderApplyResult.UnknownBlueprint;
             }
 
-            action.ReplaceDuration(order.Duration);
+            var duration = order.Duration;
 
             if (order.TargetedPoint.HasValue)
             {
@@ -217,6 +220,18 @@ namespace PBAndJ.Mod.Net
                 {
                     points.Add(ToVector3(order.PathPoints[i]));
                 }
+
+                // Re-anchor the path to where the unit actually is on THIS
+                // machine. For an honest client the delta is ~zero, because its
+                // path already started at the same pathing origin. For anything
+                // else it prevents the unit teleporting to the path's start.
+                var origin = PathUtility.GetPathingOrigin(ownerCombat);
+                var delta = origin - points[0];
+                for (var i = 0; i < points.Count; i++)
+                {
+                    points[i] += delta;
+                }
+
                 var links = new List<AreaNavLink>(order.PathLinks.Count);
                 for (var i = 0; i < order.PathLinks.Count; i++)
                 {
@@ -224,7 +239,27 @@ namespace PBAndJ.Mod.Net
                 }
                 action.ReplaceMovementPath(points, links);
                 action.isMovementPathChanged = true;
+
+                // Movement duration is RECOMPUTED, never trusted. The wire value
+                // would otherwise let any peer slide a unit across the map in
+                // whatever time it liked; the game's own CreatePathAction always
+                // derives it from path length and the unit's speed. For an
+                // honest client this reproduces the value it sent, because it is
+                // the same unit at the same speed over the same path.
+                var speed = ownerCombat.hasMovementSpeedCurrent ? ownerCombat.movementSpeedCurrent.f : 0f;
+                var scalar = action.dataLinkAction.data.dataMovement?.movementSpeedScalar ?? 1f;
+                if (speed > 0f && scalar > 0f)
+                {
+                    duration = PathUtility.GetPathLength(points) / (speed * scalar);
+                }
             }
+
+            // Same floor the game applies; anything shorter is not a real action.
+            if (duration < MinimumDuration)
+            {
+                return OrderApplyResult.Invalid;
+            }
+            action.ReplaceDuration(duration);
 
             if (order.DirectionInterpolant.HasValue)
             {

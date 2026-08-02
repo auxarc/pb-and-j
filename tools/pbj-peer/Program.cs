@@ -44,7 +44,8 @@ namespace PBAndJ.Peer
             "  pbj-peer listen  --bind 127.0.0.1 --port 27600 --name host [--peers 3]\n" +
             "  pbj-peer selftest\n" +
             "\n" +
-            "REPL commands: status, units, order <unit> <x> <y> <z>, orders, clear, ready, digest, quit";
+            "REPL commands: status, units, order <unit> <dx> <dy> <dz>, orders, clear, ready, digest, quit\n" +
+            "  order coordinates are an OFFSET from the unit's current position";
 
         private static int Connect(Options options)
         {
@@ -274,10 +275,15 @@ namespace PBAndJ.Peer
                 return;
             }
 
+            // Relative, not absolute: the harness has no idea where the unit
+            // stands. The host re-anchors the first point to the unit's real
+            // pathing origin, so this reads as "move this far from where you
+            // are". Duration is a placeholder — the host recomputes it from
+            // path length and the unit's speed.
             var points = new[] { new Vec3(0f, 0f, 0f), new Vec3(x, y, z) };
             var links = new[] { new PathLink(0, 0) };
-            bridge.Stage(new OrderPayload("move_run", parts[1], 0f, 2f, pathPoints: points, pathLinks: links));
-            Console.WriteLine($"[pbj-peer] staged move_run for {parts[1]} -> ({x}, {y}, {z})");
+            bridge.Stage(new OrderPayload("move_run", parts[1], 0f, 1f, pathPoints: points, pathLinks: links));
+            Console.WriteLine($"[pbj-peer] staged move_run for {parts[1]} — offset ({x}, {y}, {z}) from its position");
         }
 
         private static bool TryFloat(string text, out float value) =>
