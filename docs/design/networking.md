@@ -281,7 +281,8 @@ speed over the same path, and its path already started at that unit's pathing or
 a peer that is lying or desynced.
 
 Found the hard way in 4e — a synthetic harness order with a hardcoded origin and a 2s duration made
-a mech slide across the entire map instead of walking.
+a mech slide across the entire map instead of walking. With both fixes the same order walks
+normally, with animation (verified in-game 2026-08-02).
 
 ### The disposal cascade
 
