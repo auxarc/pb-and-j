@@ -7,6 +7,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
     <ProjectReference Include="../PBAndJ.Core/PBAndJ.Core.csproj" />
+    <ProjectReference Include="../PBAndJ.Net/PBAndJ.Net.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="Assembly-CSharp">

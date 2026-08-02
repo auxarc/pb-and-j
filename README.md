@@ -9,9 +9,13 @@ this code mod is open source (MIT) and any networking will be strictly opt-in.
 
 ## Layout
 
-- `src/` — mod C# source (net472 class library, built inside the `pb-dev` distrobox)
+- `src/PBAndJ.Core/` — pure protocol + logic (netstandard2.0, zero dependencies, 100% covered)
+- `src/PBAndJ.Net/` — TCP transports (sockets and threads; outside the coverage gate by design)
+- `src/PBAndJ.Mod/` — game glue: ModLink, Harmony patches, ECS bridge (net472)
+- `tools/pbj-peer/` — standalone peer that speaks the protocol, for testing a running game
 - `vendor/Managed/` — vendored copy of the game's managed assemblies (gitignored; re-vendor on game update)
 - `docs/notes/` — reverse-engineering notes (class/method names + paraphrase only, no decompiled code)
+- `docs/design/` — our own architecture decisions (start with `networking.md`)
 
 ## Status
 
@@ -23,4 +27,27 @@ this code mod is open source (MIT) and any networking will be strictly opt-in.
   - 3b: `pbj.inject-move` — move order injected via `ActionUtility.CreatePathAction` for a friendly
     unit, survived validation to the ConfirmExecution commit point, unit visibly executed it
 
-**Feasibility verdict: proven.** Next phase: networking design (transport, lobby, order sync).
+- [x] M4 — networking foundations, verified in-game 2026-08-02
+  - [x] 0a: sockets verified under Proton, including native-Linux → Wine in both directions
+  - [x] 0b: disposal cascade and silent commit-refusal confirmed in-game
+  - [x] 4a: architecture recorded in `docs/design/networking.md`
+  - [x] 4b/4c: protocol and session state machines, 518 tests at 100% line/branch/method
+  - [x] 4d: TCP transports, `pbj-peer` harness — `make peer-selftest` walks a full turn
+        cycle over real loopback sockets with no game running; verified in-game 2026-08-02
+        (harness handshook with the running game, real units assigned, bad protocol rejected,
+        port released cleanly on stop)
+  - [x] 4e: order relay end to end — a `move_run` authored in the standalone `pbj-peer`
+        process crossed TCP into the running game, was ownership-checked, applied as a real
+        `ActionEntity`, appeared in the commit-point action dump, and the mech walked it
+        normally with full animation
+
+**Feasibility verdict: proven. Two planners, one sim, over a network.**
+
+Next: M5 — letting the client actually *see* execution (end-of-turn snapshot correction), plus
+an outbound writer thread, which is a hard prerequisite before state snapshots go over the wire.
+
+## Multiplayer is opt-in
+
+No listener, thread or socket exists unless you explicitly start a session with
+`pbj.host` or `pbj.join` in the dev console. With no session, the mod behaves
+exactly as it did before networking existed. Binds `127.0.0.1` by default.

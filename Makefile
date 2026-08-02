@@ -10,11 +10,12 @@ MODS_DIR    := $(HOME)/.local/share/Steam/steamapps/compatdata/553540/pfx/drive_
 PINNED_SHA  := $(shell grep -o '`[a-f0-9]\{64\}`' GAME_BUILD.md | tr -d '`')
 PLAYER_LOG  := $(HOME)/.local/share/Steam/steamapps/compatdata/553540/pfx/drive_c/users/steamuser/AppData/LocalLow/Brace Yourself Games/Phantom Brigade/Player.log
 
-.PHONY: test build dist deploy check-game-hash clean log
+.PHONY: test build dist deploy check-game-hash clean log peer peer-selftest peer-connect peer-listen
 
 test:
 	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet test tests/PBAndJ.Core.Tests \
-		/p:CollectCoverage=true /p:Threshold=100 /p:ThresholdType=line%2cbranch%2cmethod /p:ThresholdStat=total'
+		/p:CollectCoverage=true /p:Include="[PBAndJ.Core]*" \
+		/p:Threshold=100 /p:ThresholdType=line%2cbranch%2cmethod /p:ThresholdStat=total'
 
 build: test
 	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet build src/PBAndJ.Mod -c Release'
@@ -25,6 +26,7 @@ dist: build
 	cp mod/metadata.yaml dist/$(MOD_ID)/
 	cp src/PBAndJ.Mod/bin/Release/net472/PBAndJ.Mod.dll dist/$(MOD_ID)/Libraries/
 	cp src/PBAndJ.Mod/bin/Release/net472/PBAndJ.Core.dll dist/$(MOD_ID)/Libraries/
+	cp src/PBAndJ.Mod/bin/Release/net472/PBAndJ.Net.dll dist/$(MOD_ID)/Libraries/
 
 check-game-hash:
 	@test -n "$(PINNED_SHA)" || { echo "FATAL: no pinned SHA found in GAME_BUILD.md"; exit 1; }
@@ -37,7 +39,28 @@ check-game-hash:
 	fi; \
 	echo "game build hash OK"
 
-deploy: dist check-game-hash
+# The standalone protocol peer. Speaks the same PBAndJ.Core the mod does, so
+# a running game can be tested against a real second peer.
+peer: test
+	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet build tools/pbj-peer -c Release'
+
+# Real sockets, no game. Gates deploy so a broken protocol cannot reach the game.
+peer-selftest: peer
+	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet run --project tools/pbj-peer -c Release --no-build -- selftest'
+
+HOST ?= 127.0.0.1
+PORT ?= 27600
+NAME ?= ally
+
+peer-connect: peer
+	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet run --project tools/pbj-peer -c Release --no-build -- \
+		connect --host $(HOST) --port $(PORT) --name $(NAME) $(PEER_ARGS)'
+
+peer-listen: peer
+	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet run --project tools/pbj-peer -c Release --no-build -- \
+		listen --bind $(HOST) --port $(PORT) --name $(NAME)'
+
+deploy: dist check-game-hash peer-selftest
 	mkdir -p "$(MODS_DIR)"
 	rm -rf "$(MODS_DIR)/$(MOD_ID)"
 	cp -r dist/$(MOD_ID) "$(MODS_DIR)/$(MOD_ID)"
@@ -48,4 +71,5 @@ log:
 
 clean:
 	rm -rf dist src/PBAndJ.Mod/bin src/PBAndJ.Mod/obj src/PBAndJ.Core/bin src/PBAndJ.Core/obj \
+		src/PBAndJ.Net/bin src/PBAndJ.Net/obj tools/pbj-peer/bin tools/pbj-peer/obj \
 		tests/PBAndJ.Core.Tests/bin tests/PBAndJ.Core.Tests/obj tests/PBAndJ.Core.Tests/coverage.json
