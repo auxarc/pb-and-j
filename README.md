@@ -12,6 +12,7 @@ this code mod is open source (MIT) and any networking will be strictly opt-in.
 - `src/` — mod C# source (net472 class library, built inside the `pb-dev` distrobox)
 - `vendor/Managed/` — vendored copy of the game's managed assemblies (gitignored; re-vendor on game update)
 - `docs/notes/` — reverse-engineering notes (class/method names + paraphrase only, no decompiled code)
+- `docs/design/` — our own architecture decisions (start with `networking.md`)
 
 ## Status
 
