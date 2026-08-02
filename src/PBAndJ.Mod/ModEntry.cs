@@ -27,6 +27,7 @@ namespace PBAndJ.Mod
             InjectGlue.RegisterConsoleCommand();
             SocketProbeGlue.RegisterConsoleCommands();
             ChoreographySpikeGlue.RegisterConsoleCommands();
+            Net.NetGlue.RegisterConsoleCommands();
         }
     }
 
