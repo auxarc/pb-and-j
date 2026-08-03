@@ -34,5 +34,19 @@
       <HintPath>$(VendorDir)/QFSW.QC.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!--
+      The update check. UnityWebRequest rather than HttpWebRequest because the
+      game already proves that path works under Proton — its crash reporter
+      POSTs over HTTPS the same way — whereas Mono's own TLS stack under Wine is
+      an unknown nobody has tested here.
+    -->
+    <Reference Include="UnityEngine.UnityWebRequestModule">
+      <HintPath>$(VendorDir)/UnityEngine.UnityWebRequestModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(VendorDir)/Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 </Project>

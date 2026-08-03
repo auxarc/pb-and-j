@@ -119,6 +119,19 @@ this code mod is open source (MIT) and any networking will be strictly opt-in.
         refusal over real sockets
   - [ ] in-game: `pbj.combat-save` on the host, then a peer receives a byte-identical copy
 
+- [ ] M10 — streamlining the lift on a second player.
+  - [x] 10a: **update check** — on session start (and via `pbj.check-update`) the mod asks the
+        GitHub releases API for the newest published version and compares. Version *ordering* and
+        the wording live in `PBAndJ.Core` under the coverage gate, because `0.9.0` sorts after
+        `0.10.0` as a string and would silently tell everyone they were current; the fetch and the
+        JSON live in the glue, using `UnityWebRequest` (the path the game's own crash reporter
+        proves works under Proton) and a real JSON parser rather than a key scan, since a release
+        body is user-authored text that could contain a convincing fake `tag_name`
+  - [ ] 10b: download-and-install on confirm — a deliberate stopgap until Steam Workshop
+  - [ ] 10c: Main Menu **Multiplayer** button and a connect screen with address, port and
+        passphrase. The risky part: the UI is NGUI, and free-text entry needs a `UIInput` cloned
+        from an existing view
+
 Next: **M8 — replay handoff.** Rather than streaming animation poses, hand the client the host's
 recorded replay and let the game's own playback system draw it, so a client sees the turn exactly
 as the host did. Designed in `docs/design/networking.md`; gated on stage 2, which is what makes
@@ -145,3 +158,10 @@ rendered transform of a unit is `combatView.view.transform`.
 No listener, thread or socket exists unless you explicitly start a session with
 `pbj.host` or `pbj.join` in the dev console. With no session, the mod behaves
 exactly as it did before networking existed. Binds `127.0.0.1` by default.
+
+**One outbound request, and only on session start.** Starting a session also asks
+`api.github.com` whether a newer mod build has been released, so a version
+mismatch reads as "you are on 0.4.0, 0.5.0 exists" rather than as a handshake
+refusal that looks like a netcode bug. It sends nothing but a User-Agent naming
+the mod version, it is not made at launch or at any other time, and
+`pbj.check-update` is the same check on demand. The log says so when it happens.

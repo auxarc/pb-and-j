@@ -36,7 +36,7 @@ netcode and we would waste the evening chasing it.
 mod does. It proves the network path — your router, my router, the latency, the
 keepalives — without either of us launching the game.
 
-1. Unzip `pbj-peer-win-x64-v0.4.0.zip` anywhere. It is one big `.exe` (~71 MB
+1. Unzip `pbj-peer-win-x64-v0.5.0.zip` anywhere. It is one big `.exe` (~71 MB
    unzipped); nothing to install, no .NET needed. **You do not need Phantom
    Brigade for this stage at all.**
 
@@ -106,12 +106,12 @@ show your mech somewhere new.
 
 ## Stage 2 — the real game
 
-Only after stage 1 works. **I will send you `pb-and-j-mod-v0.4.0.zip` then** —
+Only after stage 1 works. **I will send you `pb-and-j-mod-v0.5.0.zip` then** —
 you do not need it yet.
 
 ### Install the mod
 
-1. Unzip `pb-and-j-mod-v0.4.0.zip`.
+1. Unzip `pb-and-j-mod-v0.5.0.zip`.
 2. Drop the whole `pb-and-j` folder into your mods folder:
 
    **Windows:** `%LOCALAPPDATA%\PhantomBrigade\Mods\`

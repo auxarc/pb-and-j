@@ -28,6 +28,7 @@ namespace PBAndJ.Mod
             SocketProbeGlue.RegisterConsoleCommands();
             ChoreographySpikeGlue.RegisterConsoleCommands();
             Net.NetGlue.RegisterConsoleCommands();
+            UpdateGlue.RegisterConsoleCommand();
         }
     }
 
@@ -35,9 +36,14 @@ namespace PBAndJ.Mod
     [HarmonyPatch(typeof(Heartbeat), "Start")]
     internal static class Patch_Heartbeat_Start
     {
-        private static void Postfix()
+        // Heartbeat is a MonoBehaviour that lives for the whole process, so it
+        // is also the coroutine host the update check needs — UnityWebRequest
+        // requires one and the mod has none of its own. Borrowing this is
+        // cheaper and less fragile than creating and owning a GameObject.
+        private static void Postfix(Heartbeat __instance)
         {
             Debug.Log(LoadBanner.PatchFired("Heartbeat.Start"));
+            UpdateGlue.SetCoroutineHost(__instance);
         }
     }
 }

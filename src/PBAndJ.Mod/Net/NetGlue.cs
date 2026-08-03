@@ -105,6 +105,12 @@ namespace PBAndJ.Mod.Net
 
             try
             {
+                // Starting a session is the explicit opt-in to networking, and
+                // also the moment a stale build is about to matter — a mismatched
+                // mod version is refused by the handshake and reads as a netcode
+                // bug otherwise. Fire and forget; nothing here waits on it.
+                UpdateGlue.CheckInBackground();
+
                 bridge = new CombatGameBridge();
                 var mailbox = new PbjMailbox(MailboxCapacity);
                 var transport = new TcpHostTransport(mailbox, address, port);
@@ -191,6 +197,12 @@ namespace PBAndJ.Mod.Net
             }
             try
             {
+                // Starting a session is the explicit opt-in to networking, and
+                // also the moment a stale build is about to matter — a mismatched
+                // mod version is refused by the handshake and reads as a netcode
+                // bug otherwise. Fire and forget; nothing here waits on it.
+                UpdateGlue.CheckInBackground();
+
                 bridge = new CombatGameBridge();
                 var mailbox = new PbjMailbox(MailboxCapacity);
                 var transport = new TcpClientTransport(mailbox);
