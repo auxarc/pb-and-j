@@ -4,5 +4,30 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+  </PropertyGroup>
+
+  <!--
+    Keeps the build machine's home directory out of shipped binaries. Roslyn
+    writes the PDB path into each assembly's debug directory, so every DLL and
+    the self-contained pbj-peer.exe carried the full absolute path of this repo —
+    including into the zips sent to other people. Deleting the .pdb files, as the
+    Makefile does, does not remove it: the string lives in the PE, not the pdb.
+
+    Release only, and that is load-bearing rather than tidiness. PathMap rewrites
+    the source-document paths in the PDB too, and coverlet resolves coverage
+    through exactly those paths — applying it everywhere makes `make test` report
+    0% line/branch/method while all 941 tests still pass, which fails the gate in
+    the most confusing way available. Everything shipped is built -c Release
+    (build, peer, dist, package); coverage runs the default Debug and is
+    unaffected.
+
+    PathMap alone is enough: no project sets DebugType, so the SDK default
+    portable PDB applies, which is what PathMap needs. DeterministicSourcePaths
+    would be redundant and fails the build when SourceRoot inference does not
+    kick in.
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <PathMap>$(MSBuildThisFileDirectory)=/_/</PathMap>
   </PropertyGroup>
 </Project>

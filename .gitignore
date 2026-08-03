@@ -22,3 +22,8 @@ dist/
 # Test artifacts
 coverage.json
 TestResults/
+
+# Captured Player.log files — they carry public IPs, machine names and the
+# Windows account name of whoever was testing. Redact into docs/notes/ instead;
+# see stage2-run-2026-08-02.md for the shape.
+logs/

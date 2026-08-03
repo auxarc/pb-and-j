@@ -2,6 +2,10 @@
 # deploy is gated on: tests green + 100% line/branch/method coverage + game build hash match.
 
 MOD_ID      := pb-and-j
+# Derived from this file's own location rather than hardcoded: the absolute path
+# of somebody's home directory has no business in a public repo, and this also
+# makes `make -C` work. Safe to evaluate here because there are no includes, so
+# MAKEFILE_LIST holds exactly this file.
 REPO        := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 DBX         := distrobox enter pb-dev --
 DOTNET_ENV  := export NUGET_PACKAGES=$(REPO)/.packages;
