@@ -162,6 +162,129 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(atLimit, new PbjReader(writer.ToArray()).ReadString());
         }
 
+        // --- byte blobs ---
+
+        [Fact]
+        public void WriteBytes_RoundTrips()
+        {
+            var payload = new byte[] { 0x00, 0x7F, 0x80, 0xFF, 0x42 };
+            var reader = ReaderOver(w => w.WriteBytes(payload));
+            Assert.Equal(payload, reader.ReadBytes());
+        }
+
+        [Fact]
+        public void WriteBytes_WritesLengthPrefixThenPayloadVerbatim()
+        {
+            var writer = new PbjWriter();
+            writer.WriteBytes(new byte[] { 0xAA, 0xBB });
+            Assert.Equal(new byte[] { 0x02, 0x00, 0x00, 0x00, 0xAA, 0xBB }, writer.ToArray());
+        }
+
+        [Fact]
+        public void WriteBytes_Empty_RoundTripsAsEmpty()
+        {
+            var reader = ReaderOver(w => w.WriteBytes(new byte[0]));
+            Assert.Empty(reader.ReadBytes()!);
+        }
+
+        [Fact]
+        public void WriteBytes_Null_RoundTripsAsNull()
+        {
+            var reader = ReaderOver(w => w.WriteBytes(null));
+            Assert.Null(reader.ReadBytes());
+        }
+
+        [Fact]
+        public void WriteBytes_Null_WritesNegativeOneLength()
+        {
+            var writer = new PbjWriter();
+            writer.WriteBytes(null);
+            Assert.Equal(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF }, writer.ToArray());
+        }
+
+        [Fact]
+        public void WriteBytes_ExceedingMaxLength_Throws()
+        {
+            var writer = new PbjWriter();
+            Assert.Throws<PbjProtocolException>(
+                () => writer.WriteBytes(new byte[PbjWriter.MaxBytesLength + 1]));
+        }
+
+        [Fact]
+        public void WriteBytes_AtMaxLength_IsAccepted()
+        {
+            var writer = new PbjWriter();
+            var atLimit = new byte[PbjWriter.MaxBytesLength];
+            atLimit[PbjWriter.MaxBytesLength - 1] = 0x5A;
+            writer.WriteBytes(atLimit);
+            Assert.Equal(atLimit, new PbjReader(writer.ToArray()).ReadBytes());
+        }
+
+        [Fact]
+        public void ReadBytes_TruncatedLength_Throws()
+        {
+            var reader = new PbjReader(new byte[] { 4, 0 });
+            Assert.Throws<PbjProtocolException>(() => reader.ReadBytes());
+        }
+
+        [Fact]
+        public void ReadBytes_TruncatedPayload_Throws()
+        {
+            // declares 8 bytes, supplies 2
+            var reader = new PbjReader(new byte[] { 0x08, 0x00, 0x00, 0x00, 0x61, 0x62 });
+            Assert.Throws<PbjProtocolException>(() => reader.ReadBytes());
+        }
+
+        [Fact]
+        public void ReadBytes_WithNegativeLengthOtherThanNull_Throws()
+        {
+            var reader = new PbjReader(new byte[] { 0xFE, 0xFF, 0xFF, 0xFF });
+            Assert.Throws<PbjProtocolException>(() => reader.ReadBytes());
+        }
+
+        [Fact]
+        public void ReadBytes_WithLengthExceedingMaximum_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteInt32(PbjWriter.MaxBytesLength + 1);
+            Assert.Throws<PbjProtocolException>(() => new PbjReader(writer.ToArray()).ReadBytes());
+        }
+
+        [Fact]
+        public void ReadBytes_ReturnsACopy_NotAWindowOnTheFrame()
+        {
+            // A scenario payload is written to disk well after the frame buffer
+            // has been recycled, so handing back an alias would be a latent
+            // corruption rather than a visible one.
+            var payload = new byte[] { 0x01, 0x02, 0x03, 0x04 };
+            var writer = new PbjWriter();
+            writer.WriteBytes(payload);
+            writer.WriteBytes(payload);
+            var frame = writer.ToArray();
+
+            var reader = new PbjReader(frame);
+            var first = reader.ReadBytes()!;
+            first[0] = 0x99;
+
+            Assert.Equal(payload, reader.ReadBytes());
+            Assert.NotSame(frame, first);
+        }
+
+        [Fact]
+        public void WriteBytes_ThenOtherPrimitives_KeepsFrameAligned()
+        {
+            var reader = ReaderOver(w =>
+            {
+                w.WriteString("content.zip");
+                w.WriteBytes(new byte[] { 9, 8, 7 });
+                w.WriteInt32(1234);
+            });
+            Assert.Equal("content.zip", reader.ReadString());
+            Assert.Equal(new byte[] { 9, 8, 7 }, reader.ReadBytes());
+            Assert.Equal(1234, reader.ReadInt32());
+            reader.EnsureConsumed();
+        }
+
         // --- writer buffer ---
 
         [Fact]

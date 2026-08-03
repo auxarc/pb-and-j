@@ -226,6 +226,99 @@ namespace PBAndJ.Core.Tests.Net
             Assert.True(Single<SetExecutionLockEffect>(effects).Locked);
         }
 
+        // --- the Ready batch is filtered to what we own (found in the stage 2 run) ---
+        //
+        // A client's local ECS holds the enemy AI's planned actions too, and they
+        // do not carry the AIAction tag there — the first two-game turn submitted
+        // 13 enemy orders alongside 3 of the host's, all rejected. Harmless, but it
+        // wastes the wire, eats the 256-order cap and buries genuine rejections.
+
+        /// <summary>A welcomed client that has been dealt <paramref name="units"/>.</summary>
+        private ClientSession Assigned(params string[] units)
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId,
+                new AssignmentsMessage(new[] { new PeerAssignment(1, units) }));
+            return client;
+        }
+
+        [Fact]
+        public void Handle_LocalReady_SendsOnlyOrdersForUnitsWeOwn()
+        {
+            bridge.LocalOrders.Add(new OrderPayload("move_run", "unit_a", 0f, 2f));
+            bridge.LocalOrders.Add(new OrderPayload("move_run", "enemy_01", 0f, 2f));
+            bridge.LocalOrders.Add(new OrderPayload("move_run", "unit_b", 0f, 2f));
+
+            var ready = Assert.IsType<ReadyMessage>(
+                Single<SendEffect>(Assigned("unit_a", "unit_b").Handle(new LocalReadyEvent())).Message);
+
+            Assert.Equal(2, ready.Orders.Count);
+            Assert.DoesNotContain(ready.Orders, o => o.OwnerName == "enemy_01");
+        }
+
+        [Fact]
+        public void Handle_LocalReady_SaysWhatItDropped()
+        {
+            // No silent filtering: if a genuine order ever goes missing here, the
+            // count is the only thing that would show it.
+            bridge.LocalOrders.Add(new OrderPayload("move_run", "unit_a", 0f, 2f));
+            bridge.LocalOrders.Add(new OrderPayload("move_run", "enemy_01", 0f, 2f));
+
+            var effects = Assigned("unit_a").Handle(new LocalReadyEvent());
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("1 order") && l.Line.Contains("not ours"));
+        }
+
+        [Fact]
+        public void Handle_LocalReady_WithNothingToDrop_SaysNothingAboutIt()
+        {
+            bridge.LocalOrders.Add(new OrderPayload("move_run", "unit_a", 0f, 2f));
+            var effects = Assigned("unit_a").Handle(new LocalReadyEvent());
+            Assert.DoesNotContain(All<LogEffect>(effects), l => l.Line.Contains("not ours"));
+        }
+
+        [Fact]
+        public void Handle_LocalReady_BeforeAnyAssignment_SendsEverythingAndLetsTheHostDecide()
+        {
+            // The filter is a courtesy over a host-authoritative check, not a
+            // second enforcement point. A client that has not been told what it
+            // owns must defer rather than silently withhold a real order.
+            bridge.LocalOrders.Add(new OrderPayload("move_run", "unit_c", 0f, 2f));
+            var ready = Assert.IsType<ReadyMessage>(
+                Single<SendEffect>(Welcomed().Handle(new LocalReadyEvent())).Message);
+            Assert.Single(ready.Orders);
+        }
+
+        [Fact]
+        public void Handle_LocalReady_WhenEveryOrderIsDropped_StillReadies()
+        {
+            // The barrier waits on every participant. Filtering everything away
+            // must submit an empty batch, never skip the Ready — that would
+            // deadlock the turn for both players.
+            bridge.LocalOrders.Add(new OrderPayload("move_run", "enemy_01", 0f, 2f));
+
+            var effects = Assigned("unit_a").Handle(new LocalReadyEvent());
+            var ready = Assert.IsType<ReadyMessage>(Single<SendEffect>(effects).Message);
+
+            Assert.Empty(ready.Orders);
+            Assert.True(Single<SetExecutionLockEffect>(effects).Locked);
+        }
+
+        // An order with no owner needs no arm here: OrderPayload's constructor
+        // already refuses a null or empty ownerName, which is a stronger place
+        // for that guarantee to live than this filter.
+
+        [Fact]
+        public void Handle_LocalReady_MatchesOwnerNamesExactly()
+        {
+            // nameInternal is the join key everything else is addressed by; a
+            // case-insensitive match here would let a near-miss through and turn
+            // a clean rejection into a confusing one.
+            bridge.LocalOrders.Add(new OrderPayload("move_run", "Unit_A", 0f, 2f));
+            var ready = Assert.IsType<ReadyMessage>(
+                Single<SendEffect>(Assigned("unit_a").Handle(new LocalReadyEvent())).Message);
+            Assert.Empty(ready.Orders);
+        }
+
         [Fact]
         public void Handle_LocalReady_WhenNotPlanning_ProducesNoEffects()
         {

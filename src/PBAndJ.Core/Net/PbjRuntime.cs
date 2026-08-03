@@ -278,6 +278,16 @@ namespace PBAndJ.Core.Net
                     bridge.StopKeyframes();
                     break;
 
+                case WriteScenarioEffect write:
+                    // Logged rather than fed back: nothing in the protocol waits
+                    // on the write, so there is no session state to advance. The
+                    // player is told to load it by hand — see the effect's note
+                    // on why this does not load it for them.
+                    log.Log(bridge.WriteScenario(write.Payload)
+                        ? NetLog.ScenarioWritten(write.Payload.SaveName)
+                        : NetLog.ScenarioWriteFailed(write.Payload.SaveName));
+                    break;
+
                 case SetExecutionLockEffect setLock:
                     bridge.SetExecutionLocked(setLock.Locked);
                     break;

@@ -48,7 +48,7 @@ namespace PBAndJ.Peer
             "  pbj-peer selftest\n" +
             "\n" +
             "REPL commands: status, units, order <unit> <dx> <dy> <dz>, orders, clear,\n" +
-            "               ready, unready, digest, snapshot, keyframes, quit\n" +
+            "               ready, unready, digest, snapshot, keyframes, scenario, pull, quit\n" +
             "  order coordinates are an OFFSET from the unit's current position";
 
         private static int Connect(Options options)
@@ -282,6 +282,15 @@ namespace PBAndJ.Peer
                     PrintKeyframes(bridge);
                     break;
 
+                case "scenario":
+                    PrintScenario(bridge);
+                    break;
+
+                case "pull":
+                    runtime.Post(new LocalScenarioPullEvent());
+                    Console.WriteLine("[pbj-peer] asked the host for its combat save");
+                    break;
+
                 default:
                     Console.WriteLine(Usage);
                     break;
@@ -310,6 +319,42 @@ namespace PBAndJ.Peer
         /// <c>snapshot</c> — that agreement is the whole invariant capture is
         /// built to uphold.
         /// </remarks>
+        /// <summary>
+        /// Reports the combat save this peer holds — M9's gate against a real
+        /// game.
+        /// </summary>
+        /// <remarks>
+        /// Run against a running host that has done <c>pbj.combat-save</c>: the
+        /// transfer happens on handshake with nothing typed, and these are the
+        /// bytes that arrived. The digest is recomputed here from the content, so
+        /// matching the host's log line proves capture, the codec, the socket and
+        /// the guards all together.
+        /// </remarks>
+        private static void PrintScenario(ScriptedGameBridge bridge)
+        {
+            var scenario = bridge.Scenario;
+            if (scenario.Files.Count == 0)
+            {
+                Console.WriteLine("[pbj-peer] no scenario received yet — try 'pull'");
+                return;
+            }
+
+            Console.WriteLine(
+                $"[pbj-peer] scenario '{scenario.SaveName}' | {scenario.Files.Count} file(s), " +
+                $"{scenario.TotalBytes.ToString("N0", CultureInfo.InvariantCulture)} bytes, " +
+                $"digest {scenario.Digest}");
+            foreach (var file in scenario.Files)
+            {
+                Console.WriteLine(
+                    $"  {file.Name,-16} {file.Content.Length.ToString("N0", CultureInfo.InvariantCulture),12} bytes");
+            }
+
+            var rejection = scenario.Inspect();
+            Console.WriteLine(rejection == ScenarioRejection.None
+                ? "[pbj-peer] loadable — a real client would have written it to SavedGames/"
+                : $"[pbj-peer] NOT loadable: {rejection}");
+        }
+
         private static void PrintKeyframes(ScriptedGameBridge bridge)
         {
             var played = bridge.Played;

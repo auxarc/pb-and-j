@@ -16,7 +16,21 @@ namespace PBAndJ.Core.Net
         /// <summary>Longest UTF-8 string accepted on the wire, in bytes.</summary>
         public const int MaxStringLength = 4096;
 
-        private const int NullStringLength = -1;
+        /// <summary>
+        /// Longest opaque byte blob accepted on the wire, in bytes.
+        /// </summary>
+        /// <remarks>
+        /// Four orders of magnitude above <see cref="MaxStringLength"/> because
+        /// blobs carry files rather than identifiers — M9's scenario transfer is
+        /// the only caller. Deliberately half of
+        /// <see cref="PbjRuntime.MaxFrameLength"/>, so a single blob can never on
+        /// its own fill a frame and the message layer still has room for the
+        /// envelope around it. The message layer applies its own, tighter cap on
+        /// the *total* of a multi-blob message; this is the floor under both.
+        /// </remarks>
+        public const int MaxBytesLength = 1 << 19;
+
+        private const int NullLength = -1;
 
         private readonly List<byte> buffer = new List<byte>();
 
@@ -49,7 +63,7 @@ namespace PBAndJ.Core.Net
         {
             if (value == null)
             {
-                WriteInt32(NullStringLength);
+                WriteInt32(NullLength);
                 return;
             }
 
@@ -62,6 +76,32 @@ namespace PBAndJ.Core.Net
 
             WriteInt32(bytes.Length);
             buffer.AddRange(bytes);
+        }
+
+        /// <summary>
+        /// Writes an opaque blob: a length prefix then the bytes verbatim, with
+        /// the same <c>-1</c> null sentinel <see cref="WriteString"/> uses.
+        /// </summary>
+        /// <remarks>
+        /// No encoding, no compression, no interpretation. The one caller
+        /// carries save-file contents, which are already a zip.
+        /// </remarks>
+        public void WriteBytes(byte[]? value)
+        {
+            if (value == null)
+            {
+                WriteInt32(NullLength);
+                return;
+            }
+
+            if (value.Length > MaxBytesLength)
+            {
+                throw new PbjProtocolException(
+                    "Blob of " + value.Length + " bytes exceeds the maximum of " + MaxBytesLength + ".");
+            }
+
+            WriteInt32(value.Length);
+            buffer.AddRange(value);
         }
 
         public byte[] ToArray()

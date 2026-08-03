@@ -78,8 +78,12 @@ this code mod is open source (MIT) and any networking will be strictly opt-in.
         `pbj.replay-last` round-trips a real capture through the codec and plays it on the host
   - [x] 6f: `make peer-selftest` scenario 5 — tracks survive the wire key for key, sampling at
         the window's end reproduces the snapshot exactly, and combat ending stops playback
-  - [ ] in-game checklist: `pbj.replay-last` retraces a turn, `keyframes sent` counts look sane,
-        the M5d digest still matches, and a prediction-disabled scenario degrades quietly
+  - [x] `pbj.replay-last` run in-game: units retrace their real paths, **sliding in an idle pose**.
+        Expected — M6 moves the root transform and nothing drives the animator. This is also how the
+        `hasTransformLink` trap below was caught
+  - [ ] in-game checklist, remaining: `keyframes sent` counts look sane (~50 keys per moving unit
+        for a 5 s turn), the M5d digest still matches, and a prediction-disabled scenario degrades
+        quietly
 
 - [ ] M7 — remote play: packaging and the guards a session between two machines needs.
       Code complete; **no cross-machine session run yet**.
@@ -98,16 +102,37 @@ this code mod is open source (MIT) and any networking will be strictly opt-in.
         First time the protocol has crossed a real network between two people.
   - [ ] stage 2: two real game instances, combat transferred by save file
 
+- [x] M9 — **scenario transfer**: the combat save crosses the wire instead of being carried by hand.
+      Code complete; **no two-instance run yet**.
+  - [x] 9a: `ScenarioOffer` / `ScenarioRequest` / `Scenario` (types 20–22) — the host offers on
+        handshake, a peer that does not already hold the save asks, the bytes cross. Happens in
+        `Lobby`, so two games at the main menu can transfer before either enters combat
+  - [x] 9b: a peer decides by reading **its own** save through the same bridge call and comparing
+        digests locally, so a rejoining peer — which holds it by definition — transfers nothing
+  - [x] 9c: the receiver's guards, three deep — the save directory name is ours and never the
+        wire's, a character allowlist rejects anything that could escape a directory, and the file
+        names are narrowed to the two a save has. The digest is recomputed from the bytes that
+        arrived before anything is written, and the write stages and moves so an interrupted
+        transfer cannot leave half a save
+  - [x] 9d: `pbj.scenario-pull` for the cases the automatic path deliberately excludes; `pbj-peer`
+        gains `scenario` and `pull`, and a seventh selftest scenario drives the transfer and every
+        refusal over real sockets
+  - [ ] in-game: `pbj.combat-save` on the host, then a peer receives a byte-identical copy
+
 Next: **M8 — replay handoff.** Rather than streaming animation poses, hand the client the host's
 recorded replay and let the game's own playback system draw it, so a client sees the turn exactly
 as the host did. Designed in `docs/design/networking.md`; gated on stage 2, which is what makes
-the equipment and scenario match it depends on.
+the equipment and scenario match it depends on. M9 makes stage 2 easier to arrange but does not
+remove that dependency — it still takes two people and two games.
 
-**5f is not blocked after all.** M5 recorded two real instances as impossible because "there is
-no scenario transfer" — but M3a had already built one. `pbj.combat-save` writes a plain save
-directory; copy it to the other machine and `pbj.combat-load` puts both processes in the same
-combat with the same unit names, which is exactly the join key the snapshot and keyframe paths
-need.
+**5f was never blocked.** M5 recorded two real instances as impossible because "there is no
+scenario transfer" — but M3a had already built one, and M9 has now put it on the wire.
+
+**Writing `velocity` will not make mechs walk**, though `docs/design/networking.md` claimed it
+would until M9 corrected the record. `isMoving` comes from `CurrentMovementAction`
+(`MechAnimationSystem.cs:1278`), which only the simulation writes and a client therefore never has;
+and the system's non-reactive path is gated on `Time.timeScale > 0`, which is zero during planning
+whenever prediction is on. Sliding is the accepted state until M8.
 
 A trap paid for during M6, recorded so it is not re-paid: `TransformLinkSystem` looks like the
 ECS→view path for units, but `CombatEntity.ReplaceTransformLink` is never called anywhere in the

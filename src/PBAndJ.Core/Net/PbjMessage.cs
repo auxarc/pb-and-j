@@ -29,6 +29,9 @@ namespace PBAndJ.Core.Net
         Snapshot = 17,
         Rejoin = 18,
         Keyframes = 19,
+        ScenarioOffer = 20,
+        ScenarioRequest = 21,
+        Scenario = 22,
     }
 
     /// <summary>
@@ -583,6 +586,89 @@ namespace PBAndJ.Core.Net
         public float WindowEnd { get; }
 
         public IReadOnlyList<UnitTrack> Tracks { get; }
+    }
+
+    /// <summary>
+    /// "I have a combat save, and this is which one." Host to peer, in the
+    /// lobby.
+    /// </summary>
+    /// <remarks>
+    /// An offer rather than a push, for three reasons. A peer that already holds
+    /// this save skips ~124 KB, which matters most on a rejoin, when it holds it
+    /// by definition. A peer that is mid-combat should not have a save dropped on
+    /// it unasked. And accept/decline is the shape a real lobby needs anyway —
+    /// M9 is the first piece of one, not a one-off file copy.
+    /// </remarks>
+    public sealed class ScenarioOfferMessage : PbjMessage
+    {
+        public ScenarioOfferMessage(string? saveName, int totalBytes, string? digest)
+        {
+            SaveName = saveName;
+            TotalBytes = totalBytes;
+            Digest = digest;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.ScenarioOffer;
+
+        /// <summary>What the host calls this save. Informational — see <see cref="ScenarioPayload"/>.</summary>
+        public string? SaveName { get; }
+
+        /// <summary>Summed file size, so a peer can refuse before the bytes arrive.</summary>
+        public int TotalBytes { get; }
+
+        /// <summary>Identifies the contents, so a peer holding them can decline.</summary>
+        public string? Digest { get; }
+    }
+
+    /// <summary>"Send me that scenario." Peer to host.</summary>
+    /// <remarks>
+    /// Carries the digest it is answering so a host that has re-saved between
+    /// offer and request does not answer a stale question. A peer holding
+    /// nothing sends <c>null</c> rather than a placeholder, which cannot
+    /// accidentally match.
+    /// </remarks>
+    public sealed class ScenarioRequestMessage : PbjMessage
+    {
+        public ScenarioRequestMessage(string? digest)
+        {
+            Digest = digest;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.ScenarioRequest;
+
+        public string? Digest { get; }
+    }
+
+    /// <summary>The save itself. Host to peer, on request.</summary>
+    /// <remarks>
+    /// The one message whose payload becomes a file on the receiver's disk, so
+    /// the receiver validates it through <see cref="ScenarioPayload"/> before
+    /// writing anything. Per the standing rule, this message does not validate —
+    /// sessions do.
+    /// </remarks>
+    public sealed class ScenarioMessage : PbjMessage
+    {
+        private static readonly ScenarioFile[] NoFiles = new ScenarioFile[0];
+
+        public ScenarioMessage(string? saveName, string? digest, IReadOnlyList<ScenarioFile>? files)
+        {
+            SaveName = saveName;
+            Digest = digest;
+            Files = files ?? NoFiles;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.Scenario;
+
+        public string? SaveName { get; }
+
+        /// <summary>
+        /// The sender's digest of <see cref="Files"/>. Recomputed by the
+        /// receiver and compared before a byte is written, so a truncated or
+        /// substituted transfer is refused rather than loaded.
+        /// </summary>
+        public string? Digest { get; }
+
+        public IReadOnlyList<ScenarioFile> Files { get; }
     }
 
     /// <summary>Graceful goodbye from either side.</summary>

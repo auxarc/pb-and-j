@@ -333,6 +333,36 @@ namespace PBAndJ.Mod.Net
             return "[pb-and-j] local un-ready posted";
         }
 
+        /// <summary>
+        /// Asks the host for its combat save — M9's replacement for carrying the
+        /// folder across by hand.
+        /// </summary>
+        /// <remarks>
+        /// Not usually needed: a client in the lobby is offered the save on
+        /// handshake and asks for it automatically unless it already holds it.
+        /// This is the override for the cases that deliberately excludes — a save
+        /// deleted since, a host that re-saved mid-session, or simply wanting the
+        /// transfer now.
+        /// <para>
+        /// The save is written but never loaded. Entering it is
+        /// <c>pbj.combat-load</c>, by hand, because loading a save on a network
+        /// message would yank the player out of whatever they were doing.
+        /// </para>
+        /// </remarks>
+        public static string ScenarioPull()
+        {
+            if (runtime == null)
+            {
+                return NetLog.NoSession();
+            }
+            if (!(runtime.Session is ClientSession))
+            {
+                return "[pb-and-j] only a client pulls a scenario — the host is the one that has it";
+            }
+            runtime.Post(new LocalScenarioPullEvent());
+            return "[pb-and-j] asked the host for its combat save";
+        }
+
         // --- hooks used by the execution patches ---
 
         internal static bool HasSession => runtime != null && !killed;
@@ -490,6 +520,7 @@ namespace PBAndJ.Mod.Net
             Add(nameof(Unready), new Type[0], "pbj.unready");
             Add(nameof(Rejoin), new Type[0], "pbj.rejoin");
             Add(nameof(ReplayLast), new Type[0], "pbj.replay-last");
+            Add(nameof(ScenarioPull), new Type[0], "pbj.scenario-pull");
         }
 
         private static void Add(string methodName, Type[] parameters, string command)

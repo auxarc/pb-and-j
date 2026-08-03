@@ -93,6 +93,15 @@ namespace PBAndJ.Core.Net
         /// <c>Keyframes</c> did not bump it: a new message type leaves every
         /// existing layout untouched.
         /// </para>
+        /// <para>
+        /// M9's three scenario-transfer types did not bump it either, for the
+        /// same reason. That leaves a peer built before them liable to fault on
+        /// an unrecognised <c>ScenarioOffer</c> — but it cannot get that far:
+        /// <see cref="ModVersion"/> moved to 0.4.0 in the same change, and the
+        /// handshake refuses a peer whose mod build differs before any offer is
+        /// sent. The mod version is the real compatibility gate; this constant
+        /// guards <em>layout</em>, and no layout moved.
+        /// </para>
         /// </remarks>
         public const int Version = 3;
 
@@ -108,7 +117,7 @@ namespace PBAndJ.Core.Net
         /// mod/metadata.yaml; the Makefile refuses to build a distributable when
         /// they disagree, since that is the one file this constant cannot reach.
         /// </remarks>
-        public const string ModVersion = "0.3.0";
+        public const string ModVersion = "0.4.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.

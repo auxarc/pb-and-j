@@ -1,7 +1,10 @@
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using PBAndJ.Core.Net;
 using PhantomBrigade;
+using PhantomBrigade.Data;
 using UnityEngine;
 
 namespace PBAndJ.Mod.Net
@@ -426,6 +429,129 @@ namespace PBAndJ.Mod.Net
                 }
                 action.isDisposed = true;
             }
+        }
+
+        // --- scenario transfer (M9) ---
+        //
+        // The save directory the game itself writes: SavedGames/<name>/ holding
+        // content.zip and metadata.yaml. Resolved through the game's own
+        // DataManagerSave.GetSaveFolderPath rather than a composed path, so this
+        // works unchanged on Windows and under Proton, where the same logical
+        // folder lives somewhere quite different.
+
+        public ScenarioPayload ReadScenario()
+        {
+            try
+            {
+                var folder = SaveFolder();
+                if (folder == null || !Directory.Exists(folder))
+                {
+                    return ScenarioPayload.None;
+                }
+
+                var files = new List<ScenarioFile>();
+                foreach (var name in new[]
+                         {
+                             ScenarioPayload.ContentFileName,
+                             ScenarioPayload.MetadataFileName,
+                         })
+                {
+                    var path = Path.Combine(folder, name);
+                    if (File.Exists(path))
+                    {
+                        files.Add(new ScenarioFile(name, File.ReadAllBytes(path)));
+                    }
+                }
+
+                // A partial directory is handed over as-is rather than patched
+                // up here: ScenarioPayload.Inspect is the single place that
+                // decides what is sendable, and duplicating that judgement in the
+                // glue is how the two drift apart.
+                return files.Count == 0
+                    ? ScenarioPayload.None
+                    : new ScenarioPayload(SaveLoadGlue.SaveName, files);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[pb-and-j] could not read the combat save: "
+                    + e.GetType().Name + ": " + e.Message);
+                return ScenarioPayload.None;
+            }
+        }
+
+        public bool WriteScenario(ScenarioPayload payload)
+        {
+            var folder = SaveFolder();
+            if (folder == null)
+            {
+                Debug.LogWarning("[pb-and-j] the game did not report a save folder — cannot write the scenario");
+                return false;
+            }
+
+            // Staged beside the destination and moved into place, so an
+            // interrupted or failed write cannot leave a half-save for
+            // pbj.combat-load to find and try to enter.
+            var staging = folder + ".pbj-incoming";
+            try
+            {
+                if (Directory.Exists(staging))
+                {
+                    Directory.Delete(staging, true);
+                }
+                Directory.CreateDirectory(staging);
+
+                for (var i = 0; i < payload.Files.Count; i++)
+                {
+                    var file = payload.Files[i];
+                    // Belt and braces. The session already refused anything that
+                    // is not allowlisted, but this is the statement that actually
+                    // composes a path, so it is the one that has to be safe on
+                    // its own terms.
+                    if (!ScenarioPayload.IsAllowedName(file.Name))
+                    {
+                        Debug.LogWarning("[pb-and-j] refusing to write scenario file '"
+                            + file.Name + "' — not an allowed name");
+                        Directory.Delete(staging, true);
+                        return false;
+                    }
+                    File.WriteAllBytes(Path.Combine(staging, file.Name), file.Content);
+                }
+
+                if (Directory.Exists(folder))
+                {
+                    Directory.Delete(folder, true);
+                }
+                Directory.Move(staging, folder);
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[pb-and-j] could not write the combat save: "
+                    + e.GetType().Name + ": " + e.Message);
+                try
+                {
+                    if (Directory.Exists(staging))
+                    {
+                        Directory.Delete(staging, true);
+                    }
+                }
+                catch (Exception cleanup)
+                {
+                    Debug.LogWarning("[pb-and-j] could not clean up '" + staging + "': "
+                        + cleanup.GetType().Name);
+                }
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Where this save lives, from the game's own path resolution. The
+        /// directory name is always ours — never the one on the wire.
+        /// </summary>
+        private static string? SaveFolder()
+        {
+            var root = DataManagerSave.GetSaveFolderPath(SaveLocation.Normal);
+            return string.IsNullOrEmpty(root) ? null : Path.Combine(root, SaveLoadGlue.SaveName);
         }
     }
 }

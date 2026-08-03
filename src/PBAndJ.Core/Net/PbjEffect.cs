@@ -17,8 +17,9 @@ namespace PBAndJ.Core.Net
         ClearLocalOrders = 9,
         PlayKeyframes = 10,
         StopKeyframes = 11,
+        WriteScenario = 12,
 
-        // 12+ unallocated.
+        // 13+ unallocated.
     }
 
     /// <summary>
@@ -222,6 +223,30 @@ namespace PBAndJ.Core.Net
         public override PbjEffectKind Kind => PbjEffectKind.SetExecutionLock;
 
         public bool Locked { get; }
+    }
+
+    /// <summary>
+    /// Put a received combat save on disk, so <c>pbj.combat-load</c> can find it.
+    /// </summary>
+    /// <remarks>
+    /// The session has already checked the payload — allowlisted names, size
+    /// cap, digest agreement — before emitting this, because this is the one
+    /// effect that turns wire bytes into files. Deliberately does <em>not</em>
+    /// load the save: that would yank the player out of whatever they are doing
+    /// on a network message. The runtime logs the outcome rather than feeding it
+    /// back as an event; nothing in the protocol depends on the write, so there
+    /// is no state for a session to advance.
+    /// </remarks>
+    public sealed class WriteScenarioEffect : PbjEffect
+    {
+        public WriteScenarioEffect(ScenarioPayload payload)
+        {
+            Payload = payload ?? throw new ArgumentNullException(nameof(payload));
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.WriteScenario;
+
+        public ScenarioPayload Payload { get; }
     }
 
     /// <summary>Emit an already-composed line. Always built by <see cref="NetLog"/>.</summary>

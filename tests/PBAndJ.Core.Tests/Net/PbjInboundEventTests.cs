@@ -109,6 +109,12 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void LocalScenarioPull_HasItsKind()
+        {
+            Assert.Equal(PbjInboundEventKind.LocalScenarioPull, new LocalScenarioPullEvent().Kind);
+        }
+
+        [Fact]
         public void CombatEntered_HasItsKind()
         {
             Assert.Equal(PbjInboundEventKind.CombatEntered, new CombatEnteredEvent().Kind);

@@ -195,6 +195,28 @@ namespace PBAndJ.Core.Net
                     }
                     break;
 
+                case ScenarioOfferMessage offer:
+                    writer.WriteString(offer.SaveName);
+                    writer.WriteInt32(offer.TotalBytes);
+                    writer.WriteString(offer.Digest);
+                    break;
+
+                case ScenarioRequestMessage request:
+                    writer.WriteString(request.Digest);
+                    break;
+
+                case ScenarioMessage scenario:
+                    writer.WriteString(scenario.SaveName);
+                    writer.WriteString(scenario.Digest);
+                    writer.WriteInt32(scenario.Files.Count);
+                    for (var i = 0; i < scenario.Files.Count; i++)
+                    {
+                        var file = scenario.Files[i];
+                        writer.WriteString(file.Name);
+                        writer.WriteBytes(file.Content);
+                    }
+                    break;
+
                 case PingMessage ping:
                     writer.WriteInt32(ping.Nonce);
                     break;
@@ -369,6 +391,30 @@ namespace PBAndJ.Core.Net
                         tracks[i] = new UnitTrack(name, keys);
                     }
                     return new KeyframesMessage(turn, windowStart, windowEnd, tracks);
+                }
+
+                case PbjMessageType.ScenarioOffer:
+                {
+                    var saveName = reader.ReadString();
+                    var totalBytes = reader.ReadInt32();
+                    return new ScenarioOfferMessage(saveName, totalBytes, reader.ReadString());
+                }
+
+                case PbjMessageType.ScenarioRequest:
+                    return new ScenarioRequestMessage(reader.ReadString());
+
+                case PbjMessageType.Scenario:
+                {
+                    var saveName = reader.ReadString();
+                    var digest = reader.ReadString();
+                    var fileCount = ReadCount(reader, ScenarioPayload.MaxFiles, "scenario file");
+                    var files = new ScenarioFile[fileCount];
+                    for (var i = 0; i < fileCount; i++)
+                    {
+                        var name = reader.ReadString();
+                        files[i] = new ScenarioFile(name, reader.ReadBytes());
+                    }
+                    return new ScenarioMessage(saveName, digest, files);
                 }
 
                 case PbjMessageType.Ping:

@@ -285,6 +285,10 @@ namespace PBAndJ.Core.Net
                     HandleUnready(peerId, unready, effects);
                     break;
 
+                case ScenarioRequestMessage request:
+                    HandleScenarioRequest(peerId, request, effects);
+                    break;
+
                 case ByeMessage bye:
                     HandleDisconnect(peerId, Describe(bye.Reason), effects);
                     effects.Add(new DisconnectEffect(peerId, "bye"));
@@ -354,6 +358,7 @@ namespace PBAndJ.Core.Net
                 peerId, peer.Name, hello.ProtocolVersion, hello.ModVersion)));
             effects.Add(new BroadcastEffect(new PeerJoinedMessage(peerId, peer.Name), peerId));
             effects.Add(new LogEffect(NetLog.SessionSummary(ParticipantDescriptions())));
+            OfferScenario(peerId, effects);
 
             if (State == HostSessionState.Executing)
             {
@@ -486,6 +491,7 @@ namespace PBAndJ.Core.Net
             effects.Add(new LogEffect(NetLog.PeerRejoined(previous.PeerId, peerId, peer.Name)));
             effects.Add(new BroadcastEffect(new PeerJoinedMessage(peerId, peer.Name), peerId));
             effects.Add(new LogEffect(NetLog.SessionSummary(ParticipantDescriptions())));
+            OfferScenario(peerId, effects);
 
             if (State == HostSessionState.Executing)
             {
@@ -493,6 +499,82 @@ namespace PBAndJ.Core.Net
             }
 
             BroadcastAssignments(effects);
+        }
+
+        /// <summary>
+        /// Tells a freshly welcomed peer what combat save is available, if any.
+        /// </summary>
+        /// <remarks>
+        /// An offer, not the bytes: at ~124 KB a save is fifty times a snapshot,
+        /// and a peer that already holds it — which every rejoining peer does —
+        /// should pay nothing. The peer answers with
+        /// <see cref="ScenarioRequestMessage"/> only if it wants it.
+        /// <para>
+        /// Sent unconditionally on handshake rather than only outside combat. The
+        /// host does not know why a peer connected, and a peer mid-combat simply
+        /// declines; deciding for it here would break the late-join case this is
+        /// the groundwork for.
+        /// </para>
+        /// </remarks>
+        private void OfferScenario(int peerId, List<PbjEffect> effects)
+        {
+            var scenario = bridge.ReadScenario();
+            var rejection = scenario.Inspect();
+            if (rejection != ScenarioRejection.None)
+            {
+                // Silence for the ordinary "never saved" case; a warning for a
+                // save that exists but is unusable, which is otherwise invisible
+                // until someone wonders why the transfer never happened.
+                if (rejection != ScenarioRejection.NoFiles)
+                {
+                    effects.Add(new LogEffect(NetLog.ScenarioNotOffered(scenario.SaveName, rejection)));
+                }
+                return;
+            }
+
+            effects.Add(new SendEffect(peerId, new ScenarioOfferMessage(
+                scenario.SaveName, (int)scenario.TotalBytes, scenario.Digest)));
+            effects.Add(new LogEffect(NetLog.ScenarioOffered(
+                peerId, scenario.SaveName, (int)scenario.TotalBytes, scenario.Digest)));
+        }
+
+        /// <summary>
+        /// Serves the save on demand.
+        /// </summary>
+        /// <remarks>
+        /// Always sends what the host holds <em>now</em> rather than what the
+        /// request names. The digest on the request says which offer is being
+        /// answered, but a host that re-saved in between has nothing useful to do
+        /// with the old one, and the receiver validates against the digest
+        /// carried on the <see cref="ScenarioMessage"/> itself — so answering
+        /// with the current save is both simpler and always makes progress.
+        /// </remarks>
+        private void HandleScenarioRequest(int peerId, ScenarioRequestMessage request, List<PbjEffect> effects)
+        {
+            if (!registry.TryGet(peerId, out _))
+            {
+                return;
+            }
+
+            var scenario = bridge.ReadScenario();
+            var rejection = scenario.Inspect();
+            if (rejection != ScenarioRejection.None)
+            {
+                effects.Add(new LogEffect(rejection == ScenarioRejection.NoFiles
+                    ? NetLog.ScenarioUnavailable()
+                    : NetLog.ScenarioNotOffered(scenario.SaveName, rejection)));
+                return;
+            }
+
+            if (!scenario.Matches(request.Digest) && request.Digest != null)
+            {
+                effects.Add(new LogEffect(NetLog.ScenarioDigestMismatch(request.Digest, scenario.Digest)));
+            }
+
+            effects.Add(new SendEffect(peerId, new ScenarioMessage(
+                scenario.SaveName, scenario.Digest, scenario.Files)));
+            effects.Add(new LogEffect(NetLog.ScenarioSent(
+                peerId, scenario.SaveName, (int)scenario.TotalBytes)));
         }
 
         /// <summary>

@@ -217,6 +217,35 @@ namespace PBAndJ.Peer
             PlayedTurn = -1;
         }
 
+        /// <summary>
+        /// The combat save this peer "holds". In-memory rather than on disk: the
+        /// harness must be runnable anywhere, and the protocol does not care
+        /// where the bytes came from.
+        /// </summary>
+        public ScenarioPayload Scenario { get; set; } = ScenarioPayload.None;
+
+        /// <summary>Set false to rehearse a write that fails.</summary>
+        public bool ScenarioWriteSucceeds { get; set; } = true;
+
+        /// <summary>Every scenario written, in order, for the self-test to check.</summary>
+        public List<ScenarioPayload> WrittenScenarios { get; } = new List<ScenarioPayload>();
+
+        public ScenarioPayload ReadScenario() => Scenario;
+
+        public bool WriteScenario(ScenarioPayload payload)
+        {
+            if (!ScenarioWriteSucceeds)
+            {
+                return false;
+            }
+            WrittenScenarios.Add(payload);
+            // A real client's next ReadScenario would find what it just wrote, so
+            // the harness's must too — that equality is what makes a second offer
+            // decline rather than transfer all over again.
+            Scenario = payload;
+            return true;
+        }
+
         private UnitState[] ToUnitStates()
         {
             var states = new UnitState[units.Count];

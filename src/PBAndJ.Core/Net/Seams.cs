@@ -185,5 +185,36 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Abandons any playback in progress. Client only.</summary>
         void StopKeyframes();
+
+        /// <summary>
+        /// The combat save this machine holds, or
+        /// <see cref="ScenarioPayload.None"/> if there is none.
+        /// </summary>
+        /// <remarks>
+        /// Read by <em>both</em> sides, which is what makes the offer cheap: a
+        /// host reads it to know what it can offer, and a client reads its own to
+        /// know whether the offer is worth accepting. A peer rejoining a session
+        /// it already transferred from therefore costs nothing.
+        /// <para>
+        /// Never throws for the ordinary "no save yet" case — a host that has
+        /// never run <c>pbj.combat-save</c> is not in error, it simply has
+        /// nothing to offer.
+        /// </para>
+        /// </remarks>
+        ScenarioPayload ReadScenario();
+
+        /// <summary>
+        /// Writes a received save to disk, replacing any of the same name.
+        /// Client only. False if it could not be written.
+        /// </summary>
+        /// <remarks>
+        /// The implementation takes the save <em>directory</em> name from its own
+        /// constant and must treat <see cref="ScenarioPayload.SaveName"/> as
+        /// informational — see the guards on <see cref="ScenarioPayload"/>. It
+        /// must also stage and move rather than write in place, so an interrupted
+        /// transfer cannot leave a half-written save for <c>pbj.combat-load</c> to
+        /// find.
+        /// </remarks>
+        bool WriteScenario(ScenarioPayload payload);
     }
 }

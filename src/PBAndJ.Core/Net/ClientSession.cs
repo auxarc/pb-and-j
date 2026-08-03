@@ -202,6 +202,10 @@ namespace PBAndJ.Core.Net
                     HandleLocalUnready(effects);
                     break;
 
+                case LocalScenarioPullEvent:
+                    HandleLocalScenarioPull(effects);
+                    break;
+
                 case OrderAppliedEvent:
                     // Clients never apply remote orders.
                     break;
@@ -350,6 +354,14 @@ namespace PBAndJ.Core.Net
                     HandleKeyframes(keyframes, effects);
                     break;
 
+                case ScenarioOfferMessage offer:
+                    HandleScenarioOffer(offer, effects);
+                    break;
+
+                case ScenarioMessage scenario:
+                    HandleScenario(scenario, effects);
+                    break;
+
                 case ByeMessage bye:
                     effects.Add(new LogEffect(NetLog.PeerLeft(
                         PbjPeerRegistry.HostPeerId, HostName, Describe(bye.Reason))));
@@ -400,11 +412,62 @@ namespace PBAndJ.Core.Net
                 return;
             }
 
-            var orders = bridge.CaptureLocalOrders();
+            var captured = bridge.CaptureLocalOrders();
+            var orders = OnlyOursOf(captured);
+
             submittedThisTurn = true;
             effects.Add(new SendEffect(HostConnectionId, new ReadyMessage(Turn, orders)));
             effects.Add(new LogEffect(NetLog.ReadyReceived(PeerId, playerName, Turn, orders.Count)));
+            if (orders.Count != captured.Count)
+            {
+                effects.Add(new LogEffect(NetLog.OrdersNotOurs(captured.Count - orders.Count)));
+            }
             effects.Add(new SetExecutionLockEffect(true));
+        }
+
+        /// <summary>
+        /// Narrows a captured batch to the units this peer was dealt.
+        /// </summary>
+        /// <remarks>
+        /// A client's local ECS holds the <em>enemy AI's</em> planned actions as
+        /// well as the player's, and on a client they do not carry the
+        /// <c>AIAction</c> tag the bridge filters on — whatever applies it runs at
+        /// execution time, which a client never reaches. The first two-game turn
+        /// therefore submitted 13 enemy orders and 3 of the host's alongside its
+        /// own 2. All were correctly rejected, but they waste the wire, spend the
+        /// per-message order cap and bury genuine rejections in noise.
+        /// <para>
+        /// This is a <b>courtesy, not an enforcement point</b>. The host checks
+        /// ownership on every order regardless, and that check is what makes the
+        /// rule true. So when this peer has not been told what it owns — no
+        /// <c>Assignments</c> yet — it sends everything and defers, rather than
+        /// silently withholding a real order on incomplete information.
+        /// </para>
+        /// </remarks>
+        private IReadOnlyList<OrderPayload> OnlyOursOf(IReadOnlyList<OrderPayload> captured)
+        {
+            if (OwnedUnits.Count == 0)
+            {
+                return captured;
+            }
+
+            var ours = new List<OrderPayload>(captured.Count);
+            for (var i = 0; i < captured.Count; i++)
+            {
+                var order = captured[i];
+                for (var u = 0; u < OwnedUnits.Count; u++)
+                {
+                    // Ordinal: nameInternal is the join key every unit is
+                    // addressed by, and a loose match here would turn a clean
+                    // rejection into a confusing one.
+                    if (string.Equals(order.OwnerName, OwnedUnits[u], StringComparison.Ordinal))
+                    {
+                        ours.Add(order);
+                        break;
+                    }
+                }
+            }
+            return ours;
         }
 
         /// <summary>Gives up on a host that has gone quiet.</summary>
@@ -512,6 +575,92 @@ namespace PBAndJ.Core.Net
                 keyframes.WindowStart, keyframes.WindowEnd)));
             effects.Add(new PlayKeyframesEffect(keyframes.Turn, new KeyframeCapture(
                 keyframes.WindowStart, keyframes.WindowEnd, keyframes.Tracks)));
+        }
+
+        /// <summary>
+        /// Decides whether the host's save is worth ~124 KB of wire.
+        /// </summary>
+        /// <remarks>
+        /// Two conditions, both deliberately conservative, with
+        /// <c>pbj.scenario-pull</c> as the override for everything they exclude:
+        /// <list type="bullet">
+        /// <item><b>Lobby only.</b> A client already in combat is in the host's
+        /// combat; pulling a save down mid-fight is at best wasted bandwidth and
+        /// at worst an invitation to load it and lose the session.</item>
+        /// <item><b>Only if we do not already hold it.</b> The client reads its
+        /// own save through the same bridge call the host reads its own with, so
+        /// this is a local digest comparison and no bytes move. This is what makes
+        /// a reconnect free: a rejoining peer holds the save by definition.</item>
+        /// </list>
+        /// </remarks>
+        private void HandleScenarioOffer(ScenarioOfferMessage offer, List<PbjEffect> effects)
+        {
+            if (State != ClientSessionState.Lobby)
+            {
+                return;
+            }
+
+            var local = bridge.ReadScenario();
+            if (local.Inspect() == ScenarioRejection.None && local.Matches(offer.Digest))
+            {
+                effects.Add(new LogEffect(NetLog.ScenarioAlreadyHeld(offer.Digest)));
+                return;
+            }
+
+            effects.Add(new SendEffect(HostConnectionId, new ScenarioRequestMessage(offer.Digest)));
+            effects.Add(new LogEffect(NetLog.ScenarioRequested(offer.Digest)));
+        }
+
+        /// <summary>Asks for the host's save regardless of what we hold.</summary>
+        private void HandleLocalScenarioPull(List<PbjEffect> effects)
+        {
+            if (State != ClientSessionState.Lobby && State != ClientSessionState.Planning)
+            {
+                return;
+            }
+
+            // No digest: this is "send me whatever you have now", which is the
+            // whole point of asking by hand.
+            effects.Add(new SendEffect(HostConnectionId, new ScenarioRequestMessage(null)));
+            effects.Add(new LogEffect(NetLog.ScenarioRequested(null)));
+        }
+
+        /// <summary>
+        /// Checks a received save and puts it on disk.
+        /// </summary>
+        /// <remarks>
+        /// The only place in the mod where bytes off a socket become files, so
+        /// nothing is taken on trust. The structural checks run first — file
+        /// count, total size, allowlisted names — and the digest is recomputed
+        /// from the bytes that actually arrived and compared with the one the
+        /// sender claimed, so a truncated or substituted transfer is refused
+        /// rather than written and then loaded.
+        /// <para>
+        /// Refusing is not a fault. A peer that sends a bad scenario has not
+        /// broken the session, and dropping the connection over it would turn a
+        /// recoverable annoyance into a lost game.
+        /// </para>
+        /// </remarks>
+        private void HandleScenario(ScenarioMessage scenario, List<PbjEffect> effects)
+        {
+            var payload = new ScenarioPayload(scenario.SaveName, scenario.Files);
+
+            var rejection = payload.Inspect();
+            if (rejection != ScenarioRejection.None)
+            {
+                effects.Add(new LogEffect(NetLog.ScenarioRefused(scenario.SaveName, rejection)));
+                return;
+            }
+
+            if (!payload.Matches(scenario.Digest))
+            {
+                effects.Add(new LogEffect(NetLog.ScenarioDigestMismatch(scenario.Digest, payload.Digest)));
+                return;
+            }
+
+            effects.Add(new LogEffect(NetLog.ScenarioReceived(
+                scenario.SaveName, payload.Files.Count, payload.TotalBytes)));
+            effects.Add(new WriteScenarioEffect(payload));
         }
 
         private void HandleSnapshotApplied(SnapshotAppliedEvent applied, List<PbjEffect> effects)

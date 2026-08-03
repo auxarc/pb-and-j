@@ -136,6 +136,26 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void WriteScenario_RetainsThePayload()
+        {
+            var payload = new ScenarioPayload("pbj_combat_test", new[]
+            {
+                new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 1, 2 }),
+            });
+            var effect = new WriteScenarioEffect(payload);
+
+            Assert.Equal(PbjEffectKind.WriteScenario, effect.Kind);
+            Assert.Same(payload, effect.Payload);
+        }
+
+        [Fact]
+        public void WriteScenario_WithNullPayload_Throws()
+        {
+            var ex = Assert.Throws<ArgumentNullException>(() => new WriteScenarioEffect(null!));
+            Assert.Equal("payload", ex.ParamName);
+        }
+
+        [Fact]
         public void CommitTurn_RetainsTurn()
         {
             var effect = new CommitTurnEffect(7);

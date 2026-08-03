@@ -192,6 +192,18 @@ namespace PBAndJ.Core.Net
                 peerId, Describe(name), turn, orderCount, Plural(orderCount));
         }
 
+        /// <summary>
+        /// What the Ready batch dropped before sending. Never silent: this filter
+        /// is the only thing between a genuine order and never being submitted,
+        /// so the count has to be visible when it is wrong.
+        /// </summary>
+        public static string OrdersNotOurs(int dropped)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "held back {0} order{1} for units that are not ours", dropped, Plural(dropped));
+        }
+
         public static string BarrierWaiting(int readyCount, int participantCount)
         {
             return Prefix + string.Format(
@@ -420,6 +432,93 @@ namespace PBAndJ.Core.Net
                 CultureInfo.InvariantCulture,
                 "keyframes clamped: {0} tracks captured, only {1} fit; {2} track(s) thinned",
                 captured, cap, thinned);
+        }
+
+        // --- scenario transfer (M9) ---
+
+        public static string ScenarioOffered(int peerId, string? saveName, int totalBytes, string? digest)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "offered scenario '{0}' ({1:N0} bytes, {2}) to peer #{3}",
+                Describe(saveName), totalBytes, Describe(digest), peerId);
+        }
+
+        /// <summary>
+        /// The host has a save directory but it is not something we would send.
+        /// A warning, not silence: the alternative is a session where the
+        /// transfer never happens and nobody can say why.
+        /// </summary>
+        public static string ScenarioNotOffered(string? saveName, ScenarioRejection reason)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "not offering scenario '{0}': {1}", Describe(saveName), reason);
+        }
+
+        /// <summary>
+        /// A null digest is the manual pull — "whatever you have now" — and says
+        /// so rather than rendering as a placeholder nobody can interpret.
+        /// </summary>
+        public static string ScenarioRequested(string? digest)
+        {
+            return Prefix + (digest == null
+                ? "requesting the host's current scenario"
+                : "requesting the host's scenario (" + digest + ")");
+        }
+
+        public static string ScenarioAlreadyHeld(string? digest)
+        {
+            return Prefix + "scenario " + Describe(digest) + " is already on disk — nothing to transfer";
+        }
+
+        public static string ScenarioSent(int peerId, string? saveName, int totalBytes)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "sent scenario '{0}' ({1:N0} bytes) to peer #{2}",
+                Describe(saveName), totalBytes, peerId);
+        }
+
+        public static string ScenarioReceived(string? saveName, int fileCount, long totalBytes)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "scenario '{0}' received | {1} file{2}, {3:N0} bytes",
+                Describe(saveName), fileCount, Plural(fileCount), totalBytes);
+        }
+
+        /// <summary>
+        /// Refused before a byte reached the disk. Names the reason because this
+        /// is the one path where a peer's bytes were about to become files.
+        /// </summary>
+        public static string ScenarioRefused(string? saveName, ScenarioRejection reason)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "refused scenario '{0}': {1}", Describe(saveName), reason);
+        }
+
+        public static string ScenarioDigestMismatch(string? claimed, string? actual)
+        {
+            return Prefix + "refused scenario: sender claimed " + Describe(claimed)
+                + " but the bytes digest to " + Describe(actual);
+        }
+
+        public static string ScenarioWritten(string? saveName)
+        {
+            return Prefix + "scenario written to '" + Describe(saveName)
+                + "' — run pbj.combat-load to enter it";
+        }
+
+        public static string ScenarioWriteFailed(string? saveName)
+        {
+            return Prefix + "could not write scenario to '" + Describe(saveName) + "' — see the log above";
+        }
+
+        public static string ScenarioUnavailable()
+        {
+            return Prefix + "no combat save to send — run pbj.combat-save in a combat first";
         }
 
         // --- keepalive ---

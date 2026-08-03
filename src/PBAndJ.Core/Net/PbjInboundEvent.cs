@@ -24,6 +24,7 @@ namespace PBAndJ.Core.Net
         CombatEntered = 101,
         CombatExited = 102,
         Tick = 103,
+        LocalScenarioPull = 104,
     }
 
     /// <summary>
@@ -226,6 +227,21 @@ namespace PBAndJ.Core.Net
     /// Only the host acts on this. A client's local combat state is not
     /// authoritative — it learns combat state from the host's messages.
     /// </remarks>
+    /// <summary>
+    /// The local player asked for the host's combat save — <c>pbj.scenario-pull</c>.
+    /// </summary>
+    /// <remarks>
+    /// Exists because the automatic path is deliberately conservative: a client
+    /// only accepts an offer when it is in the lobby and does not already hold
+    /// the save. This is the override for everything else — a save that was
+    /// deleted, a host that re-saved mid-session, or simply wanting the transfer
+    /// to happen now.
+    /// </remarks>
+    public sealed class LocalScenarioPullEvent : PbjInboundEvent
+    {
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalScenarioPull;
+    }
+
     public sealed class CombatEnteredEvent : PbjInboundEvent
     {
         public override PbjInboundEventKind Kind => PbjInboundEventKind.CombatEntered;

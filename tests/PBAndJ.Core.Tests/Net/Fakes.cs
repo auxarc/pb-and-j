@@ -92,6 +92,23 @@ namespace PBAndJ.Core.Tests.Net
         public void PlayKeyframes(int turn, KeyframeCapture capture) => Played.Add((turn, capture));
 
         public void StopKeyframes() => StopKeyframesCalls++;
+
+        /// <summary>The local combat save, as ReadScenario hands it back.</summary>
+        public ScenarioPayload Scenario { get; set; } = ScenarioPayload.None;
+
+        /// <summary>Every scenario written to disk, in order.</summary>
+        public List<ScenarioPayload> WrittenScenarios { get; } = new List<ScenarioPayload>();
+
+        /// <summary>Simulates the write failing — no space, no permission.</summary>
+        public bool ScenarioWriteSucceeds { get; set; } = true;
+
+        public ScenarioPayload ReadScenario() => Scenario;
+
+        public bool WriteScenario(ScenarioPayload payload)
+        {
+            WrittenScenarios.Add(payload);
+            return ScenarioWriteSucceeds;
+        }
     }
 
     /// <summary>Records everything sent, without a socket.</summary>

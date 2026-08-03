@@ -36,7 +36,7 @@ netcode and we would waste the evening chasing it.
 mod does. It proves the network path — your router, my router, the latency, the
 keepalives — without either of us launching the game.
 
-1. Unzip `pbj-peer-win-x64-v0.3.0.zip` anywhere. It is one big `.exe` (~71 MB
+1. Unzip `pbj-peer-win-x64-v0.4.0.zip` anywhere. It is one big `.exe` (~71 MB
    unzipped); nothing to install, no .NET needed. **You do not need Phantom
    Brigade for this stage at all.**
 
@@ -87,6 +87,8 @@ commands at the prompt:
 | `unready` | Take them back and re-plan |
 | `snapshot` | Where everything ended up after the turn ran |
 | `keyframes` | How everything *moved* during the turn |
+| `scenario` | The combat save my game sent you, if it sent one |
+| `pull` | Ask for that save again |
 | `quit` | Leave |
 
 The turn runs when we are **both** ready. Then `snapshot` and `keyframes` should
@@ -104,12 +106,12 @@ show your mech somewhere new.
 
 ## Stage 2 — the real game
 
-Only after stage 1 works. **I will send you `pb-and-j-mod-v0.3.0.zip` then** —
+Only after stage 1 works. **I will send you `pb-and-j-mod-v0.4.0.zip` then** —
 you do not need it yet.
 
 ### Install the mod
 
-1. Unzip `pb-and-j-mod-v0.3.0.zip`.
+1. Unzip `pb-and-j-mod-v0.4.0.zip`.
 2. Drop the whole `pb-and-j` folder into your mods folder:
 
    **Windows:** `%LOCALAPPDATA%\PhantomBrigade\Mods\`
@@ -124,31 +126,44 @@ you do not need it yet.
 3. Launch the game. Nothing visible changes — the mod does nothing at all until
    you start a session.
 
-### Load the same combat
+### Connect, from the main menu
 
-The two games have to be in **the same fight**, and there is no lobby yet, so we
-transfer it as a save file.
+Do this **before** either of us starts a fight — the combat itself comes down the
+same connection.
 
-1. I send you a folder called `pbj_combat_test`.
-2. Drop it whole into:
+1. Open the dev console: **pause → F1 → type `dev`**.
+2. Run, with the details I sent:
 
-   **Windows:** `%LOCALAPPDATA%\PhantomBrigade\SavedGames\`
-   **Proton:** `…\AppData\Local\PhantomBrigade\SavedGames\`
+   ```
+   pbj.join <my-address> 27600 <passphrase>
+   ```
 
-3. Open the dev console: **pause → F1 → type `dev`**.
-4. Run `pbj.combat-load`.
+`pbj.net-status` should say `CLIENT` and name my machine.
+
+### Get the same combat
+
+The two games have to be in **the same fight**. My game sends you the save
+automatically the moment we connect — you should see something like:
+
+```
+[pb-and-j] scenario 'pbj_combat_test' received | 2 files, 119,546 bytes
+[pb-and-j] scenario written to 'pbj_combat_test' — run pbj.combat-load to enter it
+```
+
+Then run:
+
+```
+pbj.combat-load
+```
 
 You should land in the same combat I am in, with the same mechs.
 
-### Connect
+If the transfer did not happen — nothing in the log, or you had an older copy —
+run `pbj.scenario-pull` and it will fetch it again. If that says *"no combat save
+to send"*, that is my end: I have not run `pbj.combat-save` yet. Tell me.
 
-In your console, with the details I sent:
-
-```
-pbj.join <my-address> 27600 <passphrase>
-```
-
-Then `pbj.net-status` should say `CLIENT` and name my machine.
+It does **not** load the save for you on its own, deliberately — being yanked out
+of a menu by a network message would be worse than typing one command.
 
 ### Playing a turn
 

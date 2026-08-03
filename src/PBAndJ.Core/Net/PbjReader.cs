@@ -10,7 +10,7 @@ namespace PBAndJ.Core.Net
     /// </summary>
     public sealed class PbjReader
     {
-        private const int NullStringLength = -1;
+        private const int NullLength = -1;
 
         private readonly byte[] buffer;
         private int position;
@@ -58,7 +58,7 @@ namespace PBAndJ.Core.Net
         public string? ReadString()
         {
             var length = ReadInt32();
-            if (length == NullStringLength)
+            if (length == NullLength)
             {
                 return null;
             }
@@ -74,6 +74,39 @@ namespace PBAndJ.Core.Net
 
             Require(length);
             var value = Encoding.UTF8.GetString(buffer, position, length);
+            position += length;
+            return value;
+        }
+
+        /// <summary>
+        /// Reads an opaque blob written by <see cref="PbjWriter.WriteBytes"/>.
+        /// </summary>
+        /// <remarks>
+        /// Always a fresh array, never a window onto the frame buffer. A
+        /// scenario blob is written to disk long after the frame that carried it
+        /// has been recycled, so aliasing would corrupt silently rather than
+        /// loudly.
+        /// </remarks>
+        public byte[]? ReadBytes()
+        {
+            var length = ReadInt32();
+            if (length == NullLength)
+            {
+                return null;
+            }
+            if (length < 0)
+            {
+                throw new PbjProtocolException("Blob length " + length + " is negative.");
+            }
+            if (length > PbjWriter.MaxBytesLength)
+            {
+                throw new PbjProtocolException(
+                    "Blob length " + length + " exceeds the maximum of " + PbjWriter.MaxBytesLength + ".");
+            }
+
+            Require(length);
+            var value = new byte[length];
+            Array.Copy(buffer, position, value, 0, length);
             position += length;
             return value;
         }

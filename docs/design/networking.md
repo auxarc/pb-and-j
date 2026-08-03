@@ -48,8 +48,10 @@ Peer ids: host is always `0`; clients get monotonically increasing ids from `1`,
 within a session**. That invariant still holds after M5e — see [Reconnect](#reconnect-m5e), which
 works around it rather than amending it.
 
-Mid-combat join is not supported in M4–M6. Late join would ride the combat-save transfer path
-(`docs/notes/save-and-replay.md` establishes that a planning-phase save is near-lossless).
+Mid-combat join is not supported in M4–M9. Late join would ride the combat-save transfer path
+(`docs/notes/save-and-replay.md` establishes that a planning-phase save is near-lossless) — which
+M9 has now built as [Scenario transfer](#scenario-transfer-m9), so what remains is the join, not the
+transport.
 
 ## Combat lifecycle
 
@@ -475,17 +477,42 @@ that is ~44 KB *per unit per turn*, so a 30-unit combat lands near 1.3 MB: **ove
 is what `SetReplayActive`'s puppet-sleeping does — the machinery M6 deliberately avoided because it
 is gated behind `IsReplayAllowed()`.
 
-**Driving the animator locally is nearly free.** `MechAnimationSystem.UpdateUnit` is `public static`,
-and the walk blend it feeds — `currentMovementSpeed`, `currentMovementSpeedFlattened`,
-`speedNormalized`, `isMoving` — reads `actor.velocity.v`, an ECS component
-(`MechAnimationSystem.cs:1322-1334`). A client can compute velocity exactly, as the derivative of
-the transform track it is already receiving, and write that one component. Zero extra bytes on the
-wire, and velocity is not part of `UnitState`, so it cannot disturb the digest.
+**Writing `velocity` does not work, and this section used to say it did.** The claim was that
+`MechAnimationSystem`'s walk blend — `currentMovementSpeed`, `currentMovementSpeedFlattened`,
+`speedNormalized`, `isMoving` — reads `actor.velocity.v`, so a client could derive velocity from the
+transform track it already receives, write that one ECS component, and get a walk for zero extra
+bytes. An adversarial review, re-verified by hand against decompiled 2.2.2-b8339, refuted it on two
+counts:
 
-The caveat is that `UpdateUnit` is a ~200-line method that also handles melee, navigation links, IK
-weights and aim angles, reading action entities a client does not have. Whether it can be called
-safely on a client, or whether only the handful of animator parameters should be set directly, needs
-checking before this is promised.
+- **`isMoving` is not derived from velocity.** It is
+  `actor.hasCurrentMovementAction && !actor.hasCurrentMeleeAction` (`MechAnimationSystem.cs:1278`),
+  OR-ed with melee-follow logic, and written unconditionally at `:1319`. `CurrentMovementAction` is
+  written *only* by `ActionPlaybackSystem.cs:2015`, during simulation — which a client never runs.
+  Velocity feeds the *speed floats* alone (`:1322-1334`), so writing it leaves the mech in idle with
+  a non-zero speed parameter: the slide we already have. The movement VFX confirm the gating — they
+  fire on the `isMoving` transition (`:2130-2141`), not on speed.
+- **The system does not run when we would need it to.** Its non-reactive path is gated on
+  `Time.timeScale > 0f` (`MechAnimationSystem.cs:130-133`), and `SimulationTimeSystem.cs:132` sets
+  `Time.timeScale = predictionEnabled ? 0f : timeScaleMain` on *every* Simulating→false transition.
+  With prediction on — the normal case — the host in post-turn planning sits at `timeScale == 0`, so
+  `UpdateAnimationsForAll` never executes and `Time.deltaTime` is zero regardless. **`pbj.replay-last`
+  on the host, the only single-instance gate M6 has, cannot display animation at all.**
+
+What *did* hold, and is worth keeping: `Velocity`/`VelocityDirection` are never a reactive-collector
+trigger — only group filters, and `CombatCrashingSystem` (`:63`) additionally needs the `Crashing`
+flag and triggers on `SimulationTime` (`:76-79`) — so writing them could not have woken the sim. And
+`mechCollector`'s membership requirements (`:57`) are satisfied on a client, so `UpdateUnit`'s
+unguarded reads would not have thrown. The idea was safe. It simply would not have worked.
+
+**The rejected middle option, recorded so it is not re-derived a fourth time.** An animator-only
+variant does work: skip the ECS entirely and write `isMoving`, `currentMovementSpeed*`,
+`speedNormalized`, `runningParallel = local.z × |v|` and `runningLateral = −local.x × |v|`
+(`:2107-2108`, `:2165-2166`) straight onto `view.animator`, with `view.pauseUpdates = true` so
+`UpdateUnit` does not fight it and an explicit `view.animator.Update(dt)` so `timeScale == 0` stops
+mattering. It is host-verifiable today and it preserves M6's view-only invariant. It was declined
+because M8 deletes all of it — `PrepareUnitForReplay` disables the animator outright
+(`CombatReplayHelper.cs:839`) — and because a third code-complete-but-unverified milestone is not
+what this project needs. **Sliding is the accepted degraded state until M8.**
 
 ### Replay handoff (M8) — the intended answer to "why does it slide"
 
@@ -584,7 +611,7 @@ without the clock:
 |---|---|
 | Execution HUD state | `input.ReplaceCombatUIMode(CombatUIModes.Simulating)` — a component write |
 | Unit motion | already shipped: M6 keyframes onto `combatView.view.transform` |
-| Unit animation | `MechAnimationSystem` **already runs during planning** — its non-reactive path calls `UpdateAnimationsForAll(Time.deltaTime)` under `!combat.Simulating` (`MechAnimationSystem.cs:123`). It only needs `velocity` written to animate |
+| Unit animation | The recorded bone poses, via `ApplyTime`. **Not the animator** — `PrepareUnitForReplay` → `SleepPuppet` sets `view.animator.enabled = false` (`CombatReplayHelper.cs:839`), so animator parameters are dead here. An earlier version of this row claimed `MechAnimationSystem` runs during planning and "only needs `velocity` written"; both halves are wrong — see the section above |
 | Timeline scrubbing | `CIViewCombatTimeline.ins.OnTimeChange(t)` — imperative, callable with the playback cursor |
 | Simulation-time shader globals | `Shader.SetGlobalFloat`/`SetGlobalVector` directly |
 | Projectiles, beams, VFX | the replay tracks — nothing else can supply these without the sim |
@@ -613,6 +640,21 @@ puppets must be woken again afterwards, `activeLast` stays false so the game doe
 in replay mode, and `CombatReplayHelper.Update` will not be driving `previewTime` for us — our own
 playback cursor does. Those are worth listing in the implementation, not discovering.
 
+**And a fourth, which vanilla never needs: set `view.pauseUpdates = true` per tracked unit.**
+`SleepPuppet` disables `view.animator` and deactivates the *FBBIK* GameObject
+(`CombatReplayHelper.cs:839-840`), but the animator's own GameObject stays active — and
+`LateUpdateUnit` is gated only on `view.pauseUpdates` and `animator.gameObject.activeInHierarchy`
+(`MechAnimationSystem.cs:164`), then runs **manual FinalIK solves**: `view.ikAimTorso.solver.Update()`
+(`:591`) and `view.ikFullBodyIK.solver.Update()` (`:653`, `:994`). Those write bones regardless of
+`animator.enabled`.
+
+Vanilla replay never hits this because it always runs at `Time.timeScale == 0`, where the calling
+path is gated off entirely (`:130-133`). **A client's `Time.timeScale` during playback is unknown** —
+it never passes through the Simulating→false branch that sets it (`SimulationTimeSystem.cs:132`), so
+it keeps whatever combat start or the save restore left. If that is non-zero, `LateUpdateUnit` fights
+`ApplyTime`'s bone writes every frame, and the symptom would be twitching limbs that look like a
+netcode bug. `pauseUpdates` is checked at `:164` and `:1254` and shuts both paths off.
+
 #### What a client session should feel like
 
 Two coherent answers, and they should be chosen rather than inherited:
@@ -633,6 +675,10 @@ None of this is worth building before stage 2. The gate analysis, the equipment 
 joint remapping tractable, and the shared scenario all rest on both machines having loaded the same
 save. Prove stage 2 with M6's sliding playback first; it is the precondition, not a detour.
 
+M9 removes the manual step that made stage 2 awkward to arrange — see
+[Scenario transfer (M9)](#scenario-transfer-m9) — but it does not remove the dependency. Stage 2 is
+two people running two games; that still has to actually happen.
+
 #### Still open
 
 - A client whose entity set differs from the host's is the same structural mismatch that limits
@@ -643,9 +689,15 @@ save. Prove stage 2 with M6's sliding playback first; it is the precondition, no
   `OnExecutionStart` roster, so they have no track and simply appear at their corrected position.
 - `keyframeReveal`/`keyframeHidden` are not carried, so a unit revealed mid-turn is visible for the
   whole playback.
+- **A client's `Time.timeScale` during playback has never been observed.** It gates whether
+  `MechAnimationSystem` runs at all (`:130-133`) and therefore whether the `pauseUpdates` hazard
+  above is live; a client never executes the branch that sets it. Worth logging on the first M8 run
+  rather than reasoning about further.
 
 Allocated by M6: `PbjMessageType.Keyframes = 19`, `PbjEffectKind.PlayKeyframes = 10` and
-`StopKeyframes = 11`. `PbjMessageType` 20+ and `PbjEffectKind` 12+ remain unallocated.
+`StopKeyframes = 11`. By M9: `PbjMessageType.ScenarioOffer = 20`, `ScenarioRequest = 21`,
+`Scenario = 22`; `PbjEffectKind.WriteScenario = 12`; `PbjInboundEventKind.LocalScenarioPull = 104`.
+`PbjMessageType` 23+ and `PbjEffectKind` 13+ remain unallocated.
 
 ## Unit ownership and assignment
 
@@ -1027,8 +1079,95 @@ and both processes hold the same combat with the same `persistent.nameInternal` 
 exactly the join key snapshot correction and keyframe playback are built on. M3a verified the
 round-trip at 37/37 planned actions restored, diff MATCH.
 
-It is manual and it transfers a whole campaign save, so both players are playing the host's
-campaign. For a test session that is fine. It is not mid-combat join, which remains unsupported.
+It transfers a whole campaign save, so both players are playing the host's campaign. For a test
+session that is fine. It is not mid-combat join, which remains unsupported. It **was** manual —
+M9 moved it onto the wire.
+
+## Scenario transfer (M9)
+
+The save no longer travels by hand. A host that has run `pbj.combat-save` offers it to every peer
+that handshakes; a peer that wants it asks; the bytes cross. Both machines end up holding a
+byte-identical save, which is what makes their `persistent.nameInternal` values agree — the join key
+everything else is built on.
+
+This happens in `Lobby`, which both state machines already had and neither used for anything. Two
+games sitting at the main menu can `pbj.host` / `pbj.join`, transfer the scenario, and both
+`pbj.combat-load` into the same combat. That is stage 2 with the USB stick removed.
+
+### Offer, request, send — not a push
+
+```
+Host   → ScenarioOffer  { saveName, totalBytes, digest }   on handshake, if it has a save
+Client → ScenarioRequest{ digest }                          only if it wants it
+Host   → Scenario       { saveName, digest, files[] }       the bytes
+```
+
+Three types rather than one, for three separate reasons. At ~124 KB a save is fifty times a
+snapshot, and a peer that already holds it should pay nothing — which **every rejoining peer** does,
+since it transferred on its first connection. A peer mid-combat should not have a save dropped on it
+unasked. And accept/decline is the shape a real lobby needs anyway: M9 is the first piece of one,
+not a one-off file copy.
+
+The client decides by reading **its own** save through the same `IPbjGameBridge.ReadScenario` the
+host reads its own with, and comparing digests locally. No bytes move to find out.
+
+Its two conditions are deliberately conservative — lobby only, and only if it does not already hold
+the save — with `pbj.scenario-pull` as the override for everything they exclude: a save deleted
+since, a host that re-saved mid-session, or simply wanting it now. A manual pull asks with a null
+digest, meaning "whatever you have".
+
+A host serving a request always sends what it holds **now**, even if the request names an older
+digest. The receiver validates against the digest on the `Scenario` message itself, so answering
+with the current save is both simpler and always makes progress.
+
+### Writing wire bytes to disk is the risky part
+
+This is the only place in the mod where bytes off a socket become files, and the passphrase is a
+door lock rather than an envelope (see [Opt-in and privacy](#opt-in-and-privacy)). So the guards are
+three deep, each sufficient on its own today:
+
+1. **The save directory name is ours, never the wire's.** `ScenarioPayload.SaveName` is logged and
+   compared; it is not a path component. The receiver writes to `SaveLoadGlue.SaveName`.
+2. **`IsSafeName` rejects anything structurally capable of escaping a directory** — an allowlist of
+   permitted characters, not a denylist of forbidden ones, so a separator this code has never heard
+   of is refused by default. That one rule subsumes the cases worth naming: `..` cannot escape
+   without a separator and `C:` cannot anchor without a colon.
+3. **`IsAllowedName` then narrows to `content.zip` and `metadata.yaml`**, the two files
+   `DataManagerSave.DoSave` writes.
+
+They are all there because the allowlist is the one most likely to be widened later, and widening it
+must not silently re-open traversal. On top of them the digest is **recomputed from the bytes that
+arrived** and compared with the sender's claim before anything is written, so a truncated or
+substituted transfer is refused rather than written and then loaded. The write itself stages into a
+sibling directory and moves into place, so an interrupted transfer cannot leave half a save for
+`pbj.combat-load` to find.
+
+Refusing is not a fault. A peer that sends a bad scenario has not broken the session, and dropping
+the connection over it would turn a recoverable annoyance into a lost game.
+
+### It writes; it does not load
+
+The client logs `scenario written — run pbj.combat-load to enter it` and stops there. Loading a save
+yanks the player out of whatever they are doing, and doing that on an inbound network message is a
+surprise. It is also exactly the decision a real lobby's "ready to load" step should own, so it is
+left explicit until there is one.
+
+### Size
+
+The real save is 124 KB — `content.zip` at 118 KB plus a 652-byte `metadata.yaml` — against
+`PbjRuntime.MaxFrameLength` of 1 MiB, so one frame is right today. `ScenarioPayload.MaxTotalBytes`
+caps a transfer at 512 KB and `MaxFiles` at 4, with a test pinning the encoded size against the
+frame limit rather than trusting the arithmetic. Over the cap the transfer is **refused, not
+truncated**: half a save is worse than none, because `pbj.combat-load` would try to enter it.
+
+Chunking is the named extension point if a real campaign save ever exceeds the cap — a `Scenario`
+carrying an index, reassembled client-side. The payload already divides along file boundaries, and
+5b's outbound queue and writer thread exist precisely so a payload this size cannot stall a frame.
+
+`PbjProtocol.Version` did **not** move. Three new message types leave every existing layout
+untouched, which is the same rule M6's `Keyframes` followed; `ModVersion` went to 0.4.0 in the same
+change, and the handshake refuses a peer whose mod build differs long before an offer is sent. The
+mod version is the compatibility gate; the wire version guards layout, and no layout moved.
 
 ### Staging
 
@@ -1049,7 +1188,9 @@ otherwise diagnosed together and badly.
 | ~~No reconnect-after-drop~~ | **fixed in M5e** — see [Reconnect](#reconnect-m5e) |
 | Resume tokens are FNV-1a/32-bit, not a cryptographic credential | unscheduled |
 | The session passphrase travels in the clear over plain TCP | unscheduled — an overlay VPN or tunnel is the real answer |
-| No mid-combat join | M6+ |
+| No mid-combat join | unscheduled — M9 built the transport it needs; the join itself is untouched |
+| ~~Scenario transfer is a manual folder copy~~ | **fixed in M9** — see [Scenario transfer](#scenario-transfer-m9) |
+| A transferred scenario is written but never loaded; `pbj.combat-load` is still by hand | deliberate — see M9 |
 | A client joining a host already in combat derives its own combat state | unscheduled |
 | Host player can edit peers' applied orders during host planning | unscheduled |
 | Assignments not pruned when a unit dies | unscheduled |
