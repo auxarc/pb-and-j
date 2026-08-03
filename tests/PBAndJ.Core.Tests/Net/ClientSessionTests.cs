@@ -124,6 +124,36 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void Rejection_AfterARefusal_IsRetainedSoTheScreenCanSayWhichThingWasWrong()
+        {
+            // The reason used to be logged and dropped. A connect screen that can
+            // only say "failed" sends someone to check their firewall when the
+            // real answer is that they typed the passphrase wrong.
+            var client = Client();
+            client.Start();
+            client.HandleMessage(0, new RejectMessage(RejectReason.BadPassphrase, "nope"));
+
+            Assert.Equal(RejectReason.BadPassphrase, client.Rejection);
+        }
+
+        [Fact]
+        public void Rejection_BeforeAnyRefusal_IsNullRatherThanNone()
+        {
+            // None is a real RejectReason value, so it cannot double as "no
+            // refusal has happened" — a screen reading it would announce one.
+            var client = Client();
+            client.Start();
+
+            Assert.Null(client.Rejection);
+        }
+
+        [Fact]
+        public void Rejection_AfterAWelcome_StaysNull()
+        {
+            Assert.Null(Welcomed().Rejection);
+        }
+
+        [Fact]
         public void HandleMessage_BeforeWelcome_Faults()
         {
             var client = Client();

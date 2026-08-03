@@ -99,5 +99,67 @@ namespace PBAndJ.Core.Tests
             // call it does make announces itself.
             Assert.Contains("api.github.com", UpdateLog.Checking("api.github.com"));
         }
+
+        // --- the prompt ---
+        //
+        // These land on an NGUI label inside the game's confirmation dialog, not
+        // in Player.log, which is why none of them carry the log prefix. The
+        // dialog is the only place a second player ever learns they are stale, so
+        // it has to be complete on its own — they will not be reading the log.
+
+        private static UpdateResult Available => UpdateCheck.Compare("0.5.0", "0.6.0");
+
+        [Fact]
+        public void PromptHeader_NamesTheModSoThePlayerKnowsWhatIsAsking()
+        {
+            // A bare "Update available" modal in Phantom Brigade's own styling
+            // would read as the game asking, not a mod.
+            Assert.Contains("pb-and-j", UpdateLog.PromptHeader());
+        }
+
+        [Fact]
+        public void PromptHeader_DoesNotCarryTheLogPrefix_BecauseALabelIsNotALogLine()
+        {
+            Assert.DoesNotContain("[pb-and-j]", UpdateLog.PromptHeader());
+        }
+
+        [Fact]
+        public void PromptBody_NamesBothVersionsSoTheGapIsVisible()
+        {
+            var body = UpdateLog.PromptBody(Available);
+            Assert.Contains("0.5.0", body);
+            Assert.Contains("0.6.0", body);
+        }
+
+        [Fact]
+        public void PromptBody_SaysItOpensAWebPage_SoConfirmingIsNotASurprise()
+        {
+            // Confirm sends them out of the game to a browser. Saying so is the
+            // difference between a button and a trapdoor.
+            Assert.Contains("browser", UpdateLog.PromptBody(Available));
+        }
+
+        [Fact]
+        public void PromptBody_SaysTheGameMustRestart_BecauseModsLoadOnceAtStartup()
+        {
+            Assert.Contains("restart", UpdateLog.PromptBody(Available));
+        }
+
+        [Fact]
+        public void PromptBody_DoesNotPromiseToInstallAnything()
+        {
+            // The mod cannot install: the game loads mod assemblies once, at
+            // startup, into an AppDomain it cannot unload. Wording that implies
+            // otherwise turns a manual folder swap into a bug report.
+            var body = UpdateLog.PromptBody(Available);
+            Assert.DoesNotContain("install", body, System.StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("automatic", body, System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void PromptBody_DoesNotCarryTheLogPrefix()
+        {
+            Assert.DoesNotContain("[pb-and-j]", UpdateLog.PromptBody(Available));
+        }
     }
 }

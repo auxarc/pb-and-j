@@ -3,6 +3,7 @@ vendor/
 
 # Decompiled reference output — never commit
 decompiled/
+decompiled-firstpass/
 
 # Cloned third-party reference mods — not ours to commit
 references/

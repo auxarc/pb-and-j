@@ -14,6 +14,16 @@
       <HintPath>$(VendorDir)/Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!--
+      NGUI. UIInput, UILabel, UIWidget and UIPanel are defined here rather than
+      in Assembly-CSharp, so the connect screen (M10c) cannot compile without it.
+      See docs/notes/ngui-surface.md — decompile this one too before touching UI,
+      or the API is being guessed at.
+    -->
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>$(VendorDir)/Assembly-CSharp-firstpass.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="0Harmony">
       <HintPath>$(VendorDir)/0Harmony.dll</HintPath>
       <Private>false</Private>
@@ -24,6 +34,16 @@
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>$(VendorDir)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The connect screen: Input for the Escape key, BoxCollider for sizing a
+         cloned field's click target. -->
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(VendorDir)/UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(VendorDir)/UnityEngine.PhysicsModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Entitas">
