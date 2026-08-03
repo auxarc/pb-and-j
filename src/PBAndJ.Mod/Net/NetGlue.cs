@@ -563,16 +563,6 @@ namespace PBAndJ.Mod.Net
                 new Type[0], "pbj.connect");
             AddFrom(typeof(ConnectScreenGlue), nameof(ConnectScreenGlue.ConnectForget),
                 new Type[0], "pbj.connect-forget");
-            AddFrom(typeof(UiProbeGlue), nameof(UiProbeGlue.UiDump),
-                new Type[0], "pbj.ui-dump");
-            AddFrom(typeof(UiInputSpikeGlue), nameof(UiInputSpikeGlue.UiSpikeInput),
-                new Type[0], "pbj.ui-spike-input");
-            AddFrom(typeof(UiInputSpikeGlue), nameof(UiInputSpikeGlue.UiSpikeStatus),
-                new Type[0], "pbj.ui-spike-status");
-            AddFrom(typeof(UiInputSpikeGlue), nameof(UiInputSpikeGlue.UiSpikeContext),
-                new Type[0], "pbj.ui-spike-context");
-            AddFrom(typeof(UiInputSpikeGlue), nameof(UiInputSpikeGlue.UiSpikeClose),
-                new Type[0], "pbj.ui-spike-close");
         }
 
         private static void AddFrom(Type owner, string methodName, Type[] parameters, string command)

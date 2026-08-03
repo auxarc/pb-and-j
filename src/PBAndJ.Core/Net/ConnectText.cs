@@ -64,6 +64,15 @@ namespace PBAndJ.Core.Net
 
         public static string JoinButton() => "Join";
 
+        /// <remarks>
+        /// The screen's third action, and the one it had no way to offer until
+        /// now: while a session is live, Host and Join give way to this. Named
+        /// for what it does to the session rather than for what it does to the
+        /// screen — "Close" is already the X in the corner, and the two must not
+        /// be confused when one of them disconnects a friend.
+        /// </remarks>
+        public static string LeaveButton() => "Leave";
+
         public static string Hosting(string bind, int port) =>
             string.Format(CultureInfo.InvariantCulture, "Hosting on {0}:{1}. Waiting for a peer.", bind, port);
 
@@ -98,6 +107,13 @@ namespace PBAndJ.Core.Net
                 case ConnectProblem.OpenBindNeedsPassphrase:
                     return "Hosting on an address others can reach needs a passphrase — "
                         + "without one, anything that finds the port can join and give your units orders.";
+
+                // Names the button, because it is the only thing on the screen
+                // that can act in this state. A bare "a session is already
+                // running" is a status report, and the player is being told this
+                // because they tried to do something.
+                case ConnectProblem.SessionAlreadyRunning:
+                    return "A session is already running. Leave it before hosting or joining another.";
 
                 default:
                     return "Something about these details is not usable.";

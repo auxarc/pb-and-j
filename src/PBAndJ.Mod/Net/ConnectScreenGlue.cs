@@ -7,13 +7,16 @@ using UnityEngine;
 namespace PBAndJ.Mod.Net
 {
     // The connect screen: address, port, passphrase, a remember tickbox, and
-    // Host / Join. Opened by the Multiplayer entry on the title menu.
+    // Host / Join — which give way to Leave once a session is live, so starting
+    // and stopping one both live here rather than half here and half in the
+    // console.
     //
-    // Built from widgets cloned out of CIViewReporter, which the ui-dump proved
-    // is INACTIVE at rest — so Instantiate does not run Awake, clones can be
-    // configured before they wake, and CIViewReporter.ins is never hijacked.
-    // Everything this relies on was observed on a running game, not inferred;
-    // see docs/notes/ngui-surface.md.
+    // Built from widgets cloned out of CIViewReporter, which is INACTIVE at rest
+    // — so Instantiate does not run Awake, clones can be configured before they
+    // wake, and CIViewReporter.ins is never hijacked. Everything this relies on
+    // was observed on a running game, not inferred; docs/notes/ngui-surface.md
+    // is the record, and now the only one — the probes that produced it have
+    // been deleted.
     //
     // Humble object: every rule and every word lives in PBAndJ.Core
     // (ConnectForm, ConnectRules, ConnectSettings, ConnectText) under the 100%
@@ -50,6 +53,12 @@ namespace PBAndJ.Mod.Net
         // pad. The tickbox donor is already top-left aligned and needs none.
         private const float ButtonX = 116f;
         private const float ButtonSpacing = 190f;
+
+        // Leave takes the pair's place rather than sitting beside them, so it
+        // is centred between where they were. A third button at the next
+        // spacing would run off a 440-wide panel, and widening the panel to
+        // show two buttons that cannot be pressed is the wrong trade.
+        private const float LeaveX = ButtonX + (ButtonSpacing / 2f);
         private const float CloseX = PanelWidth - 70f;
         private const float CloseY = -14f;
 
@@ -58,6 +67,9 @@ namespace PBAndJ.Mod.Net
         private static UIInput? portField;
         private static UIInput? passphraseField;
         private static CIButton? rememberButton;
+        private static CIButton? hostButton;
+        private static CIButton? joinButton;
+        private static CIButton? leaveButton;
         private static UILabel? statusLabel;
 
         private static readonly System.Collections.Generic.List<UIWidget> fieldBackings =
@@ -92,6 +104,7 @@ namespace PBAndJ.Mod.Net
 
                 LoadIntoForm();
                 PushToWidgets();
+                ApplySessionState();
                 status = string.Empty;
 
                 root!.SetActive(true);
@@ -165,6 +178,7 @@ namespace PBAndJ.Mod.Net
                 }
 
                 PullFromWidgets();
+                ApplySessionState();
                 RefreshStatus();
             }
             catch (Exception e)
@@ -213,6 +227,72 @@ namespace PBAndJ.Mod.Net
             SaveForm();
             Say(ConnectText.Joining(Form.AddressText, Form.Port));
             Say(ConnectText.ForScreen(NetGlue.Join(Form.AddressText, Form.Port, Form.Passphrase)));
+        }
+
+        /// <summary>
+        /// Ends the session without sending anybody to the console.
+        /// </summary>
+        /// <remarks>
+        /// This is what the screen was missing: it could start a session and
+        /// could not stop one, so the only way out was <c>pbj.net-stop</c> —
+        /// which is exactly the audience the screen exists to spare.
+        /// </remarks>
+        private static void OnLeave()
+        {
+            // NetStop composes its own sentence and names the peer count, so
+            // there is nothing to add; it just arrives wearing the log marker.
+            Say(ConnectText.ForScreen(NetGlue.NetStop()));
+            ApplySessionState();
+        }
+
+        /// <summary>
+        /// Shows the actions that can actually be taken right now.
+        /// </summary>
+        /// <remarks>
+        /// Host and Join give way to Leave while a session is live. NetGlue
+        /// refuses a second session regardless, so this is not what makes the
+        /// mod safe — it is what stops the screen offering a button whose only
+        /// possible outcome is a refusal.
+        /// <para>
+        /// Hiding rather than dimming. CIButton.available does block the click
+        /// and dim the art, but its disabled-click path reads
+        /// <c>audio.enabled</c> before any null check
+        /// (CombatUI/CIButton.cs:529), and a clone's audio block is whatever the
+        /// donor happened to serialize. A deactivated GameObject never reaches
+        /// that code, and hiding is what this screen wants anyway.
+        /// </para>
+        /// </remarks>
+        private static void ApplySessionState()
+        {
+            var running = NetGlue.HasSession;
+            Form.SessionRunning = running;
+
+            Show(hostButton, !running);
+            Show(joinButton, !running);
+            Show(leaveButton, running);
+        }
+
+        /// <remarks>
+        /// The hover release is not decoration. SetActive(false) on a button the
+        /// pointer happens to be over leaves CIButton.hovered set and can strand
+        /// its tooltip on screen with nothing under it — the case
+        /// SetAvailableInstantly handles explicitly and plain deactivation does
+        /// not. ForceHoverEvent's conservative flag makes it a no-op unless the
+        /// button really is hovered.
+        /// </remarks>
+        private static void Show(CIButton? button, bool visible)
+        {
+            if (button == null || button.gameObject.activeSelf == visible)
+            {
+                return;
+            }
+
+            if (!visible)
+            {
+                button.ForceHoverEvent(isHovered: false, conservative: true);
+            }
+
+            button.gameObject.SetActive(visible);
         }
 
         private static void OnToggleRemember()
@@ -368,8 +448,15 @@ namespace PBAndJ.Mod.Net
             CloneLabel(reporter.labelMain, ConnectText.RememberWarning(), 0f, y);
             y -= WarningToButtons;
 
-            CloneButton(reporter.buttonCategoryBug, ConnectText.HostButton(), ButtonX, y, OnHost);
-            CloneButton(reporter.buttonCategoryFeedback, ConnectText.JoinButton(), ButtonX + ButtonSpacing, y, OnJoin);
+            hostButton = CloneButton(
+                reporter.buttonCategoryBug, ConnectText.HostButton(), ButtonX, y, OnHost);
+            joinButton = CloneButton(
+                reporter.buttonCategoryFeedback, ConnectText.JoinButton(), ButtonX + ButtonSpacing, y, OnJoin);
+
+            // The one category button the other two did not take, so Leave gets
+            // its own donor and matches their look without new recon.
+            leaveButton = CloneButton(
+                reporter.buttonCategorySuggestion, ConnectText.LeaveButton(), LeaveX, y, OnLeave);
             y -= ButtonsToStatus;
 
             statusLabel = CloneLabel(reporter.labelMain, string.Empty, 0f, y);

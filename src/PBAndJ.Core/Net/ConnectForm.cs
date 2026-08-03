@@ -3,7 +3,16 @@ using System.Net;
 
 namespace PBAndJ.Core.Net
 {
-    /// <summary>What is wrong with what somebody typed, if anything.</summary>
+    /// <summary>
+    /// What stands between these details and a connection, if anything.
+    /// </summary>
+    /// <remarks>
+    /// Mostly things somebody typed, but not only —
+    /// <see cref="SessionAlreadyRunning"/> is about the state of the machine
+    /// rather than the state of the fields. Keeping both in one enum keeps
+    /// <see cref="ConnectText.DescribeProblem"/> the single channel through
+    /// which the screen explains itself.
+    /// </remarks>
     public enum ConnectProblem : byte
     {
         None = 0,
@@ -25,6 +34,11 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Listening on a routable address without a passphrase.</summary>
         OpenBindNeedsPassphrase = 6,
+
+        /// <summary>
+        /// A session already holds the port, so there is nothing to start.
+        /// </summary>
+        SessionAlreadyRunning = 7,
     }
 
     /// <summary>
@@ -231,9 +245,26 @@ namespace PBAndJ.Core.Net
 
         public bool RememberPassphrase { get; set; }
 
-        public ConnectProblem JoinProblem => ConnectRules.CheckJoin(AddressText, PortText);
+        /// <summary>Whether this machine is already in a session.</summary>
+        /// <remarks>
+        /// Session state rather than typed state, which is why it lives here and
+        /// not in <see cref="ConnectRules"/> — those stay pure functions of what
+        /// is in the fields, and <c>NetGlue</c> calls into them holding no form.
+        /// The screen reads this from the live session every frame, so it has to
+        /// clear as readily as it sets.
+        /// </remarks>
+        public bool SessionRunning { get; set; }
 
-        public ConnectProblem HostProblem => ConnectRules.CheckHost(AddressText, PortText, Passphrase);
+        public ConnectProblem JoinProblem => SessionRunning
+            ? ConnectProblem.SessionAlreadyRunning
+            : ConnectRules.CheckJoin(AddressText, PortText);
+
+        // Reported ahead of anything wrong with the fields, on the same
+        // most-fundamental-first ordering CheckHost follows: fixing a typo does
+        // not help while a session holds the port.
+        public ConnectProblem HostProblem => SessionRunning
+            ? ConnectProblem.SessionAlreadyRunning
+            : ConnectRules.CheckHost(AddressText, PortText, Passphrase);
 
         public bool CanJoin => JoinProblem == ConnectProblem.None;
 

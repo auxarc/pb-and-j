@@ -3,6 +3,14 @@
 Paraphrased names/signatures only, same discipline as the other notes files. No game code
 is reproduced here.
 
+> **This file is now the only copy.** The throwaway probes that produced these observations —
+> `pbj.ui-dump` (`UiProbeGlue`) and `pbj.ui-spike-*` (`UiInputSpikeGlue`) — were deleted once
+> M10 shipped, along with M4's `SocketProbeGlue` and `ChoreographySpikeGlue`. Commands named
+> below therefore no longer exist; they are recorded because they are how each answer was
+> obtained, not because they can be re-run. Anything here that needs re-checking needs a new
+> probe written, which is cheap — see the deleted files in the history of
+> `m10-connect-screen` for the shape of one.
+
 ## Where it lives, and why this file exists
 
 NGUI's types — `UIInput`, `UILabel`, `UIWidget`, `UIPanel`, `UISprite`, `UICamera`,

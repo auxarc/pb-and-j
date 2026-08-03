@@ -199,6 +199,54 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(ConnectProblem.BindNotAnIpAddress, form.HostProblem);
         }
 
+        // --- a session already holding the port ---
+
+        [Fact]
+        public void WhileASessionIsRunning_NeitherHostingNorJoiningIsOffered()
+        {
+            // Details that are otherwise perfectly good. NetGlue.Host refuses a
+            // second session anyway; the point of the flag is that the screen
+            // stops offering an action it cannot perform, and says why.
+            var form = new ConnectForm { AddressText = "127.0.0.1", SessionRunning = true };
+
+            Assert.False(form.CanHost);
+            Assert.False(form.CanJoin);
+            Assert.Equal(ConnectProblem.SessionAlreadyRunning, form.HostProblem);
+            Assert.Equal(ConnectProblem.SessionAlreadyRunning, form.JoinProblem);
+        }
+
+        [Fact]
+        public void ARunningSession_IsReportedBeforeAnythingWrongWithTheFields()
+        {
+            // Most-fundamental-first, the same ordering CheckHost already
+            // follows: correcting a typo does not help while a session holds
+            // the port, so telling somebody about the typo sends them at the
+            // wrong problem.
+            var form = new ConnectForm { AddressText = string.Empty, SessionRunning = true };
+
+            Assert.Equal(ConnectProblem.SessionAlreadyRunning, form.JoinProblem);
+            Assert.Equal(ConnectProblem.SessionAlreadyRunning, form.HostProblem);
+        }
+
+        [Fact]
+        public void WhenTheSessionEnds_TheUnderlyingProblemIsReportedAgain()
+        {
+            // The flag is read from the live session every frame, so it has to
+            // clear as cleanly as it sets — a sticky one would leave the screen
+            // refusing to reconnect after a Leave.
+            var form = new ConnectForm { AddressText = string.Empty, SessionRunning = true };
+            form.SessionRunning = false;
+
+            Assert.Equal(ConnectProblem.AddressEmpty, form.JoinProblem);
+            Assert.Equal(ConnectProblem.BindNotAnIpAddress, form.HostProblem);
+        }
+
+        [Fact]
+        public void NewForm_AssumesNoSessionIsRunning()
+        {
+            Assert.False(new ConnectForm().SessionRunning);
+        }
+
         [Fact]
         public void Port_ExposesTheParsedValueForTheCaller()
         {

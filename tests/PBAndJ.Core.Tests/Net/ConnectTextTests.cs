@@ -104,6 +104,16 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void DescribeProblem_ForARunningSession_PointsAtLeaveRatherThanAtTheFields()
+        {
+            // The only actionable thing on the screen in that state is the
+            // Leave button, so the sentence has to name it. "A session is
+            // already running" on its own is a status report, not direction.
+            var sentence = ConnectText.DescribeProblem(ConnectProblem.SessionAlreadyRunning);
+            Assert.Contains(ConnectText.LeaveButton(), sentence, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void DescribeProblem_ForAnUnrecognisedValue_StillSaysSomething()
         {
             Assert.False(string.IsNullOrWhiteSpace(ConnectText.DescribeProblem((ConnectProblem)200)));
@@ -213,6 +223,7 @@ namespace PBAndJ.Core.Tests.Net
             // is one the player has to re-learn each time.
             Assert.Equal("Host", ConnectText.HostButton());
             Assert.Equal("Join", ConnectText.JoinButton());
+            Assert.Equal("Leave", ConnectText.LeaveButton());
             Assert.StartsWith("Hosting", ConnectText.Hosting("0.0.0.0", 27600));
             Assert.StartsWith("Joining", ConnectText.Joining("friend.example.com", 27600));
         }
@@ -247,6 +258,7 @@ namespace PBAndJ.Core.Tests.Net
                          ConnectText.PassphraseLabel(), ConnectText.RememberLabel(),
                          ConnectText.RememberWarning(), ConnectText.Title(),
                          ConnectText.HostButton(), ConnectText.JoinButton(),
+                         ConnectText.LeaveButton(),
                          ConnectText.Hosting("0.0.0.0", 1), ConnectText.Joining("x", 1),
                          ConnectText.DescribeRejection(RejectReason.BadPassphrase),
                          ConnectText.DescribeProblem(ConnectProblem.AddressEmpty),
