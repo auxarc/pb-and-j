@@ -90,18 +90,23 @@ namespace PBAndJ.Mod.Net
                 return "[pb-and-j] a session is already running — pbj.net-stop first";
             }
 
-            IPAddress address;
-            if (!IPAddress.TryParse(bind, out address))
+            // The rules themselves live in Core, under the coverage gate, so the
+            // connect screen and this command cannot come to disagree about what
+            // is allowed to listen. Only the wording is composed here.
+            var problem = ConnectRules.CheckHostBind(bind, passphrase);
+            if (problem == ConnectProblem.BindNotAnIpAddress)
             {
                 return "[pb-and-j] '" + bind + "' is not an IP address — try 127.0.0.1 or 0.0.0.0";
             }
-
-            var loopback = IPAddress.IsLoopback(address);
-            if (!loopback && string.IsNullOrEmpty(passphrase))
+            if (problem == ConnectProblem.OpenBindNeedsPassphrase)
             {
                 return "[pb-and-j] refusing to listen on " + bind + " without a passphrase — "
                     + "use: pbj.host " + bind + " " + port + " <passphrase>";
             }
+
+            // Cannot fail: CheckHostBind just parsed it.
+            IPAddress.TryParse(bind.Trim(), out var address);
+            var loopback = IPAddress.IsLoopback(address);
 
             try
             {
@@ -222,6 +227,14 @@ namespace PBAndJ.Mod.Net
                 lastPort = port;
 
                 transport.Connect(address, port);
+
+                // Remembered so the title-menu entry can offer it back. Recorded
+                // on the attempt rather than on a successful handshake because
+                // the details are just as worth keeping when the host was not
+                // up yet — which is the common case when two people are still
+                // getting set up.
+                ConnectScreenGlue.Remember(address, port, sessionPassphrase);
+
                 var line = NetLog.ClientConnecting(address, port, HostName());
                 Debug.Log(line);
                 return line;
@@ -231,6 +244,19 @@ namespace PBAndJ.Mod.Net
                 Shutdown();
                 return "[pb-and-j] failed to join: " + e.GetType().Name + ": " + e.Message;
             }
+        }
+
+        /// <summary>
+        /// Why the host refused us, if it did and we are a client.
+        /// </summary>
+        /// <remarks>
+        /// Retained by ClientSession rather than composed here, so the connect
+        /// screen can name the actual problem instead of saying "failed" — which
+        /// sends people to check their firewall when the passphrase has a typo.
+        /// </remarks>
+        internal static RejectReason? LastRejection()
+        {
+            return runtime?.Session is ClientSession client ? client.Rejection : null;
         }
 
         public static string NetStatus()
@@ -533,6 +559,27 @@ namespace PBAndJ.Mod.Net
             Add(nameof(Rejoin), new Type[0], "pbj.rejoin");
             Add(nameof(ReplayLast), new Type[0], "pbj.replay-last");
             Add(nameof(ScenarioPull), new Type[0], "pbj.scenario-pull");
+            AddFrom(typeof(ConnectScreenGlue), nameof(ConnectScreenGlue.Connect),
+                new Type[0], "pbj.connect");
+            AddFrom(typeof(ConnectScreenGlue), nameof(ConnectScreenGlue.ConnectForget),
+                new Type[0], "pbj.connect-forget");
+            AddFrom(typeof(UiProbeGlue), nameof(UiProbeGlue.UiDump),
+                new Type[0], "pbj.ui-dump");
+            AddFrom(typeof(UiInputSpikeGlue), nameof(UiInputSpikeGlue.UiSpikeInput),
+                new Type[0], "pbj.ui-spike-input");
+            AddFrom(typeof(UiInputSpikeGlue), nameof(UiInputSpikeGlue.UiSpikeStatus),
+                new Type[0], "pbj.ui-spike-status");
+            AddFrom(typeof(UiInputSpikeGlue), nameof(UiInputSpikeGlue.UiSpikeContext),
+                new Type[0], "pbj.ui-spike-context");
+            AddFrom(typeof(UiInputSpikeGlue), nameof(UiInputSpikeGlue.UiSpikeClose),
+                new Type[0], "pbj.ui-spike-close");
+        }
+
+        private static void AddFrom(Type owner, string methodName, Type[] parameters, string command)
+        {
+            var method = owner.GetMethod(
+                methodName, BindingFlags.Static | BindingFlags.Public, null, parameters, null);
+            QuantumConsoleProcessor.TryAddCommand(new CommandData(method, command));
         }
 
         private static void Add(string methodName, Type[] parameters, string command)
@@ -561,6 +608,10 @@ namespace PBAndJ.Mod.Net
             // Unscaled, because the game parks Time.timeScale at zero during
             // planning.
             KeyframePlayer.Advance(Time.unscaledDeltaTime);
+
+            // Also outside the session guard: the connect screen exists in order
+            // to start a session, so it must run when there is none.
+            ConnectScreenGlue.Tick();
         }
     }
 

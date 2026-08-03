@@ -52,6 +52,12 @@ namespace PBAndJ.Mod
         /// <summary>One in flight at a time; a second request would tell us nothing new.</summary>
         private static bool checking;
 
+        /// <summary>
+        /// Whether this process has already put the update dialog in front of
+        /// somebody. Asking once and being ignored has to mean ignored.
+        /// </summary>
+        private static bool offered;
+
         internal static void SetCoroutineHost(MonoBehaviour behaviour)
         {
             host = behaviour;
@@ -61,7 +67,15 @@ namespace PBAndJ.Mod
         /// Starts a check if one is not already running. Never throws and never
         /// blocks — a caller starting a session must not care whether this works.
         /// </summary>
-        internal static void CheckInBackground()
+        /// <param name="offerPrompt">
+        /// Whether a dialog may be raised if the build turns out to be stale.
+        /// False for the automatic session-start check: that fires from
+        /// pbj.host/pbj.join, which can happen mid-combat, and a modal landing
+        /// on somebody in the middle of a turn is worse than a log line. The
+        /// explicit pbj.check-update path passes true, and M10c's connect screen
+        /// will too — it runs at the main menu, where a modal is expected.
+        /// </param>
+        internal static void CheckInBackground(bool offerPrompt = false)
         {
             if (checking || host == null)
             {
@@ -71,7 +85,7 @@ namespace PBAndJ.Mod
             try
             {
                 checking = true;
-                host.StartCoroutine(Run());
+                host.StartCoroutine(Run(offerPrompt));
             }
             catch (Exception e)
             {
@@ -90,11 +104,11 @@ namespace PBAndJ.Mod
             {
                 return "[pb-and-j] an update check is already running";
             }
-            CheckInBackground();
+            CheckInBackground(offerPrompt: true);
             return UpdateLog.Checking("api.github.com");
         }
 
-        private static IEnumerator Run()
+        private static IEnumerator Run(bool offerPrompt)
         {
             Debug.Log(UpdateLog.Checking("api.github.com"));
 
@@ -143,13 +157,13 @@ namespace PBAndJ.Mod
                     yield break;
                 }
 
-                Report(body!);
+                Report(body!, offerPrompt);
             }
 
             checking = false;
         }
 
-        private static void Report(string body)
+        private static void Report(string body, bool offerPrompt)
         {
             string? tag = null;
             string? assetUrl = null;
@@ -184,6 +198,74 @@ namespace PBAndJ.Mod
 
             var result = UpdateCheck.Compare(PbjProtocol.ModVersion, tag);
             Debug.Log(UpdateLog.Describe(result, assetUrl ?? ReleasesPage));
+
+            if (!offerPrompt)
+            {
+                return;
+            }
+
+            // Whether to interrupt somebody is a rule, so it lives in Core and is
+            // tested there. All that is decided here is whether the game has a
+            // dialog to open yet.
+            if (UpdatePrompt.Decide(result, DialogAvailable(), offered) == UpdateOffer.PointAtReleasePage)
+            {
+                Offer(result);
+            }
+        }
+
+        /// <summary>
+        /// The game's confirmation view is a scene singleton, so early in startup
+        /// there is simply nothing to open.
+        /// </summary>
+        private static bool DialogAvailable()
+        {
+            try
+            {
+                return CIViewDialogConfirmation.ins != null;
+            }
+            catch (Exception)
+            {
+                // A missing or moved view is not worth taking the check down over.
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Opens the game's own confirmation dialog and, on confirm, the releases
+        /// page in a browser.
+        /// </summary>
+        /// <remarks>
+        /// The shape is lifted from the game's own ExternalLinkHelper, down to
+        /// the hue — a confirm-then-OpenURL modal is a thing Phantom Brigade
+        /// already does for its Discord and changelog links, so this looks and
+        /// behaves like part of the game rather than like a mod improvising.
+        ///
+        /// The URL is the compile-time ReleasesPage constant and never a link
+        /// taken from GitHub's reply, so there is no question of whether the
+        /// response could talk us into opening something else.
+        ///
+        /// Nothing is installed. The game loads mod assemblies once, during
+        /// startup, with Assembly.LoadFrom into an AppDomain it cannot unload, so
+        /// swapping a DLL underneath a running game is not possible and the
+        /// wording says as much.
+        /// </remarks>
+        private static void Offer(UpdateResult result)
+        {
+            try
+            {
+                offered = true;
+                CIViewDialogConfirmation.ins.Open(
+                    UpdateLog.PromptHeader(),
+                    UpdateLog.PromptBody(result),
+                    () => Application.OpenURL(ReleasesPage),
+                    null, null, null, 0.55f);
+            }
+            catch (Exception e)
+            {
+                // The check already logged the result, so a dialog that will not
+                // open costs information nobody has lost.
+                Debug.Log(UpdateLog.CheckFailed("could not open the update dialog: " + e.GetType().Name));
+            }
         }
 
         /// <summary>

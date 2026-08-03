@@ -122,6 +122,22 @@ namespace PBAndJ.Core.Net
 
         public string? HostName { get; private set; }
 
+        /// <summary>
+        /// Why the host refused us, or null if it has not.
+        /// </summary>
+        /// <remarks>
+        /// Nullable rather than defaulting to <see cref="RejectReason.None"/>,
+        /// because None is a real value on the wire and a screen reading it
+        /// would announce a refusal that never happened.
+        /// <para>
+        /// Retained so the connect screen can name the problem. The reason was
+        /// previously logged and discarded, which left the UI able to say only
+        /// "failed" — and "failed" sends someone to check their firewall when
+        /// the truth is that the passphrase has a typo in it.
+        /// </para>
+        /// </remarks>
+        public RejectReason? Rejection { get; private set; }
+
         /// <summary>Units this client may plan, as last told by the host.</summary>
         public IReadOnlyList<string> OwnedUnits { get; private set; } = new string[0];
 
@@ -288,6 +304,7 @@ namespace PBAndJ.Core.Net
 
                 case RejectMessage reject:
                     effects.Add(new LogEffect(NetLog.HandshakeRejected(playerName, reject.Reason, reject.Detail)));
+                    Rejection = reject.Reason;
                     State = ClientSessionState.Faulted;
                     effects.Add(new SetExecutionLockEffect(false));
                     break;
