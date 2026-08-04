@@ -18,7 +18,28 @@ MOD_VER     := $(shell grep '^ver:' mod/metadata.yaml | awk '{print $$2}')
 CORE_VER    := $(shell grep -o 'ModVersion = "[^"]*"' src/PBAndJ.Core/Net/PbjProtocol.cs | sed 's/.*"\(.*\)"/\1/')
 PKG_DIR     := dist/package
 
-.PHONY: test build dist deploy check-game-hash check-mod-version clean log peer peer-selftest peer-connect peer-listen package
+# Every file that defines bytes on the wire. Listed rather than globbed so that
+# adding one is a conscious act instead of a silent gap — the whole failure this
+# guard exists to catch is a wire change nobody noticed making.
+#
+# The non-obvious members, each of which would otherwise leak:
+#   OrderPayload*     the codec delegates order layout to it wholesale
+#   UnitSnapshot,
+#   Keyframes         the codec round-trips through their constructors, so
+#                     swapping two same-typed parameters changes wire meaning
+#                     with no diff in the codec at all
+#   Seams.cs          OrderApplyResult lives there and crosses as a raw int cast
+#   PbjProtocol.cs    same, for RejectReason
+# PbjEffect.cs and PbjInboundEvent.cs are deliberately ABSENT: effects are what a
+# session asks the local runtime to do and inbound events are local inputs.
+# Neither is observable by a peer, so bumping the version for them is noise.
+WIRE_FILES  := $(addprefix src/PBAndJ.Core/Net/, \
+                 PbjMessage.cs PbjMessageCodec.cs OrderPayload.cs OrderPayloadCodec.cs \
+                 UnitSnapshot.cs Keyframes.cs ScenarioPayload.cs \
+                 PbjWriter.cs PbjReader.cs FloatBits.cs FrameEncoder.cs FrameDecoder.cs \
+                 PbjProtocol.cs Seams.cs)
+
+.PHONY: test build dist deploy check-game-hash check-mod-version check-wire-surface record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
 
 # metadata.yaml is the one place PbjProtocol.ModVersion cannot reach, and a
 # disagreement between them is invisible until a peer is refused by a host —
@@ -33,6 +54,55 @@ check-mod-version:
 	fi
 	@echo "mod version OK ($(MOD_VER))"
 
+# check-mod-version proves the two version strings agree with EACH OTHER. It says
+# nothing about whether either moved when the wire did — it would happily pass a
+# build that added three message types and bumped nothing, which is exactly the
+# mistake "move the version with the surface, not after it" exists to stop.
+#
+# So: hash the wire-bearing sources, and fail when that hash moves without
+# ModVersion moving. Comments and blank lines are stripped first, so documenting
+# a message cannot fail a build. A refactor inside the codec WILL fail it, and
+# that is the intended default rather than a rough edge — the codec is the wire.
+# When the change genuinely does not move any byte, re-record with:
+#     make record-wire-surface
+check-wire-surface:
+	@for f in $(WIRE_FILES); do \
+		test -f "$$f" || { echo "FATAL: wire-surface file missing: $$f"; \
+			echo "  Fix the list in the Makefile — a missing name would silently hash nothing."; exit 1; }; \
+	done
+	@test -f wire-surface.lock || { echo "FATAL: wire-surface.lock is missing — run 'make record-wire-surface'"; exit 1; }
+	@actual=$$($(MAKE) --no-print-directory wire-surface-hash); \
+	locked=$$(grep '^sha256:' wire-surface.lock | awk '{print $$2}'); \
+	lockver=$$(grep '^version:' wire-surface.lock | awk '{print $$2}'); \
+	if [ "$$actual" = "$$locked" ]; then echo "wire surface OK (unchanged since $$lockver)"; exit 0; fi; \
+	if [ "$(CORE_VER)" = "$$lockver" ]; then \
+		echo "FATAL: the wire surface changed but ModVersion did not."; \
+		echo "  ModVersion is still:  $$lockver"; \
+		echo "  locked hash:          $$locked"; \
+		echo "  actual hash:          $$actual"; \
+		echo "  A peer admitted by a matching version string would fault on the first"; \
+		echo "  message it did not expect. Bump PbjProtocol.ModVersion and mod/metadata.yaml"; \
+		echo "  in the SAME commit as the surface change, then: make record-wire-surface"; \
+		exit 1; \
+	fi; \
+	echo "FATAL: the wire surface changed and ModVersion moved to $(CORE_VER) — now record it."; \
+	echo "  Run: make record-wire-surface"; \
+	exit 1
+
+# Deliberately not a dependency of anything: re-recording is the developer saying
+# "yes, I meant that", and a build step that says it for them is no guard at all.
+record-wire-surface:
+	@hash=$$($(MAKE) --no-print-directory wire-surface-hash); \
+	{ echo "# The wire surface as of this ModVersion. See 'check-wire-surface' in the"; \
+	  echo "# Makefile. Re-record only when you have decided the change is intentional."; \
+	  echo "version: $(CORE_VER)"; \
+	  echo "sha256: $$hash"; } > wire-surface.lock
+	@echo "recorded wire surface at $(CORE_VER)"
+
+# Order is the Makefile's order, so the hash is stable across machines.
+wire-surface-hash:
+	@cat $(WIRE_FILES) | grep -v '^[[:space:]]*//' | grep -v '^[[:space:]]*$$' | sha256sum | cut -d' ' -f1
+
 test:
 	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet test tests/PBAndJ.Core.Tests \
 		/p:CollectCoverage=true /p:Include="[PBAndJ.Core]*" \
@@ -41,7 +111,7 @@ test:
 build: test
 	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet build src/PBAndJ.Mod -c Release'
 
-dist: build check-mod-version
+dist: build check-mod-version check-wire-surface
 	rm -rf dist/$(MOD_ID)
 	mkdir -p dist/$(MOD_ID)/Libraries
 	cp mod/metadata.yaml dist/$(MOD_ID)/

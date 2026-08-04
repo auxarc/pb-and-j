@@ -401,9 +401,75 @@ namespace PBAndJ.Mod.Net
             return "[pb-and-j] asked the host for its combat save";
         }
 
+        // --- the save catalogue (M11b) ---
+        //
+        // M11a shipped no game console commands at all — it is Core-only, driven
+        // from the peer REPL — so these are the first way to work the lobby from
+        // inside a running game, and they are how M11b is verifiable before M11c's
+        // screen exists.
+        //
+        // Quantum Console splits arguments on spaces, so a save name with spaces
+        // has to be quoted: pbj.save-convert "TWICE SHY" fromsp
+
+        public static string Saves()
+        {
+            var catalogue = LobbyCatalogue.Multiplayer(SaveCatalogueGlue.List());
+            if (catalogue.Count == 0)
+            {
+                return "[pb-and-j] no multiplayer saves yet — pbj.save-as or pbj.save-convert makes one";
+            }
+
+            var text = "[pb-and-j] " + catalogue.Count + " multiplayer save(s), newest first:";
+            for (var i = 0; i < catalogue.Count; i++)
+            {
+                text += "\n  " + catalogue[i].Key;
+            }
+            return text;
+        }
+
+        public static string SaveAs(string name)
+        {
+            var key = SaveCatalogueGlue.SaveAs(name);
+            return key == null
+                ? "[pb-and-j] could not save as '" + name + "' — see the log for why"
+                : "[pb-and-j] saved the current campaign as " + key;
+        }
+
+        public static string SaveConvert(string sourceKey, string name)
+        {
+            var key = SaveCatalogueGlue.Convert(sourceKey, name);
+            return key == null
+                ? "[pb-and-j] could not convert '" + sourceKey + "' — see the log for why"
+                : "[pb-and-j] copied '" + sourceKey + "' to " + key + " — the original is untouched";
+        }
+
+        public static string LobbySelect(string key)
+        {
+            if (runtime == null)
+            {
+                return NetLog.NoSession();
+            }
+            if (!(runtime.Session is HostSession))
+            {
+                return "[pb-and-j] only the host chooses the lobby's save";
+            }
+
+            // The session accepts any key by design — it reads no disk, the same
+            // way it reads no clock — so the guard against selecting something that
+            // is not there belongs here, at the edge that can actually look.
+            if (!LobbyCatalogue.Contains(SaveCatalogueGlue.List(), key))
+            {
+                return "[pb-and-j] '" + key + "' is not a multiplayer save — pbj.saves lists them";
+            }
+
+            runtime.Post(new LocalLobbySelectEvent(key, SaveCatalogueGlue.Digest(key)));
+            return "[pb-and-j] lobby save set to " + key;
+        }
+
         // --- hooks used by the execution patches ---
 
         internal static bool HasSession => runtime != null && !killed;
+
 
         internal static void PostLocalReady()
         {
@@ -559,6 +625,10 @@ namespace PBAndJ.Mod.Net
             Add(nameof(Rejoin), new Type[0], "pbj.rejoin");
             Add(nameof(ReplayLast), new Type[0], "pbj.replay-last");
             Add(nameof(ScenarioPull), new Type[0], "pbj.scenario-pull");
+            Add(nameof(Saves), new Type[0], "pbj.saves");
+            Add(nameof(SaveAs), new[] { typeof(string) }, "pbj.save-as");
+            Add(nameof(SaveConvert), new[] { typeof(string), typeof(string) }, "pbj.save-convert");
+            Add(nameof(LobbySelect), new[] { typeof(string) }, "pbj.lobby-select");
             AddFrom(typeof(ConnectScreenGlue), nameof(ConnectScreenGlue.Connect),
                 new Type[0], "pbj.connect");
             AddFrom(typeof(ConnectScreenGlue), nameof(ConnectScreenGlue.ConnectForget),
