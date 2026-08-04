@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using HarmonyLib;
 using PBAndJ.Core;
+using PBAndJ.Core.Net;
 using PhantomBrigade.Data;
 using QFSW.QC;
 using UnityEngine;
@@ -15,7 +16,11 @@ namespace PBAndJ.Mod
     [ExcludeFromCodeCoverage]
     internal static class SaveLoadGlue
     {
-        internal const string SaveName = "pbj_combat_test";
+        // The pbj_ namespace has one owner, and it is Core. M11b's catalogue has to
+        // exclude this slot by name — WriteScenario deletes and rewrites the
+        // directory on every transfer, so a lobby that selected it would have peers
+        // ready onto a save the next transfer destroys.
+        internal const string SaveName = LobbySaveNames.ScenarioSlot;
         private static List<ActionSnapshot>? beforeSave;
 
         internal static void EnableCombatSaves()

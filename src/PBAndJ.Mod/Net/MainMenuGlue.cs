@@ -184,6 +184,21 @@ namespace PBAndJ.Mod.Net
 
         private static void OpenConnectScreen()
         {
+            // The mirror of Patch_CIViewPauseRoot_OnSubviewChange, and just as
+            // necessary: the game's pages close each other through
+            // TryExitSubordinates, which our screen cannot join, so without this
+            // opening Multiplayer over an open Load screen stacks the two.
+            // Toggling ours closed is a no-op here — opening it already cleared
+            // them.
+            try
+            {
+                CIViewPauseRoot.ins?.TryExitSubordinates();
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[pb-and-j] could not close the game's menu pages: " + e.GetType().Name);
+            }
+
             ConnectScreenGlue.Open();
         }
     }
@@ -214,6 +229,68 @@ namespace PBAndJ.Mod.Net
         private static void Postfix(CIViewPauseRoot __instance)
         {
             MainMenuGlue.OnLocalizationRefreshed(__instance);
+        }
+    }
+
+    /// <summary>
+    /// Closes our screen when the player opens one of the game's own menu pages.
+    /// </summary>
+    /// <remarks>
+    /// Found in-game 2026-08-04: choosing Load, Options, Mods or any other
+    /// top-level entry left the multiplayer screen sitting on top of it.
+    /// <para>
+    /// The cause is that <b>there is no view stack</b>. `CIView.subordinates` is a
+    /// flat list on `CIViewPauseRoot` holding the game's own six pages, and each
+    /// page's `TryEntry` calls `TryExitSubordinates` to close its siblings — a
+    /// mechanism our screen cannot join, because it is a cloned GameObject and not
+    /// a `CIView`. So it was never asked to leave.
+    /// </para>
+    /// <para>
+    /// `OnSubviewChange` is the right hook rather than each page's `TryEntry`:
+    /// every one of the seven pages calls it, so this stays correct for a page we
+    /// have never heard of.
+    /// </para>
+    /// </remarks>
+    [ExcludeFromCodeCoverage]
+    [HarmonyPatch(typeof(CIViewPauseRoot), nameof(CIViewPauseRoot.OnSubviewChange))]
+    internal static class Patch_CIViewPauseRoot_OnSubviewChange
+    {
+        private static void Postfix()
+        {
+            // Except when we are the one who opened it. M11c borrows the load
+            // screen as its save picker, which routes through here too, and a
+            // picker that closed the lobby behind it would be picking for nobody.
+            if (SaveVisibilityPatches.PickMode)
+            {
+                return;
+            }
+            ConnectScreenGlue.Close();
+            LobbyScreenGlue.Close();
+        }
+    }
+
+    /// <summary>
+    /// Closes our screen when anything starts loading a save.
+    /// </summary>
+    /// <remarks>
+    /// The other half of the same finding, and the half that is easy to miss:
+    /// Continue, Resume to Briefing and Skip Tutorial are top-level menu entries
+    /// too, but they load directly and never open a page, so
+    /// <see cref="Patch_CIViewPauseRoot_OnSubviewChange"/> never fires for them —
+    /// the screen would hang over the loading screen instead.
+    /// <para>
+    /// Hooked at <c>TryLoading</c>, the single funnel every load and every
+    /// new-game path goes through, so this covers routes that do not exist yet.
+    /// </para>
+    /// </remarks>
+    [ExcludeFromCodeCoverage]
+    [HarmonyPatch(typeof(DataHelperLoading), nameof(DataHelperLoading.TryLoading))]
+    internal static class Patch_DataHelperLoading_TryLoading
+    {
+        private static void Postfix()
+        {
+            ConnectScreenGlue.Close();
+            LobbyScreenGlue.Close();
         }
     }
 }

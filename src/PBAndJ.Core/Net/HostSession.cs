@@ -171,6 +171,33 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public bool LobbyIsSatisfied => lobby.IsSatisfied;
 
+        /// <summary>
+        /// The lobby roster with ready flags — the host at index 0, then peers in
+        /// join order.
+        /// </summary>
+        /// <remarks>
+        /// The same list <see cref="ComposeLobbyState"/> puts on the wire, and
+        /// deliberately so: a host screen reading a second, separately-built
+        /// roster would be a screen that can disagree with what its own clients
+        /// were told. <c>ClientSession</c> exposes the received copy under the
+        /// same name, which is what lets one <see cref="LobbyView"/> serve both.
+        /// </remarks>
+        public IReadOnlyList<LobbyPeerState> LobbyRoster
+        {
+            get
+            {
+                var peers = new LobbyPeerState[registry.Count + 1];
+                peers[0] = new LobbyPeerState(
+                    PbjPeerRegistry.HostPeerId, HostName, lobby.IsReady(PbjPeerRegistry.HostPeerId));
+                for (var i = 0; i < registry.Peers.Count; i++)
+                {
+                    var peer = registry.Peers[i];
+                    peers[i + 1] = new LobbyPeerState(peer.PeerId, peer.Name, lobby.IsReady(peer.PeerId));
+                }
+                return peers;
+            }
+        }
+
         public IReadOnlyList<int> ConnectedPeerIds
         {
             get
@@ -886,15 +913,8 @@ namespace PBAndJ.Core.Net
 
         private LobbyStateMessage ComposeLobbyState()
         {
-            var peers = new LobbyPeerState[registry.Count + 1];
-            peers[0] = new LobbyPeerState(
-                PbjPeerRegistry.HostPeerId, HostName, lobby.IsReady(PbjPeerRegistry.HostPeerId));
-            for (var i = 0; i < registry.Peers.Count; i++)
-            {
-                var peer = registry.Peers[i];
-                peers[i + 1] = new LobbyPeerState(peer.PeerId, peer.Name, lobby.IsReady(peer.PeerId));
-            }
-            return new LobbyStateMessage(selection.Version, selection.SaveKey, selection.SaveDigest, peers);
+            return new LobbyStateMessage(
+                selection.Version, selection.SaveKey, selection.SaveDigest, LobbyRoster);
         }
 
         /// <summary>

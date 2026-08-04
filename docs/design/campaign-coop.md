@@ -121,6 +121,35 @@ and leaving combat needing to clear readiness.
 multiplayer save; convert a singleplayer one by directory copy and rename, never a move. Filter
 `pbj_` out of `CIViewPauseLoad`. Mostly glue, with the naming and validity rules in Core.
 
+**Built 2026-08-04.** `LobbySaveNames` / `LobbySaveRules` / `LobbyCatalogue` in Core under the gate;
+`SaveCatalogueGlue` and `SaveVisibilityPatches` in the mod; `pbj.saves`, `pbj.save-as`,
+`pbj.save-convert`, `pbj.lobby-select` on the console. Three decisions differ from the pre-build
+plan, each because a review pass refuted the first draft:
+
+- **No template ships and none is forged.** "Create a new co-op campaign" is: start a normal new
+  game, save it, convert it. `pbj.save-as` makes that two steps. This deleted an entire
+  sub-feature — no `mod/templates/`, no game-derived save committed to a public repo, no hook into
+  the new-game flow.
+- **`pbj_combat_test` is inside this namespace and is not a campaign.** M9's scenario slot would
+  have appeared in the catalogue as selectable while `WriteScenario` deletes and rewrites it on
+  every transfer. `LobbySaveNames.ScenarioSlot` now owns that name for both, the catalogue excludes
+  it, and `LobbySaveRules` reserves the *unprefixed* `combat_test` so nobody can type their way
+  into it.
+- **Multiplayer saves stay VISIBLE in the singleplayer save grid**, and are made unwritable and
+  undeletable there instead. Hiding them looked tidier and was wrong: `CIViewPauseSave.RebuildSaveGrid`
+  calls `UpdateSaveAvailability` → `GetSaveHeaders` *inside* the filter window, so the duplicate
+  check, the save count and the 60-save limit would all have run against a catalogue with holes in
+  it — and a player could then silently overwrite a lobby's save.
+
+**⚠️ The namespace is enforced on READS ONLY, and M11d owns the other half.** Once a `pbj_` campaign
+is actually *loaded*, the game writes it straight back out under unprefixed names:
+`OverworldTimedAutosaveSystem.cs:46` writes `autosave_timed_N` and `CIViewPauseRoot.cs:1449` writes
+`autosave_game_exit`, both `SaveLocation.Normal`. The title screen's Continue will then offer a
+co-op campaign as singleplayer through a path no read-side patch touches. This is not a defect in
+M11b — nothing in M11b loads one of these saves — but it becomes real the moment M11d does. The
+likely mechanism is a "this campaign is multiplayer" bit set at load that redirects autosave names
+through the prefix, and it needs M11d's state to exist before it can be built.
+
 **M11c — the lobby screen.** The connect screen gains a successor: roster with ready states, the save
 picker (editable for the host, read-only for clients), a ready toggle, and Start for the host. The
 M10c machinery carries over wholesale — the NGUI cloning, the geometry constants, the
