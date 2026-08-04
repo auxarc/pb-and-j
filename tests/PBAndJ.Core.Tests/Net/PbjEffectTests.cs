@@ -180,6 +180,24 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void BeginLoad_CarriesTheSaveAndTheVersion()
+        {
+            var effect = new BeginLoadEffect("pbj_campaign", 4);
+            Assert.Equal(PbjEffectKind.BeginLoad, effect.Kind);
+            Assert.Equal("pbj_campaign", effect.SaveKey);
+            Assert.Equal(4, effect.SelectionVersion);
+        }
+
+        [Fact]
+        public void BeginLoad_WithNoSave_IsAllowed()
+        {
+            // No throw: the session emits what the selection holds, and refusing
+            // here would move a decision the glue is better placed to make into
+            // a constructor that cannot explain itself.
+            Assert.Null(new BeginLoadEffect(null, 0).SaveKey);
+        }
+
+        [Fact]
         public void Log_WithNullLine_Throws()
         {
             var ex = Assert.Throws<ArgumentNullException>(() => new LogEffect(null!));

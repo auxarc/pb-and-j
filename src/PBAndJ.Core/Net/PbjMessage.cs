@@ -6,7 +6,7 @@ namespace PBAndJ.Core.Net
     /// Discriminator byte at the head of every encoded message.
     /// </summary>
     /// <remarks>
-    /// Values are assigned once and never reused. 26+ are unallocated.
+    /// Values are assigned once and never reused. 28+ are unallocated.
     /// </remarks>
     public enum PbjMessageType : byte
     {
@@ -35,6 +35,8 @@ namespace PBAndJ.Core.Net
         LobbyState = 23,
         LobbyReady = 24,
         LobbyUnready = 25,
+        LobbyLoad = 26,
+        LobbyLoaded = 27,
     }
 
     /// <summary>
@@ -789,6 +791,78 @@ namespace PBAndJ.Core.Net
         public override PbjMessageType Type => PbjMessageType.LobbyUnready;
 
         public int SelectionVersion { get; }
+    }
+
+    /// <summary>How a peer's attempt to load the lobby's save turned out.</summary>
+    /// <remarks>
+    /// Three answers rather than a bool, because the host's response differs.
+    /// <see cref="Unavailable"/> deliberately covers both "I do not have that
+    /// save" and "mine does not match the digest": the host does the same thing
+    /// either way — and will, in M11e, send the bytes — while a fourth arm no
+    /// test could reach would break the coverage gate for a distinction nobody
+    /// acts on.
+    /// <para>
+    /// There is no "still loading". Silence is what that looks like, and the
+    /// host's timeout is what answers it.
+    /// </para>
+    /// </remarks>
+    public enum LoadOutcome : byte
+    {
+        Loaded = 0,
+        Refused = 1,
+        Unavailable = 2,
+    }
+
+    /// <summary>"Everyone agreed — load it now." Host to everyone.</summary>
+    /// <remarks>
+    /// Carries the selection version so a peer can tell this instruction from
+    /// one for a choice the host has since moved on from.
+    /// <para>
+    /// <b>The host advances the selection when it fires this</b>, so the version
+    /// here is one the client has not seen yet. That is why the host emits the
+    /// <see cref="LobbyStateMessage"/> carrying the new version <em>first</em>,
+    /// in the same batch: the stream is ordered, so the client has already
+    /// adopted the version by the time this arrives. Reverse them and every
+    /// client rejects the load while the host — which never validates its own —
+    /// loads alone.
+    /// </para>
+    /// </remarks>
+    public sealed class LobbyLoadMessage : PbjMessage
+    {
+        public LobbyLoadMessage(int selectionVersion, string? saveKey, string? saveDigest)
+        {
+            SelectionVersion = selectionVersion;
+            SaveKey = saveKey;
+            SaveDigest = saveDigest;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.LobbyLoad;
+
+        public int SelectionVersion { get; }
+
+        public string? SaveKey { get; }
+
+        /// <summary>
+        /// What the host's copy hashes to, so a peer can refuse a save of the
+        /// same name that is not the same save.
+        /// </summary>
+        public string? SaveDigest { get; }
+    }
+
+    /// <summary>"I am in", or why not. Peer to host.</summary>
+    public sealed class LobbyLoadedMessage : PbjMessage
+    {
+        public LobbyLoadedMessage(int selectionVersion, LoadOutcome outcome)
+        {
+            SelectionVersion = selectionVersion;
+            Outcome = outcome;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.LobbyLoaded;
+
+        public int SelectionVersion { get; }
+
+        public LoadOutcome Outcome { get; }
     }
 
     /// <summary>Graceful goodbye from either side.</summary>

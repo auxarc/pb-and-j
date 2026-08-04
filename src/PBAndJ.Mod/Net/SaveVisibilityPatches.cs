@@ -246,13 +246,22 @@ namespace PBAndJ.Mod.Net
         /// <para>
         /// <c>CIViewPauseSave</c> is this method's only caller in the whole game.
         /// </para>
+        /// <para>
+        /// M11d softened this: <em>inside</em> a co-op campaign the namespace is
+        /// the player's own to write, so only M9's scenario slot stays refused. The
+        /// reason is not politeness. Refusing a player their own save here leaves
+        /// retyping the name as the only overwrite route — and that route is the
+        /// one that skips the overwrite confirmation. See
+        /// <see cref="SaveNamespacePatches.Duplicates"/>, which closes the other
+        /// half.
+        /// </para>
         /// </remarks>
         [HarmonyPatch(typeof(DataPathHelper), nameof(DataPathHelper.IsReservedFilename))]
         internal static class Reserved
         {
             private static void Postfix(string filename, ref bool __result)
             {
-                if (LobbySaveNames.IsMultiplayerKey(filename))
+                if (LobbySaveWrites.IsProtectedFromOverwrite(filename, MultiplayerCampaign.Active))
                 {
                     __result = true;
                 }

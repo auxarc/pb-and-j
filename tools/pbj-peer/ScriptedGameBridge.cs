@@ -232,6 +232,24 @@ namespace PBAndJ.Peer
 
         public ScenarioPayload ReadScenario() => Scenario;
 
+        /// <summary>Save keys this bridge has been asked to load.</summary>
+        /// <remarks>
+        /// The harness has no game to tear down, so a load "starts" and then
+        /// nothing happens — completion is posted by the scenario itself, which
+        /// is exactly the shape the real glue has: begin here, report later from
+        /// somewhere else entirely.
+        /// </remarks>
+        public List<string?> LoadsBegun { get; } = new List<string?>();
+
+        /// <summary>Set to make the next load refuse instead of starting.</summary>
+        public LoadOutcome? LoadRefusal { get; set; }
+
+        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion)
+        {
+            LoadsBegun.Add(saveKey);
+            return LoadRefusal;
+        }
+
         public bool WriteScenario(ScenarioPayload payload)
         {
             if (!ScenarioWriteSucceeds)

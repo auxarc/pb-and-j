@@ -1453,18 +1453,35 @@ namespace PBAndJ.Peer
                 }
 
                 client.Post(new LocalLobbyReadyEvent());
-                if (!WaitFor("the barrier filled once the client agreed",
-                        () => hostSession.LobbyIsSatisfied && hostSession.LobbyReadyCount == 2))
+
+                // M11d: the barrier no longer STAYS filled. Filling it fires the
+                // load, which spends the agreement — advancing the selection and
+                // clearing every ready — so that a later barrier check on a
+                // disconnect cannot re-fire and reload the campaign underneath
+                // everyone. What proves the agreement happened is the load.
+                if (!WaitFor("the agreement turned straight into a load",
+                        () => hostSession.LoadInFlight))
                 {
                     return 1;
                 }
 
-                // The client learns the whole roster's readiness, not just its
-                // own — this is what a lobby screen renders.
-                if (!WaitFor("the client sees everyone ready",
-                        () => clientSession.LobbyRoster.Count == 2
-                              && clientSession.LobbyRoster[0].Ready
-                              && clientSession.LobbyRoster[1].Ready))
+                // Both machines were told to load, and both were told the same
+                // save. This is the whole M11d handshake over a real socket.
+                if (!WaitFor("both machines began loading the chosen save",
+                        () => hostBridge.LoadsBegun.Count == 1
+                              && hostBridge.LoadsBegun[0] == "pbj_campaign"
+                              && clientBridge.LoadsBegun.Count == 1
+                              && clientBridge.LoadsBegun[0] == "pbj_campaign"))
+                {
+                    return 1;
+                }
+
+                // The client sees the spent agreement too: a new selection
+                // version with nobody ready.
+                if (!WaitFor("the client sees the agreement spent",
+                        () => clientSession.LobbySelectionVersion == 2
+                              && clientSession.LobbyRoster.Count == 2
+                              && !clientSession.LobbyRoster[1].Ready))
                 {
                     return 1;
                 }

@@ -791,6 +791,88 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void LoadStarting_NamesTheSaveAndTheCount()
+        {
+            Assert.Equal(
+                "[pb-and-j] loading 'pbj_campaign' on 2 machine(s) — everyone agreed",
+                NetLog.LoadStarting(2, "pbj_campaign"));
+        }
+
+        [Fact]
+        public void LoadStarting_WithNoSave_StillSaysSomething()
+        {
+            Assert.Contains("'?'", NetLog.LoadStarting(1, null), StringComparison.Ordinal);
+        }
+
+        [Theory]
+        [InlineData(LoadOutcome.Loaded, "OK")]
+        [InlineData(LoadOutcome.Refused, "REFUSED (the game would not start it)")]
+        [InlineData(LoadOutcome.Unavailable, "UNAVAILABLE (no such save, or a different one)")]
+        public void LoadReported_DescribesEveryOutcome(LoadOutcome outcome, string expected)
+        {
+            Assert.Equal(
+                "[pb-and-j] load " + expected + " from #1 'ally'",
+                NetLog.LoadReported(1, "ally", outcome));
+        }
+
+        [Fact]
+        public void LoadReported_ForAnOutcomeWeDoNotKnow_SaysTheNumber()
+        {
+            // Reachable from the wire: the decoder casts the byte unvalidated.
+            Assert.Equal(
+                "[pb-and-j] load UNKNOWN (200) from #1 'ally'",
+                NetLog.LoadReported(1, "ally", (LoadOutcome)200));
+        }
+
+        [Fact]
+        public void LoadReported_WithNoName_StillNamesThePeer()
+        {
+            Assert.Contains("#1 '?'", NetLog.LoadReported(1, null, LoadOutcome.Loaded), StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void LoadTimedOut_NamesTheWaitItGaveUpAfter()
+        {
+            Assert.Equal(
+                "[pb-and-j] no word from #2 after 120s — carrying on without it",
+                NetLog.LoadTimedOut(2));
+        }
+
+        [Fact]
+        public void LoadComplete_CountsWhoActuallyGotIn()
+        {
+            // Not "2 of 2 loaded" — a participant that failed still completed the
+            // barrier, and the line has to be able to say 1 of 2.
+            Assert.Equal(
+                "[pb-and-j] load complete | 1 of 2 machine(s) are in",
+                NetLog.LoadComplete(1, 2));
+        }
+
+        [Fact]
+        public void LoadAbandoned_SaysTheLobbyIsUsableAgain()
+        {
+            Assert.Equal(
+                "[pb-and-j] the host could not load — abandoning, the lobby is open again",
+                NetLog.LoadAbandoned());
+        }
+
+        [Fact]
+        public void LoadIgnoredStale_NamesBothVersions()
+        {
+            Assert.Equal(
+                "[pb-and-j] ignoring a load for selection 5 — we hold 4",
+                NetLog.LoadIgnoredStale(5, 4));
+        }
+
+        [Fact]
+        public void LoadAlreadyBegun_NamesTheVersion()
+        {
+            Assert.Equal(
+                "[pb-and-j] already loading selection 5 — ignoring the repeat",
+                NetLog.LoadAlreadyBegun(5));
+        }
+
+        [Fact]
         public void LobbySelectIsHostOnly_ComposesTheLine()
         {
             Assert.Equal("[pb-and-j] only the host picks the lobby save", NetLog.LobbySelectIsHostOnly());

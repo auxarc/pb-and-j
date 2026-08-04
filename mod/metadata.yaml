@@ -1,5 +1,5 @@
 id: pb-and-j
-ver: 0.7.0
+ver: 0.8.0
 name: PB and J
 desc: Proof-of-concept groundwork for Phantom Brigade multiplayer. Networking is strictly opt-in — no socket is opened unless you start a session with pbj.host or pbj.join.
 url: https://github.com/auxarc/pb-and-j

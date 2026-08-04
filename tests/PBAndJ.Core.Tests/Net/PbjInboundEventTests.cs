@@ -204,5 +204,17 @@ namespace PBAndJ.Core.Tests.Net
         {
             Assert.Equal(PbjInboundEventKind.LocalLobbyUnready, new LocalLobbyUnreadyEvent().Kind);
         }
+
+        [Theory]
+        [InlineData(LoadOutcome.Loaded)]
+        [InlineData(LoadOutcome.Refused)]
+        [InlineData(LoadOutcome.Unavailable)]
+        public void LoadFinished_CarriesTheVersionAndTheOutcome(LoadOutcome outcome)
+        {
+            var evt = new LoadFinishedEvent(4, outcome);
+            Assert.Equal(PbjInboundEventKind.LoadFinished, evt.Kind);
+            Assert.Equal(4, evt.SelectionVersion);
+            Assert.Equal(outcome, evt.Outcome);
+        }
     }
 }

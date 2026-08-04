@@ -238,6 +238,17 @@ namespace PBAndJ.Core.Net
                     writer.WriteInt32(lobbyUnready.SelectionVersion);
                     break;
 
+                case LobbyLoadMessage lobbyLoad:
+                    writer.WriteInt32(lobbyLoad.SelectionVersion);
+                    writer.WriteString(lobbyLoad.SaveKey);
+                    writer.WriteString(lobbyLoad.SaveDigest);
+                    break;
+
+                case LobbyLoadedMessage lobbyLoaded:
+                    writer.WriteInt32(lobbyLoaded.SelectionVersion);
+                    writer.WriteInt32((int)lobbyLoaded.Outcome);
+                    break;
+
                 case PingMessage ping:
                     writer.WriteInt32(ping.Nonce);
                     break;
@@ -459,6 +470,17 @@ namespace PBAndJ.Core.Net
 
                 case PbjMessageType.LobbyUnready:
                     return new LobbyUnreadyMessage(reader.ReadInt32());
+
+                case PbjMessageType.LobbyLoad:
+                    return new LobbyLoadMessage(
+                        reader.ReadInt32(), reader.ReadString(), reader.ReadString());
+
+                // The cast is unvalidated, the same way RejectReason's is: an
+                // unknown value from a peer becomes an outcome nothing matches,
+                // which the host treats as a failure rather than throwing.
+                case PbjMessageType.LobbyLoaded:
+                    return new LobbyLoadedMessage(
+                        reader.ReadInt32(), (LoadOutcome)reader.ReadInt32());
 
                 case PbjMessageType.Ping:
                     return new PingMessage(reader.ReadInt32());

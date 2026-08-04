@@ -246,6 +246,41 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void Pump_BeginLoadEffect_StartsTheLoadAndWaits()
+        {
+            // A started load reports later, from the game's own completion
+            // callback — so the pump that starts it must produce no outcome.
+            bridge.InCombat = false;
+            var runtime = WithHandshakenPeer();
+            mailbox.Post(new LocalLobbySelectEvent("pbj_campaign", "abc"));
+            mailbox.Post(new LocalLobbyReadyEvent());
+            mailbox.Post(new PeerBytesEvent(1, Frame(new LobbyReadyMessage(1))));
+            runtime.Pump(0);
+
+            Assert.Equal(new[] { "pbj_campaign" }, bridge.LoadsBegun);
+            Assert.True(host.LoadInFlight);
+        }
+
+        [Fact]
+        public void Pump_BeginLoadEffect_WhenTheLoadCannotStart_ReportsAtOnce()
+        {
+            // The reason BeginLoad returns an outcome rather than a bool: a
+            // machine that already knows it has not got the save must say so,
+            // not cost the host a two-minute timeout waiting for silence.
+            bridge.InCombat = false;
+            bridge.LoadRefusal = LoadOutcome.Unavailable;
+            var runtime = WithHandshakenPeer();
+            mailbox.Post(new LocalLobbySelectEvent("pbj_campaign", "abc"));
+            mailbox.Post(new LocalLobbyReadyEvent());
+            mailbox.Post(new PeerBytesEvent(1, Frame(new LobbyReadyMessage(1))));
+            runtime.Pump(0);
+
+            // The host's own load failed, so the whole thing is abandoned.
+            Assert.False(host.LoadInFlight);
+            Assert.Contains(log.Lines, l => l.Contains("abandoning"));
+        }
+
+        [Fact]
         public void Pump_CommitTurnEffect_WhenGameRefuses_BroadcastsNothing()
         {
             // The reason CommitTurnEffect feeds its outcome back rather than
@@ -327,7 +362,10 @@ namespace PBAndJ.Core.Tests.Net
             runtime.Pump(0);
             runtime.Pump(0);
 
-            Assert.DoesNotContain(transport.MessagesTo(1), m => m is CombatStartMessage || m is CombatEndMessage);
+            // The handshake's own CombatStart is expected and does not repeat;
+            // pumping a state that has not changed must announce nothing further.
+            Assert.Single(transport.MessagesTo(1), m => m is CombatStartMessage);
+            Assert.DoesNotContain(transport.MessagesTo(1), m => m is CombatEndMessage);
         }
 
         [Fact]
@@ -337,7 +375,10 @@ namespace PBAndJ.Core.Tests.Net
             var runtime = WithHandshakenPeer();
             runtime.Pump(0);
 
-            Assert.DoesNotContain(transport.MessagesTo(1), m => m is CombatStartMessage);
+            // Exactly one, and it is the handshake's: a peer joining mid-combat
+            // is told so on purpose (M11d). What must not happen is a SECOND one
+            // from a combat-entered edge that never actually occurred.
+            Assert.Single(transport.MessagesTo(1), m => m is CombatStartMessage);
         }
 
         [Fact]

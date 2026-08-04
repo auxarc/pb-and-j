@@ -466,6 +466,26 @@ namespace PBAndJ.Mod.Net
             return "[pb-and-j] lobby save set to " + key;
         }
 
+        // --- the campaign bit (M11d) ---
+
+        /// <summary>
+        /// Whether the loaded campaign is a multiplayer one, and which save it is.
+        /// </summary>
+        /// <remarks>
+        /// The only way to see <see cref="MultiplayerCampaign"/> from inside a
+        /// running game. It decides where every subsequent save is written, and a
+        /// bit that stuck on would prefix a singleplayer campaign's saves — hiding
+        /// them from the load screen and from Continue, which reads as the campaign
+        /// having been deleted. Worth being able to look at.
+        /// </remarks>
+        public static string Campaign()
+        {
+            return MultiplayerCampaign.Active
+                ? "[pb-and-j] multiplayer campaign '" + MultiplayerCampaign.SaveKey
+                    + "' — saves stay in the " + LobbySaveNames.Prefix + " namespace"
+                : "[pb-and-j] not in a multiplayer campaign — saves are written as the game names them";
+        }
+
         // --- hooks used by the execution patches ---
 
         internal static bool HasSession => runtime != null && !killed;
@@ -499,6 +519,10 @@ namespace PBAndJ.Mod.Net
             }
             return null;
         }
+
+        /// <summary>Reports a finished load back into the session. M11d.</summary>
+        internal static void PostLoadFinished(int selectionVersion, LoadOutcome outcome) =>
+            runtime?.Post(new LoadFinishedEvent(selectionVersion, outcome));
 
         internal static void PostLocalLobbyReady() => runtime?.Post(new LocalLobbyReadyEvent());
 
@@ -682,6 +706,7 @@ namespace PBAndJ.Mod.Net
             Add(nameof(SaveAs), new[] { typeof(string) }, "pbj.save-as");
             Add(nameof(SaveConvert), new[] { typeof(string), typeof(string) }, "pbj.save-convert");
             Add(nameof(LobbySelect), new[] { typeof(string) }, "pbj.lobby-select");
+            Add(nameof(Campaign), new Type[0], "pbj.campaign");
             AddFrom(typeof(ConnectScreenGlue), nameof(ConnectScreenGlue.Connect),
                 new Type[0], "pbj.connect");
             AddFrom(typeof(ConnectScreenGlue), nameof(ConnectScreenGlue.ConnectForget),

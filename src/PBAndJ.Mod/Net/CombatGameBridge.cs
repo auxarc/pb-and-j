@@ -545,6 +545,18 @@ namespace PBAndJ.Mod.Net
         }
 
         /// <summary>
+        /// Starts loading a campaign save. M11d.
+        /// </summary>
+        /// <remarks>
+        /// Delegates to <see cref="LoadGlue"/>, which owns the pre-checks and the
+        /// completion callback. Kept out of this class because the bridge is
+        /// otherwise all ECS reads and writes, and a load is neither — it tears
+        /// the ECS down and builds a new one.
+        /// </remarks>
+        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion) =>
+            LoadGlue.Begin(saveKey, selectionVersion);
+
+        /// <summary>
         /// Where this save lives, from the game's own path resolution. The
         /// directory name is always ours — never the one on the wire.
         /// </summary>

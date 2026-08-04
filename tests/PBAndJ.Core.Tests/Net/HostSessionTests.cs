@@ -26,6 +26,9 @@ namespace PBAndJ.Core.Tests.Net
             return host;
         }
 
+        private static IEnumerable<T> Messages<T>(IEnumerable<PbjEffect> effects) where T : PbjMessage =>
+            effects.OfType<SendEffect>().Select(e => e.Message).OfType<T>();
+
         private static T Single<T>(IEnumerable<PbjEffect> effects) where T : PbjEffect =>
             effects.OfType<T>().Single();
 
@@ -113,7 +116,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new PeerConnectedEvent(1, "r"));
             var effects = host.HandleMessage(1, GoodHello());
 
-            var welcome = Assert.IsType<WelcomeMessage>(Single<SendEffect>(effects).Message);
+            var welcome = Messages<WelcomeMessage>(effects).Single();
             Assert.Equal(1, welcome.AssignedPeerId);
             Assert.Equal("7f3a91", welcome.SessionId);
             Assert.Equal("host", welcome.HostName);
@@ -129,7 +132,7 @@ namespace PBAndJ.Core.Tests.Net
         {
             var host = Host();
             var effects = host.HandleMessage(1, GoodHello());
-            var welcome = (WelcomeMessage)Single<SendEffect>(effects).Message;
+            var welcome = Messages<WelcomeMessage>(effects).Single();
             Assert.Equal(2, welcome.Peers.Count);
             Assert.Equal(PbjPeerRegistry.HostPeerId, welcome.Peers[0].PeerId);
             Assert.Equal("host", welcome.Peers[0].Name);
@@ -178,7 +181,7 @@ namespace PBAndJ.Core.Tests.Net
         {
             var host = Host();
             var effects = host.HandleMessage(1, new HelloMessage(0xDEAD, PbjProtocol.Version, "0.2.0", "ally", null, null));
-            var reject = Assert.IsType<RejectMessage>(Single<SendEffect>(effects).Message);
+            var reject = Messages<RejectMessage>(effects).Single();
             Assert.Equal(RejectReason.BadMagic, reject.Reason);
             Assert.Equal(1, Single<DisconnectEffect>(effects).PeerId);
             Assert.Empty(host.Peers);
@@ -189,7 +192,7 @@ namespace PBAndJ.Core.Tests.Net
         {
             var host = Host();
             var effects = host.HandleMessage(1, new HelloMessage(PbjProtocol.Magic, 999, "0.2.0", "ally", null, null));
-            var reject = Assert.IsType<RejectMessage>(Single<SendEffect>(effects).Message);
+            var reject = Messages<RejectMessage>(effects).Single();
             Assert.Equal(RejectReason.VersionMismatch, reject.Reason);
             Assert.Equal("peer v999, host v" + PbjProtocol.Version, reject.Detail);
         }
@@ -199,7 +202,7 @@ namespace PBAndJ.Core.Tests.Net
         {
             var host = WithPeer(1, "ally");
             var effects = host.HandleMessage(2, GoodHello("ally"));
-            var reject = Assert.IsType<RejectMessage>(Single<SendEffect>(effects).Message);
+            var reject = Messages<RejectMessage>(effects).Single();
             Assert.Equal(RejectReason.DuplicateName, reject.Reason);
         }
 
@@ -209,7 +212,7 @@ namespace PBAndJ.Core.Tests.Net
             var host = WithPeer(1, "a", maxPeers: 1);
             var effects = host.HandleMessage(2, GoodHello("b"));
             Assert.Equal(RejectReason.SessionFull,
-                ((RejectMessage)Single<SendEffect>(effects).Message).Reason);
+                (Messages<RejectMessage>(effects).Single()).Reason);
         }
 
         [Fact]
@@ -220,7 +223,7 @@ namespace PBAndJ.Core.Tests.Net
             var host = Host();
             var effects = host.HandleMessage(1, new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "v", "   ", null, null));
             Assert.Equal(RejectReason.InvalidName,
-                ((RejectMessage)Single<SendEffect>(effects).Message).Reason);
+                (Messages<RejectMessage>(effects).Single()).Reason);
         }
 
         [Fact]
@@ -397,7 +400,7 @@ namespace PBAndJ.Core.Tests.Net
             var host = WithPeer();
             var effects = host.HandleMessage(1, new ReadyMessage(4, null));
             Assert.Empty(All<DisconnectEffect>(effects));
-            Assert.Equal(3, Assert.IsType<TurnCommitMessage>(Single<SendEffect>(effects).Message).Turn);
+            Assert.Equal(3, Messages<TurnCommitMessage>(effects).Single().Turn);
         }
 
         [Fact]
@@ -772,7 +775,7 @@ namespace PBAndJ.Core.Tests.Net
             var host = Host();
             host.Handle(new TickEvent(1000));
             host.Handle(new PeerConnectedEvent(peerId, "127.0.0.1:1"));
-            var welcome = (WelcomeMessage)Single<SendEffect>(host.HandleMessage(peerId, GoodHello(name))).Message;
+            var welcome = Messages<WelcomeMessage>(host.HandleMessage(peerId, GoodHello(name))).Single();
             token = welcome.ResumeToken!;
             return host;
         }
@@ -799,8 +802,8 @@ namespace PBAndJ.Core.Tests.Net
             a.Handle(new TickEvent(1000));
             b.Handle(new TickEvent(1000));
 
-            var tokenA = ((WelcomeMessage)Single<SendEffect>(a.HandleMessage(1, GoodHello())).Message).ResumeToken;
-            var tokenB = ((WelcomeMessage)Single<SendEffect>(b.HandleMessage(1, GoodHello())).Message).ResumeToken;
+            var tokenA = (Messages<WelcomeMessage>(a.HandleMessage(1, GoodHello())).Single()).ResumeToken;
+            var tokenB = (Messages<WelcomeMessage>(b.HandleMessage(1, GoodHello())).Single()).ResumeToken;
             Assert.NotEqual(tokenA, tokenB);
         }
 
@@ -877,7 +880,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new PeerDisconnectedEvent(1, "closed"));
             host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
 
-            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, Rejoin("not-the-token"))).Message;
+            var reject = Messages<RejectMessage>(host.HandleMessage(2, Rejoin("not-the-token"))).Single();
             Assert.Equal(RejectReason.BadResumeToken, reject.Reason);
         }
 
@@ -888,8 +891,8 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new PeerDisconnectedEvent(1, "closed"));
             host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
 
-            var reject = (RejectMessage)Single<SendEffect>(
-                host.HandleMessage(2, Rejoin(token, claimedPeerId: 7))).Message;
+            var reject = Messages<RejectMessage>(
+                host.HandleMessage(2, Rejoin(token, claimedPeerId: 7))).Single();
             Assert.Equal(RejectReason.BadResumeToken, reject.Reason);
         }
 
@@ -900,8 +903,8 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new PeerDisconnectedEvent(1, "closed"));
             host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
 
-            var reject = (RejectMessage)Single<SendEffect>(
-                host.HandleMessage(2, Rejoin(token, session: "someone-else"))).Message;
+            var reject = Messages<RejectMessage>(
+                host.HandleMessage(2, Rejoin(token, session: "someone-else"))).Single();
             Assert.Equal(RejectReason.UnknownSession, reject.Reason);
         }
 
@@ -912,7 +915,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new PeerDisconnectedEvent(1, "closed"));
             host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
 
-            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, new RejoinMessage(PbjProtocol.Magic, 999, "0.2.0", "ally", "7f3a91", 1, token, null, null))).Message;
+            var reject = Messages<RejectMessage>(host.HandleMessage(2, new RejoinMessage(PbjProtocol.Magic, 999, "0.2.0", "ally", "7f3a91", 1, token, null, null))).Single();
             Assert.Equal(RejectReason.VersionMismatch, reject.Reason);
         }
 
@@ -923,7 +926,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new PeerDisconnectedEvent(1, "closed"));
             host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
 
-            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, new RejoinMessage(0xDEAD, PbjProtocol.Version, "0.2.0", "ally", "7f3a91", 1, token, null, null))).Message;
+            var reject = Messages<RejectMessage>(host.HandleMessage(2, new RejoinMessage(0xDEAD, PbjProtocol.Version, "0.2.0", "ally", "7f3a91", 1, token, null, null))).Single();
             Assert.Equal(RejectReason.BadMagic, reject.Reason);
             Assert.Null(reject.Detail);
         }
@@ -959,7 +962,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new PeerDisconnectedEvent(1, "closed"));
             host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
 
-            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, GoodHello("ally"))).Message;
+            var reject = Messages<RejectMessage>(host.HandleMessage(2, GoodHello("ally"))).Single();
             Assert.Equal(RejectReason.DuplicateName, reject.Reason);
             Assert.Equal("reserved for a reconnect", reject.Detail);
         }
@@ -1008,7 +1011,7 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new TickEvent(1000 + PbjProtocol.ReconnectGraceSeconds));
             host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
 
-            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2, Rejoin(token))).Message;
+            var reject = Messages<RejectMessage>(host.HandleMessage(2, Rejoin(token))).Single();
             Assert.Equal(RejectReason.BadResumeToken, reject.Reason);
         }
 
@@ -1055,7 +1058,7 @@ namespace PBAndJ.Core.Tests.Net
             var host = new HostSession("host", "7f3a91", 1, bridge, "secret", SessionRequirements.None);
             host.Handle(new TickEvent(1000));
             host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
-            var token = ((WelcomeMessage)Single<SendEffect>(host.HandleMessage(1, GoodHello())).Message).ResumeToken!;
+            var token = (Messages<WelcomeMessage>(host.HandleMessage(1, GoodHello())).Single()).ResumeToken!;
             host.Handle(new PeerDisconnectedEvent(1, "closed"));
 
             // Someone else takes the only slot while the hold stands.
@@ -1063,7 +1066,7 @@ namespace PBAndJ.Core.Tests.Net
             host.HandleMessage(2, GoodHello("other"));
 
             host.Handle(new PeerConnectedEvent(3, "127.0.0.1:3"));
-            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(3, Rejoin(token))).Message;
+            var reject = Messages<RejectMessage>(host.HandleMessage(3, Rejoin(token))).Single();
             Assert.Equal(RejectReason.SessionFull, reject.Reason);
         }
 
@@ -1074,8 +1077,8 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(new PeerDisconnectedEvent(1, "closed"));
             host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
 
-            var reject = (RejectMessage)Single<SendEffect>(host.HandleMessage(2,
-                new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", null, null, null))).Message;
+            var reject = Messages<RejectMessage>(host.HandleMessage(2,
+                new HelloMessage(PbjProtocol.Magic, PbjProtocol.Version, "0.2.0", null, null, null))).Single();
             Assert.Equal(RejectReason.InvalidName, reject.Reason);
         }
 
@@ -1732,7 +1735,10 @@ namespace PBAndJ.Core.Tests.Net
             host.Handle(Select().Event);
             host.Handle(new LocalLobbyReadyEvent());
             host.HandleMessage(1, new LobbyReadyMessage(1));
-            Assert.True(host.LobbyIsSatisfied);
+            // Satisfaction is now consumed the instant it happens: the load
+            // fires and the agreement is spent, so the barrier reads unsatisfied
+            // rather than staying armed. M11d.
+            Assert.True(host.LoadInFlight);
 
             host.Handle(Select("pbj_other").Event);
 
@@ -1783,17 +1789,19 @@ namespace PBAndJ.Core.Tests.Net
 
             var effects = host.Handle(new LocalLobbyReadyEvent());
 
-            Assert.Equal(1, host.LobbyReadyCount);
-            // Host alone in the lobby, so its own ready fills the barrier.
-            Assert.True(host.LobbyIsSatisfied);
-            Assert.True(LobbyState(effects).Peers[0].Ready);
+            // Host alone in the lobby, so its own ready fills the barrier — and
+            // filling it now fires the load, which spends the agreement.
+            Assert.True(host.LoadInFlight);
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.Single(All<BeginLoadEffect>(effects));
         }
 
         [Fact]
         public void LocalLobbyUnready_WithdrawsIt()
         {
-            bridge.InCombat = false;
-            var host = Host();
+            // Two participants, so the host's own ready does not fill the barrier
+            // and immediately spend itself on a load.
+            var host = LobbyHost();
             host.Handle(Select().Event);
             host.Handle(new LocalLobbyReadyEvent());
 
@@ -1843,7 +1851,7 @@ namespace PBAndJ.Core.Tests.Net
             var host = Host();
             host.Handle(Select().Event);
             host.Handle(new LocalLobbyReadyEvent());
-            Assert.True(host.LobbyIsSatisfied);
+            Assert.True(host.LoadInFlight);
 
             host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
             host.HandleMessage(1, GoodHello());
@@ -1862,8 +1870,10 @@ namespace PBAndJ.Core.Tests.Net
 
             var effects = host.HandleMessage(1, new LobbyReadyMessage(1));
 
-            Assert.True(host.LobbyIsSatisfied);
             Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("everyone has agreed"));
+            // ...and that agreement is spent immediately on the load it was for.
+            Assert.True(host.LoadInFlight);
+            Assert.Single(All<BroadcastEffect>(effects).Select(b => b.Message).OfType<LobbyLoadMessage>());
         }
 
         [Fact]
@@ -1972,8 +1982,9 @@ namespace PBAndJ.Core.Tests.Net
 
             var effects = host.Handle(new PeerDisconnectedEvent(1, "closed"));
 
-            Assert.True(host.LobbyIsSatisfied);
             Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("everyone has agreed"));
+            // And in M11d that is the trigger: filling by subtraction loads too.
+            Assert.True(host.LoadInFlight);
         }
 
         [Fact]
@@ -2038,7 +2049,7 @@ namespace PBAndJ.Core.Tests.Net
             var host = Host();
             host.Handle(Select().Event);
             host.Handle(new LocalLobbyReadyEvent());
-            Assert.True(host.LobbyIsSatisfied);
+            Assert.True(host.LoadInFlight);
 
             bridge.InCombat = true;
             host.Handle(new CombatEnteredEvent());
@@ -2049,8 +2060,10 @@ namespace PBAndJ.Core.Tests.Net
             Assert.False(host.LobbyIsSatisfied);
             // The save survives; only the agreement to it is withdrawn.
             Assert.Equal("pbj_campaign", host.Selection.SaveKey);
-            Assert.Equal(2, host.Selection.Version);
-            Assert.Equal(2, LobbyState(effects).SelectionVersion);
+            // 1 for the select, 2 when the load fired and spent the agreement,
+            // 3 for leaving combat. Every consumer of an agreement advances it.
+            Assert.Equal(3, host.Selection.Version);
+            Assert.Equal(3, LobbyState(effects).SelectionVersion);
         }
 
         [Fact]
@@ -2084,6 +2097,278 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(3, LobbyState(effects).Peers.Count);
             // ...but the barrier says nothing while it is not in play.
             Assert.DoesNotContain(All<LogEffect>(effects), l => l.Line.Contains("lobby "));
+        }
+
+        // --- a peer that joins mid-combat (the 2026-08-03 defect) ---
+
+        private static IReadOnlyList<PbjMessage> SentTo(IEnumerable<PbjEffect> effects, int peerId) =>
+            effects.OfType<SendEffect>().Where(e => e.PeerId == peerId).Select(e => e.Message).ToList();
+
+        [Fact]
+        public void Handshake_WhileInCombat_TellsTheNewcomerCombatIsHappening()
+        {
+            // Without this the peer never learns, HandleWelcome falls back to
+            // reading its OWN combat flag, and its Execute is swallowed forever.
+            var host = Host();
+            host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            var effects = host.HandleMessage(1, GoodHello());
+
+            var start = SentTo(effects, 1).OfType<CombatStartMessage>().Single();
+            Assert.Equal(host.Turn, start.Turn);
+        }
+
+        [Fact]
+        public void Handshake_WhileInCombat_SendsCombatStartAfterTheScenarioOffer()
+        {
+            // CombatStart moves the client to Planning, and HandleScenarioOffer
+            // ignores an offer unless it is in Lobby. Reversed, the joining peer
+            // silently declines the very save it needs to play.
+            var host = Host();
+            host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            bridge.Scenario = new ScenarioPayload("pbj_combat_test", new[]
+            {
+                new ScenarioFile("content.zip", new byte[] { 1 }),
+                new ScenarioFile("metadata.yaml", new byte[] { 2 }),
+            });
+            var sent = SentTo(host.HandleMessage(1, GoodHello()), 1);
+
+            var offerAt = sent.ToList().FindIndex(m => m is ScenarioOfferMessage);
+            var startAt = sent.ToList().FindIndex(m => m is CombatStartMessage);
+            Assert.True(offerAt >= 0, "the scenario must still be offered");
+            Assert.True(startAt > offerAt, "CombatStart must follow the scenario offer");
+        }
+
+        [Fact]
+        public void Handshake_WhileExecuting_SendsCombatStartBeforeTurnCommit()
+        {
+            // The other side of the same constraint. TurnCommit locks the client
+            // and moves it to Watching; a CombatStart arriving afterwards would
+            // unlock it and leave it planning a turn that is already running.
+            var host = Executing();
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            var sent = SentTo(host.HandleMessage(2, GoodHello("third")), 2).ToList();
+
+            var startAt = sent.FindIndex(m => m is CombatStartMessage);
+            var commitAt = sent.FindIndex(m => m is TurnCommitMessage);
+            Assert.True(startAt >= 0, "CombatStart must be sent");
+            Assert.True(commitAt > startAt, "TurnCommit must follow CombatStart");
+        }
+
+        [Fact]
+        public void Handshake_OutOfCombat_SendsNoCombatStart()
+        {
+            var host = LobbyHost();
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            var effects = host.HandleMessage(2, GoodHello("third"));
+            Assert.Empty(SentTo(effects, 2).OfType<CombatStartMessage>());
+        }
+
+        // --- the synchronised load (M11d) ---
+
+        /// <summary>A host and one peer, both agreed, so the load has just fired.</summary>
+        private HostSession Loading(out IReadOnlyList<PbjEffect> fired)
+        {
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            host.Handle(new LocalLobbyReadyEvent());
+            fired = host.HandleMessage(1, new LobbyReadyMessage(1));
+            return host;
+        }
+
+        [Fact]
+        public void Load_FiresWhenEveryoneHasAgreed()
+        {
+            var host = Loading(out var effects);
+
+            Assert.True(host.LoadInFlight);
+            var load = All<BroadcastEffect>(effects).Select(b => b.Message).OfType<LobbyLoadMessage>().Single();
+            Assert.Equal("pbj_campaign", load.SaveKey);
+            Assert.Single(All<BeginLoadEffect>(effects));
+        }
+
+        [Fact]
+        public void Load_AdvancesTheSelectionSoTheAgreementCannotBeSpentTwice()
+        {
+            // The heart of the design. IsSatisfied is a predicate nothing
+            // consumes and the host stays in Lobby for the whole campaign, so a
+            // level-triggered load would re-fire from every later barrier check
+            // — including the disconnect path — and reload the original save on
+            // every machine mid-play.
+            var host = Loading(out _);
+
+            Assert.Equal(2, host.Selection.Version);
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.False(host.LobbyIsSatisfied);
+        }
+
+        [Fact]
+        public void Load_BroadcastsTheNewLobbyStateBeforeTheLoadInstruction()
+        {
+            // Firing puts the host a version ahead of every client, and a client
+            // validates LobbyLoad against the version it last heard. Reverse
+            // these two and every client refuses while the host loads alone.
+            var host = Loading(out var effects);
+
+            var broadcasts = All<BroadcastEffect>(effects).Select(b => b.Message).ToList();
+            var stateAt = broadcasts.FindIndex(m => m is LobbyStateMessage s && s.SelectionVersion == 2);
+            var loadAt = broadcasts.FindIndex(m => m is LobbyLoadMessage);
+
+            Assert.True(stateAt >= 0, "the advanced LobbyState must be broadcast");
+            Assert.True(loadAt > stateAt, "LobbyLoad must follow the LobbyState carrying its version");
+            Assert.Equal(2, Assert.IsType<LobbyLoadMessage>(broadcasts[loadAt]).SelectionVersion);
+        }
+
+        [Fact]
+        public void Load_DoesNotFireASecondTimeWhileOneIsRunning()
+        {
+            var host = Loading(out _);
+            // A peer leaving re-checks the barrier — the path that would have
+            // been catastrophic.
+            var effects = host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            Assert.Empty(All<BroadcastEffect>(effects).Select(b => b.Message).OfType<LobbyLoadMessage>());
+        }
+
+        [Fact]
+        public void Load_WithNoSaveChosen_DoesNotFire()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            host.Handle(new LocalLobbyReadyEvent());
+            Assert.False(host.LoadInFlight);
+        }
+
+        [Fact]
+        public void Load_CompletesWhenEveryoneHasReported()
+        {
+            var host = Loading(out _);
+            host.Handle(new LoadFinishedEvent(2, LoadOutcome.Loaded));
+            Assert.True(host.LoadInFlight);
+
+            var effects = host.HandleMessage(1, new LobbyLoadedMessage(2, LoadOutcome.Loaded));
+
+            Assert.False(host.LoadInFlight);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("2 of 2 machine(s) are in"));
+        }
+
+        [Fact]
+        public void Load_CompletesEvenWhenAPeerFailed()
+        {
+            // The barrier waits for news, not for success.
+            var host = Loading(out _);
+            host.Handle(new LoadFinishedEvent(2, LoadOutcome.Loaded));
+            var effects = host.HandleMessage(1, new LobbyLoadedMessage(2, LoadOutcome.Unavailable));
+
+            Assert.False(host.LoadInFlight);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("1 of 2 machine(s) are in"));
+        }
+
+        [Fact]
+        public void Load_ReportForAStaleVersion_IsIgnored()
+        {
+            var host = Loading(out _);
+            var effects = host.HandleMessage(1, new LobbyLoadedMessage(1, LoadOutcome.Loaded));
+            Assert.DoesNotContain(All<LogEffect>(effects), l => l.Line.Contains("load OK"));
+            Assert.True(host.LoadInFlight);
+        }
+
+        [Fact]
+        public void Load_HostReportForALoadThatIsNotRunning_IsIgnored()
+        {
+            // A callback outliving the load that asked for it. Acting on it would
+            // complete a barrier nobody is waiting on.
+            var host = LobbyHost();
+            var effects = host.Handle(new LoadFinishedEvent(2, LoadOutcome.Loaded));
+            Assert.DoesNotContain(All<LogEffect>(effects), l => l.Line.Contains("load OK"));
+        }
+
+        [Fact]
+        public void Load_HostFailure_AbandonsTheWholeLoad()
+        {
+            // The host is not a peer that can be carried on without: it is the
+            // session. Dropping it would leave the others in a campaign it is
+            // not in.
+            var host = Loading(out _);
+            var effects = host.Handle(new LoadFinishedEvent(2, LoadOutcome.Refused));
+
+            Assert.False(host.LoadInFlight);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("abandoning"));
+        }
+
+        [Fact]
+        public void Load_APeerLeavingMidLoad_StopsBeingWaitedFor()
+        {
+            var host = Loading(out _);
+            host.Handle(new LoadFinishedEvent(2, LoadOutcome.Loaded));
+
+            var effects = host.Handle(new PeerDisconnectedEvent(1, "closed"));
+
+            Assert.False(host.LoadInFlight);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("machine(s) are in"));
+        }
+
+        [Fact]
+        public void Load_TimesOutAPeerThatNeverReports()
+        {
+            var host = Loading(out _);
+            host.Handle(new LoadFinishedEvent(2, LoadOutcome.Loaded));
+
+            // Seed-don't-judge: the first tick mints the deadline rather than
+            // measuring against a clock that was never stamped.
+            host.Handle(new TickEvent(1000.0));
+            Assert.True(host.LoadInFlight);
+
+            var effects = host.Handle(new TickEvent(1000.0 + PbjProtocol.LoadTimeoutSeconds + 1.0));
+
+            Assert.False(host.LoadInFlight);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("no word from #1"));
+        }
+
+        [Fact]
+        public void Load_DoesNotTimeOutBeforeTheDeadline()
+        {
+            var host = Loading(out _);
+            host.Handle(new TickEvent(1000.0));
+            host.Handle(new TickEvent(1000.0 + PbjProtocol.LoadTimeoutSeconds - 1.0));
+            Assert.True(host.LoadInFlight);
+        }
+
+        [Fact]
+        public void Load_HostTimingOutAbandonsRatherThanDropping()
+        {
+            var host = Loading(out _);
+            host.HandleMessage(1, new LobbyLoadedMessage(2, LoadOutcome.Loaded));
+            host.Handle(new TickEvent(1000.0));
+
+            var effects = host.Handle(new TickEvent(1000.0 + PbjProtocol.LoadTimeoutSeconds + 1.0));
+
+            Assert.False(host.LoadInFlight);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("abandoning"));
+        }
+
+        [Fact]
+        public void Load_TicksWithNothingRunning_DoNothing()
+        {
+            var host = LobbyHost();
+            host.Handle(new TickEvent(1000.0));
+            Assert.False(host.LoadInFlight);
+        }
+
+        [Fact]
+        public void Load_AfterCompleting_TheLobbyCanFillAgain()
+        {
+            // Deliberate: unanimous agreement a second time is a deliberate
+            // reload. The alternative — a barrier that can never fire again —
+            // is M11a's do-nothing barrier reintroduced.
+            var host = Loading(out _);
+            host.Handle(new LoadFinishedEvent(2, LoadOutcome.Loaded));
+            host.HandleMessage(1, new LobbyLoadedMessage(2, LoadOutcome.Loaded));
+            Assert.False(host.LoadInFlight);
+
+            host.Handle(new LocalLobbyReadyEvent());
+            var effects = host.HandleMessage(1, new LobbyReadyMessage(2));
+
+            Assert.True(host.LoadInFlight);
+            Assert.Single(All<BeginLoadEffect>(effects));
         }
 
         // --- the roster the screen reads (M11c) ---
