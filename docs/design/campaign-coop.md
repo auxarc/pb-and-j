@@ -146,36 +146,69 @@ Measure before designing chunking.
 `M11a` first and alone; everything else depends on it. `M11b` is independent of `a` and can run in
 parallel. `M11c` needs both. `M11d` needs `a`. `M11e` needs a measurement before it needs a design.
 
-### The risk worth naming
+### The risk worth naming — ANSWERED 2026-08-04, on a running game
 
-**Corrected 2026-08-04.** An earlier version of this section said "every call site read so far is
-inside `CIViewPauseLoad`". That was false, and it was false in the direction that matters — a second,
-closer reading found **eight** caller classes, two of which are not view code at all:
+**`TryLoading` works from outside the load screen's flow. M11d does not change shape.**
+
+Measured with `pbj.load-probe` / `pbj.load-try` (since deleted), driven from the **dev console, in
+the overworld**, on the pinned 2.2.2-b8339 build:
+
+```
+load-try 'TWO POINT OH BABY' | before   | state=overworld | isLoadingInProgress=False | isTeardownOfCampaignRequested=False
+load-try 'TWO POINT OH BABY' | returned | isLoadingInProgress=True  | isTeardownOfCampaignRequested=True | callbackAfterLoading=PENDING
+   ... Popping game controller state 'overworld' / Enabling state mainmenu / Attempting to load save data ...
+load-try 'TWO POINT OH BABY' | CALLBACK FIRED | state=overworld
+```
+
+1. **The completion callback fires from a console-driven load.** That is M11d's "peer reports it is
+   actually in" signal, proven rather than assumed — the whole reason the probe existed.
+2. **The wrong-state race did not lose.** From the overworld `TryLoading` set both flags, popped the
+   controller state, and `Co.DelayFrames(2)` was enough for `LoadingStart`'s `mainmenu` re-check.
+   One sample, not a proof — but the failure mode is a refused load, not a corrupt one.
+3. **All four `LoadingEnd2` singletons are non-null in both `mainmenu` and `overworld`** — including
+   the whole `CIViewPauseLoad.ins.sidebarHelper.buttonConfirm` chain, from a state where the load
+   screen was never opened. That hazard is **dormant**: the views persist, they are not built on
+   demand.
+4. **A successful load leaves the flags clean**: `isLoadingInProgress=False`,
+   `isTeardownOfCampaignRequested=False`, `callbackAfterLoading=null`.
+5. **`GetSaveHeaders` lists `pbj_`-prefixed saves alongside the rest** — 11 saves, with
+   `pbj_combat_test` among them. M11b's catalogue and the `CIViewPauseLoad` filter both have what
+   they need.
+
+**Two things M11d still has to handle, neither a blocker:**
+
+- **`keepScreenAfterLoading: true` means you must dismiss the loading screen yourself.**
+  `LoadingEnd2:380` only calls `CIViewBackgroundLoading.ins.TryExit()` when the flag is false.
+  `QuickLoad` (`DataManagerSave.cs:3518`) does it by hand in its callback after `Co.DelayFrames(10)`
+  — copy that, or pass `false` and let the game dismiss it.
+- **The `isLoadingInProgress` wedge is still unmeasured**, because the load *succeeded* and
+  `LoadingEnd2:375` clears the flag on success. The open question is only the **failure** path:
+  `LoadingStart:259-264` returns without clearing what `TryLoading:234` set, and no clear for it is
+  visible in the file. Until someone loses that race deliberately, M11d should treat a failed load as
+  possibly-terminal for that peer rather than retryable.
+
+Also worth knowing for anyone re-running this: **Quantum Console splits arguments on spaces**, so a
+save name like `TWO POINT OH BABY` has to be quoted or the command fails with "No overload of
+'pbj.load-try' with 4 parameters could be found."
+
+### What the reading got wrong on the way here
+
+An earlier version of this section said "every call site read so far is inside `CIViewPauseLoad`".
+That was false, and it was false in the direction that matters — a second, closer reading found
+**eight** caller classes, two of which are not view code at all:
 
 - **`PhantomBrigade.DebugConsole/ConsoleCommandsShared.cs:74`** — the game's own `load` console
   command, `TryLoading(filename, SaveLocation.Normal)`, with no screen involved whatsoever.
 - **`PhantomBrigade.Data/DataManagerSave.cs:3518`** — `QuickLoad()`, which loads **by key, with a
   completion callback, from arbitrary game states**, every time a player presses quickload.
 
-So the shipping game already drives M11d's exact shape from outside a load screen. What the same
-reading found *instead*, and what the probe (`pbj.load-probe` / `pbj.load-try`) exists to measure:
-
-1. **The completion callback is success-only.** It fires from `LoadingEnd2:384`, and every failure
-   path returns before reaching it. **M11d cannot detect a peer whose load failed from the callback
-   alone** — it needs a timeout or an explicit failure report.
-2. **`LoadingEnd2` dereferences three view singletons unconditionally before the callback**
-   (`:376-378`): `CIViewPauseRoot.ins`, `CIViewOverworldLog.ins`, and
-   `CIViewPauseLoad.ins.sidebarHelper.buttonConfirm` — a hard dependency on the *load screen's*
-   singleton for a load that never touched it. That, not `TryLoading` itself, is where "hidden
-   assumptions about screen state" actually live.
-3. **Losing the wrong-state race may wedge loading for the process.** `TryLoading:234` sets
-   `isLoadingInProgress`; `LoadingStart:259-264` bails on a non-`mainmenu` state **without clearing
-   it** (the clears are at `:270`, `:277`, `:306`, `:375`). `isTeardownOfCampaignRequested` recovers
-   via `TeardownCampaignSystem.cs:57`; `isLoadingInProgress` has no visible rescuer. If it does not
-   recover, M11d needs a pre-flight check and cannot retry.
+So the shipping game already drives M11d's exact shape from outside a load screen. The same reading
+raised three hazards in its place; the probe above settled all three, finding **one still live**
+(the callback is success-only, so a failed load reports nothing) and two dormant.
 
 The lesson stands even though the answer improved: two careful readings of the same file disagreed
-with each other, and the second one is only trusted because a probe is going to check it.
+with each other, and the second was only trusted because the probe checked it. Reading harder is not
+the fix for a wrong reading.
 
 ## Open questions
 
