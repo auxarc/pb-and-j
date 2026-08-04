@@ -172,7 +172,7 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void ModVersion_MatchesTheShippedModMetadata()
         {
-            Assert.Equal("0.5.0", PbjProtocol.ModVersion);
+            Assert.Equal("0.6.0", PbjProtocol.ModVersion);
         }
 
         [Fact]
