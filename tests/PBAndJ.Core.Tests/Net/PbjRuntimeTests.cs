@@ -246,6 +246,41 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void Pump_BeginLoadEffect_StartsTheLoadAndWaits()
+        {
+            // A started load reports later, from the game's own completion
+            // callback — so the pump that starts it must produce no outcome.
+            bridge.InCombat = false;
+            var runtime = WithHandshakenPeer();
+            mailbox.Post(new LocalLobbySelectEvent("pbj_campaign", "abc"));
+            mailbox.Post(new LocalLobbyReadyEvent());
+            mailbox.Post(new PeerBytesEvent(1, Frame(new LobbyReadyMessage(1))));
+            runtime.Pump(0);
+
+            Assert.Equal(new[] { "pbj_campaign" }, bridge.LoadsBegun);
+            Assert.True(host.LoadInFlight);
+        }
+
+        [Fact]
+        public void Pump_BeginLoadEffect_WhenTheLoadCannotStart_ReportsAtOnce()
+        {
+            // The reason BeginLoad returns an outcome rather than a bool: a
+            // machine that already knows it has not got the save must say so,
+            // not cost the host a two-minute timeout waiting for silence.
+            bridge.InCombat = false;
+            bridge.LoadRefusal = LoadOutcome.Unavailable;
+            var runtime = WithHandshakenPeer();
+            mailbox.Post(new LocalLobbySelectEvent("pbj_campaign", "abc"));
+            mailbox.Post(new LocalLobbyReadyEvent());
+            mailbox.Post(new PeerBytesEvent(1, Frame(new LobbyReadyMessage(1))));
+            runtime.Pump(0);
+
+            // The host's own load failed, so the whole thing is abandoned.
+            Assert.False(host.LoadInFlight);
+            Assert.Contains(log.Lines, l => l.Contains("abandoning"));
+        }
+
+        [Fact]
         public void Pump_CommitTurnEffect_WhenGameRefuses_BroadcastsNothing()
         {
             // The reason CommitTurnEffect feeds its outcome back rather than

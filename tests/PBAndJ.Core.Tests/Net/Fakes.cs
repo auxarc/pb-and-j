@@ -109,6 +109,17 @@ namespace PBAndJ.Core.Tests.Net
             WrittenScenarios.Add(payload);
             return ScenarioWriteSucceeds;
         }
+
+        public List<string?> LoadsBegun { get; } = new List<string?>();
+
+        /// <summary>Set to make the next load refuse instead of starting.</summary>
+        public LoadOutcome? LoadRefusal { get; set; }
+
+        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion)
+        {
+            LoadsBegun.Add(saveKey);
+            return LoadRefusal;
+        }
     }
 
     /// <summary>Records everything sent, without a socket.</summary>

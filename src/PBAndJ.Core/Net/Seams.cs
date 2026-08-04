@@ -216,5 +216,27 @@ namespace PBAndJ.Core.Net
         /// find.
         /// </remarks>
         bool WriteScenario(ScenarioPayload payload);
+
+        /// <summary>
+        /// Starts loading a save. Null if it began; an outcome if it could not.
+        /// </summary>
+        /// <remarks>
+        /// Not whether it finished — a campaign load takes seconds and a scene
+        /// teardown, so the finish comes back separately as a
+        /// <see cref="LoadFinishedEvent"/>. A non-null outcome means the
+        /// implementation could already tell the load would not happen: the save
+        /// is not there or is not the one the host means
+        /// (<see cref="LoadOutcome.Unavailable"/>), or the game would refuse to
+        /// start it (<see cref="LoadOutcome.Refused"/>). The session reports that
+        /// immediately rather than waiting out a two-minute timeout for silence.
+        /// <para>
+        /// An outcome rather than a bool, because those two answers are not the
+        /// same question: "I do not have that save" is what M11e will act on. The
+        /// distinction matters at all because the game's own completion callback
+        /// fires <b>only</b> on success — everything answered here is something
+        /// the caller worked out for itself.
+        /// </para>
+        /// </remarks>
+        LoadOutcome? BeginLoad(string? saveKey, int selectionVersion);
     }
 }

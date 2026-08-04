@@ -500,6 +500,10 @@ namespace PBAndJ.Mod.Net
             return null;
         }
 
+        /// <summary>Reports a finished load back into the session. M11d.</summary>
+        internal static void PostLoadFinished(int selectionVersion, LoadOutcome outcome) =>
+            runtime?.Post(new LoadFinishedEvent(selectionVersion, outcome));
+
         internal static void PostLocalLobbyReady() => runtime?.Post(new LocalLobbyReadyEvent());
 
         internal static void PostLocalLobbyUnready() => runtime?.Post(new LocalLobbyUnreadyEvent());

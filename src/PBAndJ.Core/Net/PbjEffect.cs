@@ -18,8 +18,39 @@ namespace PBAndJ.Core.Net
         PlayKeyframes = 10,
         StopKeyframes = 11,
         WriteScenario = 12,
+        BeginLoad = 13,
 
-        // 13+ unallocated.
+        // 14+ unallocated.
+    }
+
+    /// <summary>
+    /// Start loading the lobby's save. Every participant, host included.
+    /// </summary>
+    /// <remarks>
+    /// The effect-out, event-back shape <see cref="CommitTurnEffect"/> already
+    /// uses: the session never touches the game, so it asks, and the answer
+    /// arrives later as a <c>LoadFinishedEvent</c>. It has to be later — a
+    /// campaign load tears the game down and comes back several seconds and one
+    /// scene teardown afterwards.
+    /// <para>
+    /// <see cref="SelectionVersion"/> rides along so the report can be matched
+    /// to the load that asked for it rather than to whatever the lobby is doing
+    /// by the time it lands.
+    /// </para>
+    /// </remarks>
+    public sealed class BeginLoadEffect : PbjEffect
+    {
+        public BeginLoadEffect(string? saveKey, int selectionVersion)
+        {
+            SaveKey = saveKey;
+            SelectionVersion = selectionVersion;
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.BeginLoad;
+
+        public string? SaveKey { get; }
+
+        public int SelectionVersion { get; }
     }
 
     /// <summary>

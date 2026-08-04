@@ -1096,6 +1096,64 @@ namespace PBAndJ.Core.Tests.Net
 
         // --- lobby counts, derived for the screen (M11c) ---
 
+        // --- the synchronised load (M11d) ---
+
+        [Fact]
+        public void LobbyLoad_ForTheVersionWeHold_BeginsTheLoad()
+        {
+            var client = InLobby();
+            var effects = client.HandleMessage(
+                ClientSession.HostConnectionId, new LobbyLoadMessage(1, "pbj_campaign", "abc"));
+
+            var begin = Single<BeginLoadEffect>(effects);
+            Assert.Equal("pbj_campaign", begin.SaveKey);
+            Assert.Equal(1, begin.SelectionVersion);
+            Assert.Equal(1, client.LoadBegunVersion);
+        }
+
+        [Fact]
+        public void LobbyLoad_ForAVersionWeDoNotHold_IsIgnored()
+        {
+            // The host advances the selection when it fires, and broadcasts the
+            // new LobbyState first so this check passes. If it ever does not, a
+            // refusal here is the right failure — loading a save the lobby has
+            // moved on from is worse than not loading.
+            var client = InLobby();
+            var effects = client.HandleMessage(
+                ClientSession.HostConnectionId, new LobbyLoadMessage(9, "pbj_other", null));
+
+            Assert.Empty(All<BeginLoadEffect>(effects));
+            Assert.Equal(-1, client.LoadBegunVersion);
+        }
+
+        [Fact]
+        public void LobbyLoad_Repeated_IsIgnoredTheSecondTime()
+        {
+            // A load tears the campaign down and is not repeatable. The host's
+            // edge trigger should make a duplicate unreachable, but the two
+            // guards fail independently and the cost here is the same lost game.
+            var client = InLobby();
+            client.HandleMessage(ClientSession.HostConnectionId, new LobbyLoadMessage(1, "pbj_campaign", null));
+            var effects = client.HandleMessage(
+                ClientSession.HostConnectionId, new LobbyLoadMessage(1, "pbj_campaign", null));
+
+            Assert.Empty(All<BeginLoadEffect>(effects));
+        }
+
+        [Theory]
+        [InlineData(LoadOutcome.Loaded)]
+        [InlineData(LoadOutcome.Refused)]
+        [InlineData(LoadOutcome.Unavailable)]
+        public void LoadFinished_ReportsToTheHost(LoadOutcome outcome)
+        {
+            var client = InLobby();
+            var effects = client.Handle(new LoadFinishedEvent(1, outcome));
+
+            var sent = Assert.IsType<LobbyLoadedMessage>(Single<SendEffect>(effects).Message);
+            Assert.Equal(1, sent.SelectionVersion);
+            Assert.Equal(outcome, sent.Outcome);
+        }
+
         [Fact]
         public void LobbyCounts_BeforeAnyStateArrives_AreZeroAndUnsatisfied()
         {

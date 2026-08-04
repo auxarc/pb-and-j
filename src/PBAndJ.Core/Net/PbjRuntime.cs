@@ -264,6 +264,18 @@ namespace PBAndJ.Core.Net
                         snapshot.Turn, snapshot.Units.Count, snapshot.ExpectedDigest, actual));
                 }
 
+                case BeginLoadEffect begin:
+                    // A started load reports later, through the glue's callback.
+                    // One that could not start reports now — otherwise the host
+                    // waits out the whole timeout on a machine that already knows
+                    // the answer.
+                {
+                    var refusal = bridge.BeginLoad(begin.SaveKey, begin.SelectionVersion);
+                    return refusal == null
+                        ? NoEffects
+                        : session.Handle(new LoadFinishedEvent(begin.SelectionVersion, refusal.Value));
+                }
+
                 case ClearLocalOrdersEffect:
                     bridge.ClearLocalOrders();
                     break;

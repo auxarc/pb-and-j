@@ -72,6 +72,9 @@ namespace PBAndJ.Core.Tests.Net
                 }),
             };
             yield return new object[] { new LobbyReadyMessage(2) };
+            yield return new object[] { new LobbyLoadMessage(2, "pbj_campaign", "abc123") };
+            yield return new object[] { new LobbyLoadMessage(2, null, null) };
+            yield return new object[] { new LobbyLoadedMessage(2, LoadOutcome.Loaded) };
             yield return new object[] { new LobbyUnreadyMessage(2) };
         }
 
@@ -909,6 +912,37 @@ namespace PBAndJ.Core.Tests.Net
         public void RoundTrip_LobbyReadyAndUnready_PreserveTheSelection()
         {
             Assert.Equal(9, RoundTrip(new LobbyReadyMessage(9)).SelectionVersion);
+        }
+
+        [Fact]
+        public void LobbyLoad_CarriesTheSelectionAndTheSave()
+        {
+            var round = RoundTrip(new LobbyLoadMessage(4, "pbj_campaign", "abc123"));
+            Assert.Equal(4, round.SelectionVersion);
+            Assert.Equal("pbj_campaign", round.SaveKey);
+            Assert.Equal("abc123", round.SaveDigest);
+        }
+
+        [Theory]
+        [InlineData(LoadOutcome.Loaded)]
+        [InlineData(LoadOutcome.Refused)]
+        [InlineData(LoadOutcome.Unavailable)]
+        public void LobbyLoaded_CarriesEveryOutcome(LoadOutcome outcome)
+        {
+            var round = RoundTrip(new LobbyLoadedMessage(4, outcome));
+            Assert.Equal(4, round.SelectionVersion);
+            Assert.Equal(outcome, round.Outcome);
+        }
+
+        [Fact]
+        public void LobbyLoaded_WithAnOutcomeWeDoNotKnow_DecodesRatherThanThrowing()
+        {
+            // The cast is unvalidated, exactly as RejectReason's is. A peer can
+            // put any byte on the wire and the host must survive reading it —
+            // faulting the session over an unknown enum value would let a peer
+            // hang up on us by sending one.
+            var round = RoundTrip(new LobbyLoadedMessage(1, (LoadOutcome)200));
+            Assert.Equal((LoadOutcome)200, round.Outcome);
             Assert.Equal(9, RoundTrip(new LobbyUnreadyMessage(9)).SelectionVersion);
         }
 

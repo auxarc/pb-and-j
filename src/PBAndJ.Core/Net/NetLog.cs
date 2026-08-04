@@ -607,6 +607,49 @@ namespace PBAndJ.Core.Net
                 selectionVersion, Describe(saveKey), readyCount, participantCount);
         }
 
+        public static string LoadStarting(int participantCount, string? saveKey) =>
+            Prefix + ("loading '" + (saveKey ?? "?") + "' on " + participantCount + " machine(s) — everyone agreed");
+
+        public static string LoadReported(int peerId, string? name, LoadOutcome outcome) =>
+            Prefix + ("load " + Describe(outcome) + " from #" + peerId + " '" + (name ?? "?") + "'");
+
+        public static string LoadTimedOut(int peerId) =>
+            Prefix + ("no word from #" + peerId + " after " + PbjProtocol.LoadTimeoutSeconds
+                + "s — carrying on without it");
+
+        public static string LoadComplete(int loadedCount, int participantCount) =>
+            Prefix + ("load complete | " + loadedCount + " of " + participantCount + " machine(s) are in");
+
+        /// <remarks>
+        /// The host is not a peer that can be carried on without: it is the
+        /// session. If its own load does not happen, nothing has happened.
+        /// </remarks>
+        public static string LoadAbandoned() =>
+            Prefix + ("the host could not load — abandoning, the lobby is open again");
+
+        private static string Describe(LoadOutcome outcome)
+        {
+            switch (outcome)
+            {
+                case LoadOutcome.Loaded:
+                    return "OK";
+                case LoadOutcome.Refused:
+                    return "REFUSED (the game would not start it)";
+                case LoadOutcome.Unavailable:
+                    return "UNAVAILABLE (no such save, or a different one)";
+                default:
+                    // A peer can put any byte on the wire; the decoder casts it
+                    // unvalidated, exactly as it does for RejectReason.
+                    return "UNKNOWN (" + (int)outcome + ")";
+            }
+        }
+
+        public static string LoadIgnoredStale(int instructed, int held) =>
+            Prefix + ("ignoring a load for selection " + instructed + " — we hold " + held);
+
+        public static string LoadAlreadyBegun(int selectionVersion) =>
+            Prefix + ("already loading selection " + selectionVersion + " — ignoring the repeat");
+
         public static string LobbySelectIsHostOnly()
         {
             return Prefix + "only the host picks the lobby save";

@@ -125,7 +125,7 @@ namespace PBAndJ.Core.Net
         /// mod/metadata.yaml; the Makefile refuses to build a distributable when
         /// they disagree, since that is the one file this constant cannot reach.
         /// </remarks>
-        public const string ModVersion = "0.7.0";
+        public const string ModVersion = "0.8.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.
@@ -178,6 +178,24 @@ namespace PBAndJ.Core.Net
         /// mute would otherwise sit there forever.
         /// </remarks>
         public const double HandshakeTimeoutSeconds = 10.0;
+
+        /// <summary>
+        /// How long the host waits for a peer to report that it has loaded.
+        /// </summary>
+        /// <remarks>
+        /// Far longer than any other timeout here, and deliberately generous. A
+        /// campaign load is not a network round trip: it pops a controller state,
+        /// waits two frames, reads a zipped save off disk, rebuilds the ECS and
+        /// comes back through several more deferred frames. Nobody has measured
+        /// it, so this is a bound rather than an estimate.
+        /// <para>
+        /// A false timeout is worse than a slow one. The failure path leaves
+        /// <c>isLoadingInProgress</c> set on at least one route, so a load that
+        /// fails may be terminal for that peer rather than retryable — which
+        /// makes waiting too long cheap and giving up too early expensive.
+        /// </para>
+        /// </remarks>
+        public const double LoadTimeoutSeconds = 120.0;
 
         /// <summary>
         /// Checks that a peer is running something we can actually play with.

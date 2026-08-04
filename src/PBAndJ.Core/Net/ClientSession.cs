@@ -204,6 +204,18 @@ namespace PBAndJ.Core.Net
         /// </summary>
         public bool LobbyReadySent { get; private set; }
 
+        /// <summary>
+        /// The last selection version we began loading, or -1.
+        /// </summary>
+        /// <remarks>
+        /// A load is destructive and not repeatable — it tears the campaign down
+        /// — so acting on the same instruction twice must be impossible. The
+        /// host's edge trigger should already make a duplicate <c>LobbyLoad</c>
+        /// unreachable, but the two guards fail independently and the cost of
+        /// being wrong here is the same lost campaign.
+        /// </remarks>
+        public int LoadBegunVersion { get; private set; } = -1;
+
         public IReadOnlyList<int> ConnectedPeerIds => HostOnly;
 
         /// <summary>
@@ -294,6 +306,10 @@ namespace PBAndJ.Core.Net
 
                 case LocalLobbyReadyEvent:
                     HandleLocalLobbyReady(effects);
+                    break;
+
+                case LoadFinishedEvent loadFinished:
+                    HandleLoadFinished(loadFinished, effects);
                     break;
 
                 case LocalLobbyUnreadyEvent:
@@ -453,6 +469,10 @@ namespace PBAndJ.Core.Net
 
                 case KeyframesMessage keyframes:
                     HandleKeyframes(keyframes, effects);
+                    break;
+
+                case LobbyLoadMessage lobbyLoad:
+                    HandleLobbyLoad(lobbyLoad, effects);
                     break;
 
                 case LobbyStateMessage lobbyState:
@@ -629,6 +649,39 @@ namespace PBAndJ.Core.Net
         /// there rather than counted.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// The host says everyone agreed. Start loading.
+        /// </summary>
+        /// <remarks>
+        /// Gated on data rather than on <see cref="State"/>, the M11a lesson:
+        /// <c>HandleWelcome</c> derives that state from this client's <em>own</em>
+        /// combat flag, so it is not something to make a destructive decision on.
+        /// </remarks>
+        private void HandleLobbyLoad(LobbyLoadMessage load, List<PbjEffect> effects)
+        {
+            if (load.SelectionVersion != LobbySelectionVersion)
+            {
+                effects.Add(new LogEffect(NetLog.LoadIgnoredStale(
+                    load.SelectionVersion, LobbySelectionVersion)));
+                return;
+            }
+            if (load.SelectionVersion == LoadBegunVersion)
+            {
+                effects.Add(new LogEffect(NetLog.LoadAlreadyBegun(load.SelectionVersion)));
+                return;
+            }
+
+            LoadBegunVersion = load.SelectionVersion;
+            effects.Add(new BeginLoadEffect(load.SaveKey, load.SelectionVersion));
+        }
+
+        private void HandleLoadFinished(LoadFinishedEvent finished, List<PbjEffect> effects)
+        {
+            effects.Add(new SendEffect(
+                HostConnectionId,
+                new LobbyLoadedMessage(finished.SelectionVersion, finished.Outcome)));
+        }
+
         private void HandleLocalLobbyReady(List<PbjEffect> effects)
         {
             if (LobbySelectionVersion < 0)

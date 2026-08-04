@@ -41,6 +41,7 @@ namespace PBAndJ.Core.Net
         /// </summary>
         private readonly LobbyBarrier lobby = new LobbyBarrier(LobbySelection.None.Version);
         private LobbySelection selection = LobbySelection.None;
+        private readonly LoadBarrier load = new LoadBarrier();
         private readonly Dictionary<int, List<OrderPayload>> submitted = new Dictionary<int, List<OrderPayload>>();
 
         // Per-peer outcome of the batch currently being committed. Populated by
@@ -171,6 +172,9 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public bool LobbyIsSatisfied => lobby.IsSatisfied;
 
+        /// <summary>Whether a synchronised load is running.</summary>
+        public bool LoadInFlight => load.InFlight;
+
         /// <summary>
         /// The lobby roster with ready flags — the host at index 0, then peers in
         /// join order.
@@ -296,6 +300,10 @@ namespace PBAndJ.Core.Net
                     HandleCombatExited(effects);
                     break;
 
+                case LoadFinishedEvent loadFinished:
+                    HandleLoadFinished(loadFinished, effects);
+                    break;
+
                 case TickEvent tick:
                     HandleTick(tick, effects);
                     break;
@@ -357,6 +365,10 @@ namespace PBAndJ.Core.Net
 
                 case LobbyReadyMessage lobbyReady:
                     HandleLobbyReady(peerId, lobbyReady, effects);
+                    break;
+
+                case LobbyLoadedMessage lobbyLoaded:
+                    HandleLobbyLoaded(peerId, lobbyLoaded, effects);
                     break;
 
                 case LobbyUnreadyMessage lobbyUnready:
@@ -787,7 +799,7 @@ namespace PBAndJ.Core.Net
                 ? NetLog.LobbySelected(selection.SaveKey, selection.SaveDigest, selection.Version)
                 : NetLog.LobbySelectionCleared(selection.Version)));
             AnnounceLobby(effects);
-            ReportLobbyBarrier(effects);
+            ReviewLobbyAfterDeparture(effects);
         }
 
         private void HandleLocalLobbyReady(List<PbjEffect> effects)
@@ -811,7 +823,7 @@ namespace PBAndJ.Core.Net
             effects.Add(new LogEffect(NetLog.LobbyReadyReceived(
                 PbjPeerRegistry.HostPeerId, HostName, selection.Version)));
             AnnounceLobby(effects);
-            ReportLobbyBarrier(effects);
+            ReviewLobbyAfterDeparture(effects);
         }
 
         private void HandleLocalLobbyUnready(List<PbjEffect> effects)
@@ -872,7 +884,7 @@ namespace PBAndJ.Core.Net
 
             effects.Add(new LogEffect(NetLog.LobbyReadyReceived(peerId, NameOf(peerId), ready.SelectionVersion)));
             AnnounceLobby(effects);
-            ReportLobbyBarrier(effects);
+            ReviewLobbyAfterDeparture(effects);
         }
 
         private void HandleLobbyUnready(int peerId, LobbyUnreadyMessage unready, List<PbjEffect> effects)
@@ -937,6 +949,130 @@ namespace PBAndJ.Core.Net
             effects.Add(new LogEffect(lobby.IsSatisfied
                 ? NetLog.LobbyBarrierSatisfied(lobby.ParticipantCount, selection.SaveKey)
                 : NetLog.LobbyBarrierWaiting(lobby.ReadyCount, lobby.ParticipantCount)));
+
+            TryFireLoad(effects);
+        }
+
+        /// <summary>
+        /// Turns a satisfied lobby into a load, exactly once per agreement.
+        /// </summary>
+        /// <remarks>
+        /// <b>An edge, never a level.</b> <see cref="LobbyBarrier.IsSatisfied"/> is a
+        /// predicate over a ready set that nothing consumes, and the host sits in
+        /// <see cref="HostSessionState.Lobby"/> for the whole out-of-combat
+        /// campaign — so a level-triggered load would re-fire from every later
+        /// <see cref="ReportLobbyBarrier"/> call, including the two on the
+        /// disconnect and kick paths. One peer dropping mid-campaign would then
+        /// reload the original save on every machine and throw away the session's
+        /// entire play. Firing therefore <em>consumes</em> the agreement by
+        /// advancing the selection, which is what <see cref="HandleCombatExited"/>
+        /// already does for the same reason.
+        /// <para>
+        /// <b>The broadcast order is load-bearing.</b> Advancing puts the host a
+        /// version ahead of every client, so the new <c>LobbyState</c> has to go
+        /// out first: a client validates <c>LobbyLoad</c> against the version it
+        /// last heard, and the host never validates its own. Reverse these two
+        /// and every client refuses the load while the host loads alone.
+        /// </para>
+        /// </remarks>
+        private void TryFireLoad(List<PbjEffect> effects)
+        {
+            if (!lobby.IsSatisfied || load.InFlight || !selection.HasSave)
+            {
+                return;
+            }
+
+            selection = selection.Next(selection.SaveKey, selection.SaveDigest);
+            lobby.AdvanceTo(selection.Version);
+
+            var participants = new List<int>(lobby.Participants);
+            load.Start(selection.Version, participants);
+
+            effects.Add(new LogEffect(NetLog.LoadStarting(participants.Count, selection.SaveKey)));
+            AnnounceLobby(effects);
+            effects.Add(new BroadcastEffect(
+                new LobbyLoadMessage(selection.Version, selection.SaveKey, selection.SaveDigest)));
+            effects.Add(new BeginLoadEffect(selection.SaveKey, selection.Version));
+        }
+
+        private void HandleLobbyLoaded(int peerId, LobbyLoadedMessage loaded, List<PbjEffect> effects)
+        {
+            if (!load.Report(peerId, loaded.SelectionVersion, loaded.Outcome))
+            {
+                return;
+            }
+
+            effects.Add(new LogEffect(
+                NetLog.LoadReported(peerId, NameOf(peerId), loaded.Outcome)));
+            CompleteLoadIfDone(effects);
+        }
+
+        /// <summary>The host's own load, reported by its own glue.</summary>
+        private void HandleLoadFinished(LoadFinishedEvent finished, List<PbjEffect> effects)
+        {
+            if (!load.Report(PbjPeerRegistry.HostPeerId, finished.SelectionVersion, finished.Outcome))
+            {
+                return;
+            }
+
+            effects.Add(new LogEffect(
+                NetLog.LoadReported(PbjPeerRegistry.HostPeerId, HostName, finished.Outcome)));
+
+            // The host is not a peer that can be carried on without — it is the
+            // session. If its own load did not happen, nothing did.
+            if (finished.Outcome != LoadOutcome.Loaded)
+            {
+                effects.Add(new LogEffect(NetLog.LoadAbandoned()));
+                load.Finish();
+                ReportLobbyBarrier(effects);
+                return;
+            }
+
+            CompleteLoadIfDone(effects);
+        }
+
+        /// <summary>
+        /// Ends the load once nobody is left to hear from, and hands the lobby
+        /// back.
+        /// </summary>
+        /// <remarks>
+        /// Re-running <see cref="ReportLobbyBarrier"/> here is not tidiness. The
+        /// lobby keeps accepting readies during a flight, so a lobby that
+        /// re-satisfied while the load was running was checked once, refused by
+        /// the in-flight guard, and would never be looked at again — fully
+        /// agreed, no further messages, wedged.
+        /// </remarks>
+        private bool CompleteLoadIfDone(List<PbjEffect> effects)
+        {
+            if (!load.IsComplete)
+            {
+                return false;
+            }
+
+            effects.Add(new LogEffect(
+                NetLog.LoadComplete(load.Loaded.Count, lobby.ParticipantCount)));
+            load.Finish();
+            ReportLobbyBarrier(effects);
+            return true;
+        }
+
+        /// <summary>
+        /// Re-examines the lobby after somebody has left, whether that ended a
+        /// running load or freed one to start.
+        /// </summary>
+        /// <remarks>
+        /// A departure does both jobs and neither implies the other: the last
+        /// peer a load was waiting on can leave (which completes it), and the
+        /// last peer a lobby was waiting on can leave (which fills it). Reporting
+        /// the barrier without first noticing the load had finished left a load
+        /// in flight forever with nobody outstanding.
+        /// </remarks>
+        private void ReviewLobbyAfterDeparture(List<PbjEffect> effects)
+        {
+            if (!CompleteLoadIfDone(effects))
+            {
+                ReportLobbyBarrier(effects);
+            }
         }
 
         private void HandleCombatEntered(List<PbjEffect> effects)
@@ -1025,6 +1161,7 @@ namespace PBAndJ.Core.Net
         {
             nowSeconds = tick.NowSeconds;
             ticked = true;
+            ExpireLoads(effects);
             ExpireReconnectHolds(effects);
             ExpireSilentHandshakes(effects);
 
@@ -1059,6 +1196,54 @@ namespace PBAndJ.Core.Net
                     effects.Add(new SendEffect(peer.PeerId, new PingMessage(nextPingNonce++)));
                 }
             }
+        }
+
+        /// <summary>
+        /// Gives everyone in a running load a deadline, and gives up on whoever
+        /// blows it.
+        /// </summary>
+        /// <remarks>
+        /// Deadlines are minted here rather than when the load fires, because a
+        /// load fires from a message handler where the clock may not have been
+        /// stamped yet — and a deadline of zero plus the timeout, judged against
+        /// process uptime, expires the whole session on the first tick. Same
+        /// seed-don't-judge shape the keepalive uses two methods down.
+        /// <para>
+        /// The host is included, and it is the one participant a timeout cannot
+        /// simply drop: the others are already in a campaign it is not in.
+        /// </para>
+        /// </remarks>
+        private void ExpireLoads(List<PbjEffect> effects)
+        {
+            if (!load.InFlight)
+            {
+                return;
+            }
+
+            load.Seed(nowSeconds);
+            var expired = load.Expired(nowSeconds, PbjProtocol.LoadTimeoutSeconds);
+            if (expired.Count == 0)
+            {
+                return;
+            }
+
+            var hostExpired = false;
+            for (var i = 0; i < expired.Count; i++)
+            {
+                effects.Add(new LogEffect(NetLog.LoadTimedOut(expired[i])));
+                load.Drop(expired[i]);
+                hostExpired |= expired[i] == PbjPeerRegistry.HostPeerId;
+            }
+
+            if (hostExpired)
+            {
+                effects.Add(new LogEffect(NetLog.LoadAbandoned()));
+                load.Finish();
+                ReportLobbyBarrier(effects);
+                return;
+            }
+
+            CompleteLoadIfDone(effects);
         }
 
         /// <summary>
@@ -1330,7 +1515,7 @@ namespace PBAndJ.Core.Net
             // readying, exactly as it can satisfy the turn barrier below. A
             // caller that only checks after a ready never sees that case.
             AnnounceLobby(effects);
-            ReportLobbyBarrier(effects);
+            ReviewLobbyAfterDeparture(effects);
 
             if (!holdUnits)
             {
@@ -1360,6 +1545,10 @@ namespace PBAndJ.Core.Net
             var removed = registry.Remove(peerId, out _);
             barrier.RemoveParticipant(peerId);
             lobby.RemoveParticipant(peerId);
+
+            // Someone who has gone is not going to report. Without this the load
+            // waits out the full timeout on a socket that is already closed.
+            load.Drop(peerId);
             submitted.Remove(peerId);
 
             // There is nobody left to send a result to, and leaving the entry

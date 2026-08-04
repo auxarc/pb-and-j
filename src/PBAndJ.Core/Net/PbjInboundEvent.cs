@@ -28,6 +28,7 @@ namespace PBAndJ.Core.Net
         LocalLobbySelect = 105,
         LocalLobbyReady = 106,
         LocalLobbyUnready = 107,
+        LoadFinished = 108,
     }
 
     /// <summary>
@@ -366,5 +367,36 @@ namespace PBAndJ.Core.Net
         /// M5 behaviour.
         /// </remarks>
         public KeyframeCapture Keyframes { get; }
+    }
+
+    /// <summary>
+    /// How this machine's attempt to load the lobby's save turned out.
+    /// </summary>
+    /// <remarks>
+    /// Posted by the glue from <c>TryLoading</c>'s completion callback, or
+    /// immediately when the glue can already tell the load will not happen.
+    /// The <c>CommitOutcomeEvent</c> shape: an effect asked, this answers.
+    /// <para>
+    /// Only success has a callback behind it — the game fires
+    /// <c>callbackAfterLoading</c> on the success path alone — so every other
+    /// outcome here is something the glue worked out for itself before calling.
+    /// What it cannot work out arrives as nothing at all, and the host's timeout
+    /// is what turns that silence into an answer.
+    /// </para>
+    /// </remarks>
+    public sealed class LoadFinishedEvent : PbjInboundEvent
+    {
+        public LoadFinishedEvent(int selectionVersion, LoadOutcome outcome)
+        {
+            SelectionVersion = selectionVersion;
+            Outcome = outcome;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LoadFinished;
+
+        /// <summary>Which load this is the answer to.</summary>
+        public int SelectionVersion { get; }
+
+        public LoadOutcome Outcome { get; }
     }
 }
