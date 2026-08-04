@@ -1093,5 +1093,52 @@ namespace PBAndJ.Core.Tests.Net
             client.HandleMessage(ClientSession.HostConnectionId, Lobby());
             Assert.Equal(ClientSessionState.Faulted, client.State);
         }
+
+        // --- lobby counts, derived for the screen (M11c) ---
+
+        [Fact]
+        public void LobbyCounts_BeforeAnyStateArrives_AreZeroAndUnsatisfied()
+        {
+            var client = Welcomed();
+            Assert.Equal(0, client.LobbyReadyCount);
+            Assert.Equal(0, client.LobbyParticipantCount);
+
+            // Not "everyone in an empty lobby has agreed" — the same reason
+            // LobbyBarrier.IsSatisfied requires participants.
+            Assert.False(client.LobbyIsSatisfied);
+        }
+
+        [Fact]
+        public void LobbyCounts_ComeFromTheRosterTheHostSent()
+        {
+            var client = InLobby();
+            Assert.Equal(2, client.LobbyParticipantCount);
+            Assert.Equal(1, client.LobbyReadyCount);
+            Assert.False(client.LobbyIsSatisfied);
+        }
+
+        [Fact]
+        public void LobbyIsSatisfied_WhenTheRosterSaysEveryoneAgreed()
+        {
+            // The roster carries every participant and its flag, so this is the
+            // host's own LobbyBarrier answer recomputed from the host's broadcast
+            // rather than a second opinion.
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Lobby(allyReady: true));
+            Assert.Equal(2, client.LobbyReadyCount);
+            Assert.True(client.LobbyIsSatisfied);
+        }
+
+        [Fact]
+        public void LobbyCounts_FollowTheLatestState()
+        {
+            // A client that kept a count across a roster change would show a
+            // readiness that no longer exists.
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Lobby(allyReady: true));
+            client.HandleMessage(ClientSession.HostConnectionId, Lobby(version: 2));
+            Assert.Equal(1, client.LobbyReadyCount);
+            Assert.False(client.LobbyIsSatisfied);
+        }
     }
 }

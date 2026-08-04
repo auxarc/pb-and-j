@@ -160,6 +160,44 @@ namespace PBAndJ.Core.Net
         /// <summary>The lobby roster with ready flags, for a screen to render.</summary>
         public IReadOnlyList<LobbyPeerState> LobbyRoster { get; private set; } = NoLobbyPeers;
 
+        /// <summary>How many lobby members have agreed to the selected save.</summary>
+        /// <remarks>
+        /// Derived from <see cref="LobbyRoster"/> rather than tracked separately,
+        /// so a client cannot hold a count that disagrees with the roster it is
+        /// drawing from. The host's <c>LobbyBarrier</c> is still the authority;
+        /// this is the same answer computed from the host's own broadcast.
+        /// </remarks>
+        public int LobbyReadyCount
+        {
+            get
+            {
+                var ready = 0;
+                for (var i = 0; i < LobbyRoster.Count; i++)
+                {
+                    if (LobbyRoster[i].Ready)
+                    {
+                        ready++;
+                    }
+                }
+                return ready;
+            }
+        }
+
+        public int LobbyParticipantCount => LobbyRoster.Count;
+
+        /// <summary>
+        /// True once every member of the last roster we were sent has agreed.
+        /// </summary>
+        /// <remarks>
+        /// Equals the host's own <c>LobbyBarrier.IsSatisfied</c> at the moment the
+        /// state was composed — the roster carries every participant and its ready
+        /// flag, so there is nothing left to infer. Between broadcasts it can be
+        /// stale, which is inherent to a client and not worth pretending
+        /// otherwise: nothing here acts on it, and only the host may Start.
+        /// </remarks>
+        public bool LobbyIsSatisfied =>
+            LobbyRoster.Count > 0 && LobbyReadyCount >= LobbyRoster.Count;
+
         /// <summary>
         /// Whether we have an outstanding lobby ready. Gates the withdrawal, the
         /// way <c>submittedThisTurn</c> gates <c>Unready</c>.

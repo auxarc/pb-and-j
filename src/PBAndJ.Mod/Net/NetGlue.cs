@@ -470,6 +470,59 @@ namespace PBAndJ.Mod.Net
 
         internal static bool HasSession => runtime != null && !killed;
 
+        /// <summary>
+        /// What the lobby screen should draw, or null when there is no session.
+        /// </summary>
+        /// <remarks>
+        /// Composed here rather than in the screen because this is the only place
+        /// that holds the runtime, and because host and client are different types
+        /// answering the same questions — resolving that once keeps the branch out
+        /// of the NGUI code, where no test can reach it. Everything downstream of
+        /// this is <see cref="LobbyView"/>, under the gate.
+        /// </remarks>
+        internal static LobbyView? LobbyView()
+        {
+            if (runtime == null || killed)
+            {
+                return null;
+            }
+
+            if (runtime.Session is HostSession host)
+            {
+                return new LobbyView(
+                    true, PbjPeerRegistry.HostPeerId, host.Selection.SaveKey, host.LobbyRoster, false);
+            }
+            if (runtime.Session is ClientSession client)
+            {
+                return new LobbyView(
+                    false, client.PeerId, client.LobbySaveKey, client.LobbyRoster, client.LobbyReadySent);
+            }
+            return null;
+        }
+
+        internal static void PostLocalLobbyReady() => runtime?.Post(new LocalLobbyReadyEvent());
+
+        internal static void PostLocalLobbyUnready() => runtime?.Post(new LocalLobbyUnreadyEvent());
+
+        /// <summary>
+        /// Chooses the lobby's save, hashing it on the way. Host only.
+        /// </summary>
+        internal static bool PostLocalLobbySelect(string key)
+        {
+            // The same guard pbj.lobby-select applies, and for the same reason:
+            // the session accepts any key by design because it reads no disk, so
+            // every edge that CAN look has to. Without it, a picker showing a
+            // stale grid could hand a singleplayer key to the lobby as its
+            // campaign, and every peer would ready onto a save they cannot have.
+            if (!LobbyCatalogue.Contains(SaveCatalogueGlue.List(), key))
+            {
+                Debug.LogWarning("[pb-and-j] refusing to select '" + key + "' — not a multiplayer save");
+                return false;
+            }
+
+            runtime?.Post(new LocalLobbySelectEvent(key, SaveCatalogueGlue.Digest(key)));
+            return true;
+        }
 
         internal static void PostLocalReady()
         {
@@ -633,6 +686,8 @@ namespace PBAndJ.Mod.Net
                 new Type[0], "pbj.connect");
             AddFrom(typeof(ConnectScreenGlue), nameof(ConnectScreenGlue.ConnectForget),
                 new Type[0], "pbj.connect-forget");
+            AddFrom(typeof(LobbyScreenGlue), nameof(LobbyScreenGlue.Lobby),
+                new Type[0], "pbj.lobby");
         }
 
         private static void AddFrom(Type owner, string methodName, Type[] parameters, string command)
@@ -672,6 +727,7 @@ namespace PBAndJ.Mod.Net
             // Also outside the session guard: the connect screen exists in order
             // to start a session, so it must run when there is none.
             ConnectScreenGlue.Tick();
+            LobbyScreenGlue.Tick();
         }
     }
 

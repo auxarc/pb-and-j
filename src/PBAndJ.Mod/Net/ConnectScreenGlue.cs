@@ -54,11 +54,12 @@ namespace PBAndJ.Mod.Net
         private const float ButtonX = 116f;
         private const float ButtonSpacing = 190f;
 
-        // Leave takes the pair's place rather than sitting beside them, so it
-        // is centred between where they were. A third button at the next
-        // spacing would run off a 440-wide panel, and widening the panel to
-        // show two buttons that cannot be pressed is the wrong trade.
-        private const float LeaveX = ButtonX + (ButtonSpacing / 2f);
+        // Leave and Lobby take the pair's place rather than sitting beside them,
+        // so they reuse Host's and Join's slots exactly. Leave was centred between
+        // the two while it was alone; M11c gave it company, and a pair the panel
+        // already fits beats inventing a third position.
+        private const float LeaveX = ButtonX;
+        private const float LobbyX = ButtonX + ButtonSpacing;
         private const float CloseX = PanelWidth - 70f;
         private const float CloseY = -14f;
 
@@ -70,6 +71,7 @@ namespace PBAndJ.Mod.Net
         private static CIButton? hostButton;
         private static CIButton? joinButton;
         private static CIButton? leaveButton;
+        private static CIButton? lobbyButton;
         private static UILabel? statusLabel;
 
         private static readonly System.Collections.Generic.List<UIWidget> fieldBackings =
@@ -237,6 +239,14 @@ namespace PBAndJ.Mod.Net
         /// could not stop one, so the only way out was <c>pbj.net-stop</c> —
         /// which is exactly the audience the screen exists to spare.
         /// </remarks>
+        private static void OnLobby()
+        {
+            // Opening the lobby closes this screen — LobbyScreenGlue.Open does it,
+            // so the two cannot end up stacked. Deliberately a click and not an
+            // automatic transition on connect: see ConnectText.LobbyButton.
+            LobbyScreenGlue.Open();
+        }
+
         private static void OnLeave()
         {
             // NetStop composes its own sentence and names the peer count, so
@@ -270,30 +280,11 @@ namespace PBAndJ.Mod.Net
             Show(hostButton, !running);
             Show(joinButton, !running);
             Show(leaveButton, running);
+            Show(lobbyButton, running);
         }
 
-        /// <remarks>
-        /// The hover release is not decoration. SetActive(false) on a button the
-        /// pointer happens to be over leaves CIButton.hovered set and can strand
-        /// its tooltip on screen with nothing under it — the case
-        /// SetAvailableInstantly handles explicitly and plain deactivation does
-        /// not. ForceHoverEvent's conservative flag makes it a no-op unless the
-        /// button really is hovered.
-        /// </remarks>
-        private static void Show(CIButton? button, bool visible)
-        {
-            if (button == null || button.gameObject.activeSelf == visible)
-            {
-                return;
-            }
-
-            if (!visible)
-            {
-                button.ForceHoverEvent(isHovered: false, conservative: true);
-            }
-
-            button.gameObject.SetActive(visible);
-        }
+        private static void Show(CIButton? button, bool visible) =>
+            NguiKit.Show(button, visible);
 
         private static void OnToggleRemember()
         {
@@ -457,6 +448,11 @@ namespace PBAndJ.Mod.Net
             // its own donor and matches their look without new recon.
             leaveButton = CloneButton(
                 reporter.buttonCategorySuggestion, ConnectText.LeaveButton(), LeaveX, y, OnLeave);
+
+            // Re-clones Host's donor. A donor can be Instantiated any number of
+            // times, and a fourth category button does not exist to borrow.
+            lobbyButton = CloneButton(
+                reporter.buttonCategoryBug, ConnectText.LobbyButton(), LobbyX, y, OnLobby);
             y -= ButtonsToStatus;
 
             statusLabel = CloneLabel(reporter.labelMain, string.Empty, 0f, y);
@@ -467,78 +463,11 @@ namespace PBAndJ.Mod.Net
             return true;
         }
 
-        private static UIWidget? CloneBackground(CIViewReporter reporter)
-        {
-            var donor = FindBackgroundDonor(reporter);
-            var clone = Clone(donor == null ? null : donor.gameObject, -PanelPad, PanelPad);
-            if (clone == null)
-            {
-                return null;
-            }
+        private static UIWidget? CloneBackground(CIViewReporter reporter) =>
+            NguiKit.CloneBackground(root, reporter, PanelWidth, PanelHeight, PanelPad);
 
-            // A background is decoration; anything it drags along is not.
-            foreach (var child in clone.GetComponentsInChildren<Transform>(true))
-            {
-                if (child != clone.transform)
-                {
-                    UnityEngine.Object.DestroyImmediate(child.gameObject);
-                }
-            }
-
-            var widget = clone.GetComponent<UIWidget>();
-            if (widget != null)
-            {
-                widget.rawPivot = UIWidget.Pivot.TopLeft;
-                widget.width = PanelWidth;
-                widget.height = PanelHeight;
-
-                // Darkened rather than left at the donor's tint. The title menu
-                // sits over a bright, busy render, and the game's own menu strip
-                // solves the same problem the same way — near-black at high
-                // opacity, cool rather than neutral so it reads as part of the
-                // UI instead of a hole punched in it. Without this the fields
-                // are unreadable over the artwork.
-                // Near-opaque, not merely dark: the menu render swings from a
-                // dim skyline to a full-screen explosion, and at 0.88 the panel
-                // washed out to light grey on the bright frames.
-                widget.color = new Color(0.03f, 0.04f, 0.06f, 0.97f);
-            }
-
-            return widget;
-        }
-
-        /// <summary>
-        /// A sprite worth using as a panel backing.
-        /// </summary>
-        /// <remarks>
-        /// By path first, because that is the one observed in the dump, then by
-        /// name, then anything — a background is the one piece where the wrong
-        /// sprite still beats none at all, since its job is opacity.
-        /// </remarks>
-        private static Transform? FindBackgroundDonor(CIViewReporter reporter)
-        {
-            var byPath = reporter.transform.Find("Container/Sprite_Background_Main");
-            if (byPath != null)
-            {
-                return byPath;
-            }
-
-            UISprite? fallback = null;
-            foreach (var sprite in reporter.GetComponentsInChildren<UISprite>(true))
-            {
-                if (sprite.name.IndexOf("Background", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    return sprite.transform;
-                }
-
-                if (fallback == null)
-                {
-                    fallback = sprite;
-                }
-            }
-
-            return fallback == null ? null : fallback.transform;
-        }
+        private static Transform? FindBackgroundDonor(CIViewReporter reporter) =>
+            NguiKit.FindBackgroundDonor(reporter);
 
         /// <summary>
         /// Gives a text field a visible box to click in.
@@ -574,91 +503,11 @@ namespace PBAndJ.Mod.Net
             fieldBackings.Add(widget);
         }
 
-        /// <summary>
-        /// Layers our own widgets without touching anyone else's depths.
-        /// </summary>
-        /// <remarks>
-        /// NGUI orders by depth within a panel, and ours share the title menu's
-        /// panel. Taking the panel two below our own minimum and the field boxes
-        /// one below puts both behind our content, in the right order relative
-        /// to each other, and leaves the menu's own ordering exactly as the game
-        /// set it.
-        /// </remarks>
-        private static void SendToBack(UIWidget? background)
-        {
-            if (root == null)
-            {
-                return;
-            }
+        private static void SendToBack(UIWidget? background) =>
+            NguiKit.SendToBack(root, background, fieldBackings);
 
-            var lowest = int.MaxValue;
-            foreach (var widget in root.GetComponentsInChildren<UIWidget>(true))
-            {
-                if (widget == background || fieldBackings.Contains(widget))
-                {
-                    continue;
-                }
-
-                if (widget.depth < lowest)
-                {
-                    lowest = widget.depth;
-                }
-            }
-
-            if (lowest == int.MaxValue)
-            {
-                lowest = 0;
-            }
-
-            foreach (var backing in fieldBackings)
-            {
-                backing.depth = lowest - 1;
-            }
-
-            if (background != null)
-            {
-                background.depth = lowest - 2;
-            }
-        }
-
-        private static UILabel? CloneLabel(UILabel? donor, string text, float x, float y)
-        {
-            var clone = Clone(donor == null ? null : donor.gameObject, x, y);
-            if (clone == null)
-            {
-                return null;
-            }
-
-            // The only UILabel CIViewReporter exposes directly is the one its
-            // UIInput renders through — it is registered as the "input" nav node.
-            // A clone therefore arrives carrying a UIInput, whose UpdateLabel
-            // overwrites the text with the donor's placeholder the moment the
-            // screen is activated. That is what put "Default feedback text. You
-            // can click here to edit the message." on every caption.
-            //
-            // Stripped by component rather than by picking a different donor, so
-            // this stays right whichever label the field happens to point at.
-            foreach (var input in clone.GetComponents<UIInput>())
-            {
-                UnityEngine.Object.DestroyImmediate(input);
-            }
-
-            foreach (var collider in clone.GetComponents<BoxCollider>())
-            {
-                UnityEngine.Object.DestroyImmediate(collider);
-            }
-
-            var label = clone.GetComponent<UILabel>();
-            if (label != null)
-            {
-                label.text = text;
-                label.width = PanelWidth - (int)(PanelPad * 2);
-                label.multiLine = true;
-                label.overflowMethod = UILabel.Overflow.ResizeHeight;
-            }
-
-            return label;
-        }
+        private static UILabel? CloneLabel(UILabel? donor, string text, float x, float y) =>
+            NguiKit.CloneLabel(root, donor, text, x, y, PanelWidth - (int)(PanelPad * 2));
 
         private static UIInput? CloneField(UIInput donor, float x, float y, UIInput.InputType type)
         {
@@ -723,80 +572,14 @@ namespace PBAndJ.Mod.Net
             return input;
         }
 
-        private static CIButton? CloneButton(CIButton? donor, string text, float x, float y, Action onClick)
-        {
-            var clone = Clone(donor == null ? null : donor.gameObject, x, y);
-            if (clone == null)
-            {
-                return null;
-            }
+        private static CIButton? CloneButton(CIButton? donor, string text, float x, float y, Action onClick) =>
+            NguiKit.CloneButton(root, donor, text, x, y, onClick);
 
-            var button = clone.GetComponent<CIButton>();
-            if (button == null)
-            {
-                return null;
-            }
+        private static GameObject? Clone(GameObject? donor, float x, float y) =>
+            NguiKit.Clone(root, donor, x, y);
 
-            button.callbackOnClick = new UICallback(onClick);
-            button.tooltipHeader = text;
-            button.tooltipContent = string.Empty;
-
-            if (text.Length > 0)
-            {
-                var label = clone.GetComponentInChildren<UILabel>(true);
-                if (label != null)
-                {
-                    label.text = text;
-                }
-            }
-
-            return button;
-        }
-
-        private static GameObject? Clone(GameObject? donor, float x, float y)
-        {
-            if (donor == null || root == null)
-            {
-                return null;
-            }
-
-            try
-            {
-                var clone = UnityEngine.Object.Instantiate(donor, root.transform);
-                clone.layer = 5;
-                clone.transform.localRotation = Quaternion.identity;
-                clone.transform.localScale = Vector3.one;
-                clone.transform.localPosition = new Vector3(x, y, 0f);
-                clone.SetActive(true);
-
-                StripLocalizers(clone);
-                return clone;
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning("[pb-and-j] could not clone " + donor.name + ": " + e.GetType().Name);
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Removes the game's localization component from a cloned subtree.
-        /// </summary>
-        /// <remarks>
-        /// CILabel.Start assigns label.text from the text library, and
-        /// DataManagerText re-applies every registered one on a language change,
-        /// so anything we write would revert to the donor's wording — on the
-        /// frame after activation, which is the worst kind of bug to chase.
-        /// DestroyImmediate rather than Destroy because Destroy is deferred to
-        /// the end of the frame, and the root may be activated before then.
-        /// </remarks>
-        private static void StripLocalizers(GameObject subtree)
-        {
-            foreach (var label in subtree.GetComponentsInChildren<CILabel>(true))
-            {
-                UnityEngine.Object.DestroyImmediate(label);
-            }
-        }
+        private static void StripLocalizers(GameObject subtree) =>
+            NguiKit.StripLocalizers(subtree);
 
         // --- fallback, and the console commands ---
 
