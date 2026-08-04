@@ -898,5 +898,200 @@ namespace PBAndJ.Core.Tests.Net
         {
             public override PbjInboundEventKind Kind => (PbjInboundEventKind)200;
         }
+
+        // --- lobby (M11a) ---
+
+        private static LobbyStateMessage Lobby(
+            int version = 1, string? saveKey = "pbj_campaign", bool allyReady = false) =>
+            new LobbyStateMessage(version, saveKey, "abc", new[]
+            {
+                new LobbyPeerState(0, "host", true),
+                new LobbyPeerState(1, "ally", allyReady),
+            });
+
+        /// <summary>A welcomed client that has been told about a selected save.</summary>
+        private ClientSession InLobby(int version = 1)
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Lobby(version));
+            return client;
+        }
+
+        [Fact]
+        public void LobbyState_IsUnknownBeforeTheHostSendsOne()
+        {
+            // -1, not 0: "never told" must be distinguishable from "the host has
+            // not picked yet", which is version 0.
+            var client = Welcomed();
+            Assert.Equal(-1, client.LobbySelectionVersion);
+            Assert.Null(client.LobbySaveKey);
+            Assert.Empty(client.LobbyRoster);
+            Assert.False(client.LobbyReadySent);
+        }
+
+        [Fact]
+        public void LobbyState_IsTakenWholesale()
+        {
+            var client = Welcomed();
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, Lobby(allyReady: true));
+
+            Assert.Equal(1, client.LobbySelectionVersion);
+            Assert.Equal("pbj_campaign", client.LobbySaveKey);
+            Assert.Equal("abc", client.LobbySaveDigest);
+            Assert.Equal(2, client.LobbyRoster.Count);
+            Assert.True(client.LobbyRoster[1].Ready);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("2/2 ready"));
+        }
+
+        [Fact]
+        public void LobbyState_ForANewSelection_ClearsOurReady()
+        {
+            // The host cleared everyone when it changed the save, so our flag
+            // has to follow or the screen claims a ready the host does not hold.
+            var client = InLobby();
+            client.Handle(new LocalLobbyReadyEvent());
+            Assert.True(client.LobbyReadySent);
+
+            client.HandleMessage(ClientSession.HostConnectionId, Lobby(version: 2));
+
+            Assert.False(client.LobbyReadySent);
+        }
+
+        [Fact]
+        public void LobbyState_ForTheSameSelection_LeavesOurReadyAlone()
+        {
+            var client = InLobby();
+            client.Handle(new LocalLobbyReadyEvent());
+
+            // A refresh caused by somebody else joining, not by a new save.
+            client.HandleMessage(ClientSession.HostConnectionId, Lobby(version: 1, allyReady: true));
+
+            Assert.True(client.LobbyReadySent);
+        }
+
+        [Fact]
+        public void LocalLobbyReady_SendsOurAgreementForTheHostsSelection()
+        {
+            var client = InLobby(version: 4);
+            var effects = client.Handle(new LocalLobbyReadyEvent());
+
+            var ready = Assert.IsType<LobbyReadyMessage>(Single<SendEffect>(effects).Message);
+            Assert.Equal(4, ready.SelectionVersion);
+            Assert.True(client.LobbyReadySent);
+        }
+
+        [Fact]
+        public void LocalLobbyReady_BeforeAnyLobbyState_IsRefused()
+        {
+            var client = Welcomed();
+            var effects = client.Handle(new LocalLobbyReadyEvent());
+
+            Assert.Empty(All<SendEffect>(effects));
+            Assert.False(client.LobbyReadySent);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("no lobby state received yet"));
+        }
+
+        [Fact]
+        public void LocalLobbyReady_WhenTheHostHasPickedNothing_IsRefused()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Lobby(version: 0, saveKey: null));
+
+            var effects = client.Handle(new LocalLobbyReadyEvent());
+
+            Assert.Empty(All<SendEffect>(effects));
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("has not picked a save"));
+        }
+
+        [Fact]
+        public void LocalLobbyReady_WorksEvenWhenOurOwnGameIsInCombat()
+        {
+            // The defect this guards against: HandleWelcome sets the state from
+            // the CLIENT'S OWN bridge.InCombat, so joining while your local game
+            // is mid-combat lands you in Planning. A state-based guard would
+            // refuse you the lobby forever while holding a valid LobbyState —
+            // and no harness test could catch it, since the scripted bridge is
+            // never in combat.
+            bridge.InCombat = true;
+            var client = Welcomed();
+            Assert.Equal(ClientSessionState.Planning, client.State);
+
+            client.HandleMessage(ClientSession.HostConnectionId, Lobby());
+            var effects = client.Handle(new LocalLobbyReadyEvent());
+
+            Assert.IsType<LobbyReadyMessage>(Single<SendEffect>(effects).Message);
+        }
+
+        [Fact]
+        public void LocalLobbyUnready_WithdrawsIt()
+        {
+            var client = InLobby(version: 4);
+            client.Handle(new LocalLobbyReadyEvent());
+
+            var effects = client.Handle(new LocalLobbyUnreadyEvent());
+
+            var unready = Assert.IsType<LobbyUnreadyMessage>(Single<SendEffect>(effects).Message);
+            Assert.Equal(4, unready.SelectionVersion);
+            Assert.False(client.LobbyReadySent);
+        }
+
+        [Fact]
+        public void LocalLobbyUnready_WithoutHavingReadied_SendsNothing()
+        {
+            // Withdrawing what was never given is a no-op, not an unlock —
+            // the same gate submittedThisTurn provides for the turn barrier.
+            Assert.Empty(InLobby().Handle(new LocalLobbyUnreadyEvent()));
+        }
+
+        [Fact]
+        public void LocalLobbySelect_IsRefusedAndSaysSo()
+        {
+            // Silent refusal is the M10c connect-screen bug; say it out loud.
+            var effects = InLobby().Handle(new LocalLobbySelectEvent("pbj_mine", null));
+
+            Assert.Empty(All<SendEffect>(effects));
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("only the host picks"));
+        }
+
+        [Fact]
+        public void CombatStart_ClearsOurLobbyReady()
+        {
+            // The host drops lobby readies during combat, so a flag surviving
+            // into the fight would disagree with every roster we are sent.
+            var client = InLobby();
+            client.Handle(new LocalLobbyReadyEvent());
+
+            client.HandleMessage(ClientSession.HostConnectionId, new CombatStartMessage(0));
+
+            Assert.False(client.LobbyReadySent);
+        }
+
+        [Fact]
+        public void LobbyReadyFromTheHost_IsAProtocolViolation()
+        {
+            // Client-to-host messages must never arrive downward.
+            var client = Welcomed();
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, new LobbyReadyMessage(1));
+
+            Assert.Equal(ClientSessionState.Faulted, client.State);
+            Assert.Single(All<DisconnectEffect>(effects));
+        }
+
+        [Fact]
+        public void LobbyUnreadyFromTheHost_IsAProtocolViolation()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, new LobbyUnreadyMessage(1));
+            Assert.Equal(ClientSessionState.Faulted, client.State);
+        }
+
+        [Fact]
+        public void LobbyState_BeforeWelcome_IsAProtocolViolation()
+        {
+            var client = Client();
+            client.Start();
+            client.HandleMessage(ClientSession.HostConnectionId, Lobby());
+            Assert.Equal(ClientSessionState.Faulted, client.State);
+        }
     }
 }

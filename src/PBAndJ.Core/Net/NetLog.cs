@@ -521,6 +521,97 @@ namespace PBAndJ.Core.Net
             return Prefix + "no combat save to send — run pbj.combat-save in a combat first";
         }
 
+        // --- lobby (M11a) ---
+
+        public static string LobbySelected(string? saveKey, string? digest, int selectionVersion)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "lobby save is now '{0}' ({1}) | selection {2} — everyone must ready again",
+                Describe(saveKey), Describe(digest), selectionVersion);
+        }
+
+        public static string LobbySelectionCleared(int selectionVersion)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "lobby save cleared | selection {0}", selectionVersion);
+        }
+
+        public static string LobbySelectIgnored(string why)
+        {
+            RequireText(why, nameof(why));
+            return Prefix + "ignoring lobby save selection — " + why;
+        }
+
+        public static string LobbyReadyReceived(int peerId, string? name, int selectionVersion)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "lobby ready from #{0} '{1}' for selection {2}",
+                peerId, Describe(name), selectionVersion);
+        }
+
+        public static string LobbyUnreadyReceived(int peerId, string? name, int selectionVersion)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "lobby unready from #{0} '{1}' for selection {2}",
+                peerId, Describe(name), selectionVersion);
+        }
+
+        public static string LobbyReadyIgnored(int peerId, int selectionVersion, string why)
+        {
+            RequireText(why, nameof(why));
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "ignoring lobby ready from #{0} for selection {1} — {2}",
+                peerId, selectionVersion, why);
+        }
+
+        /// <remarks>
+        /// Says "misbehaving", not "resyncing", unlike its turn-barrier
+        /// counterpart. Only the host mints a selection version and it never
+        /// rewinds, so a peer claiming one we have not reached did not fall
+        /// behind honestly — see <c>LobbyBarrier.SetReady</c>.
+        /// </remarks>
+        public static string LobbyReadyAhead(int peerId, int selectionVersion, int currentSelection)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "peer #{0} claims lobby selection {1} but the host is on {2} — resending the lobby state",
+                peerId, selectionVersion, currentSelection);
+        }
+
+        public static string LobbyBarrierWaiting(int readyCount, int participantCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "lobby {0}/{1} ready", readyCount, participantCount);
+        }
+
+        public static string LobbyBarrierSatisfied(int participantCount, string? saveKey)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "lobby {0}/{0} ready for '{1}' — everyone has agreed",
+                participantCount, Describe(saveKey));
+        }
+
+        public static string LobbyStateReceived(
+            int selectionVersion, string? saveKey, int readyCount, int participantCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "lobby state | selection {0} | save '{1}' | {2}/{3} ready",
+                selectionVersion, Describe(saveKey), readyCount, participantCount);
+        }
+
+        public static string LobbySelectIsHostOnly()
+        {
+            return Prefix + "only the host picks the lobby save";
+        }
+
         // --- keepalive ---
 
         public static string PeerTimedOut(int peerId, string? name, double silentSeconds)

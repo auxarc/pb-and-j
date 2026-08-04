@@ -25,6 +25,9 @@ namespace PBAndJ.Core.Net
         CombatExited = 102,
         Tick = 103,
         LocalScenarioPull = 104,
+        LocalLobbySelect = 105,
+        LocalLobbyReady = 106,
+        LocalLobbyUnready = 107,
     }
 
     /// <summary>
@@ -245,6 +248,48 @@ namespace PBAndJ.Core.Net
     public sealed class CombatEnteredEvent : PbjInboundEvent
     {
         public override PbjInboundEventKind Kind => PbjInboundEventKind.CombatEntered;
+    }
+
+    /// <summary>
+    /// The host chose which save the lobby will play.
+    /// </summary>
+    /// <remarks>
+    /// The key and digest arrive on the event rather than being read from disk
+    /// by the session, which keeps the session a pure machine — it reads no
+    /// disk, exactly as it reads no clock — and leaves the catalogue, the
+    /// <c>pbj_</c> naming rules and the digesting to M11b's glue.
+    /// <para>
+    /// Host-only. A client that somehow posts one is told so and ignored: the
+    /// save picker is the host's, and a client's copy of it is a display.
+    /// </para>
+    /// </remarks>
+    public sealed class LocalLobbySelectEvent : PbjInboundEvent
+    {
+        public LocalLobbySelectEvent(string? saveKey, string? saveDigest)
+        {
+            SaveKey = saveKey;
+            SaveDigest = saveDigest;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalLobbySelect;
+
+        /// <summary>Null clears the selection rather than naming a save.</summary>
+        public string? SaveKey { get; }
+
+        /// <summary>Null is normal — this machine may not have hashed it.</summary>
+        public string? SaveDigest { get; }
+    }
+
+    /// <summary>The local player agreed to load the selected save.</summary>
+    public sealed class LocalLobbyReadyEvent : PbjInboundEvent
+    {
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalLobbyReady;
+    }
+
+    /// <summary>The local player withdrew that agreement.</summary>
+    public sealed class LocalLobbyUnreadyEvent : PbjInboundEvent
+    {
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalLobbyUnready;
     }
 
     /// <summary>The local game left combat.</summary>

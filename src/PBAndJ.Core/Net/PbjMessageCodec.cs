@@ -217,6 +217,27 @@ namespace PBAndJ.Core.Net
                     }
                     break;
 
+                case LobbyStateMessage lobby:
+                    writer.WriteInt32(lobby.SelectionVersion);
+                    writer.WriteString(lobby.SaveKey);
+                    writer.WriteString(lobby.SaveDigest);
+                    writer.WriteInt32(lobby.Peers.Count);
+                    for (var i = 0; i < lobby.Peers.Count; i++)
+                    {
+                        writer.WriteInt32(lobby.Peers[i].PeerId);
+                        writer.WriteString(lobby.Peers[i].Name);
+                        writer.WriteBool(lobby.Peers[i].Ready);
+                    }
+                    break;
+
+                case LobbyReadyMessage lobbyReady:
+                    writer.WriteInt32(lobbyReady.SelectionVersion);
+                    break;
+
+                case LobbyUnreadyMessage lobbyUnready:
+                    writer.WriteInt32(lobbyUnready.SelectionVersion);
+                    break;
+
                 case PingMessage ping:
                     writer.WriteInt32(ping.Nonce);
                     break;
@@ -416,6 +437,28 @@ namespace PBAndJ.Core.Net
                     }
                     return new ScenarioMessage(saveName, digest, files);
                 }
+
+                case PbjMessageType.LobbyState:
+                {
+                    var selectionVersion = reader.ReadInt32();
+                    var saveKey = reader.ReadString();
+                    var saveDigest = reader.ReadString();
+                    // Same roster, so the same cap Welcome and Assignments use.
+                    var count = ReadCount(reader, MaxPeersPerWelcome, "peer");
+                    var peers = new LobbyPeerState[count];
+                    for (var i = 0; i < count; i++)
+                    {
+                        peers[i] = new LobbyPeerState(
+                            reader.ReadInt32(), reader.ReadString(), reader.ReadBool());
+                    }
+                    return new LobbyStateMessage(selectionVersion, saveKey, saveDigest, peers);
+                }
+
+                case PbjMessageType.LobbyReady:
+                    return new LobbyReadyMessage(reader.ReadInt32());
+
+                case PbjMessageType.LobbyUnready:
+                    return new LobbyUnreadyMessage(reader.ReadInt32());
 
                 case PbjMessageType.Ping:
                     return new PingMessage(reader.ReadInt32());

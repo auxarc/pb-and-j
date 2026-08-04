@@ -174,5 +174,35 @@ namespace PBAndJ.Core.Tests.Net
         {
             Assert.Empty(new LocalTurnCompleteEvent("d", null, null).Keyframes.Tracks);
         }
+
+        [Fact]
+        public void LocalLobbySelect_RetainsFields()
+        {
+            var e = new LocalLobbySelectEvent("pbj_campaign", "3f9c1a04");
+            Assert.Equal(PbjInboundEventKind.LocalLobbySelect, e.Kind);
+            Assert.Equal("pbj_campaign", e.SaveKey);
+            Assert.Equal("3f9c1a04", e.SaveDigest);
+        }
+
+        [Fact]
+        public void LocalLobbySelect_WithNoKey_ClearsRatherThanFails()
+        {
+            // Deselecting is a real action, not a malformed event.
+            var e = new LocalLobbySelectEvent(null, null);
+            Assert.Null(e.SaveKey);
+            Assert.Null(e.SaveDigest);
+        }
+
+        [Fact]
+        public void LocalLobbyReady_HasItsKind()
+        {
+            Assert.Equal(PbjInboundEventKind.LocalLobbyReady, new LocalLobbyReadyEvent().Kind);
+        }
+
+        [Fact]
+        public void LocalLobbyUnready_HasItsKind()
+        {
+            Assert.Equal(PbjInboundEventKind.LocalLobbyUnready, new LocalLobbyUnreadyEvent().Kind);
+        }
     }
 }

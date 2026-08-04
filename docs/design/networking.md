@@ -83,6 +83,51 @@ host is executing or when it names a turn other than the current one, and has no
 has no un-ready button to intercept, because single-player has nothing to wait for. The console
 command `pbj.unready` and the harness's `unready` are the PoC affordances.
 
+## The lobby barrier (M11a)
+
+A **second** barrier, alongside the turn barrier below, for a different question: not "has everyone
+submitted orders for this turn" but "has everyone agreed to load this save". It is the wire half of
+`docs/design/campaign-coop.md`'s M11.
+
+- The host holds a **`LobbySelection`** — a save key, its digest, and a **version**. Only the host
+  mints a version, and it never rewinds.
+- Every roster member, host included, is a **`LobbyBarrier`** participant. Membership is added when
+  `registry.Add` succeeds and dropped in `RemovePeer`, which is what makes
+  `ReadyOutcome.UnknownParticipant` unreachable in the host's handler — and therefore absent, since
+  the coverage gate refuses unreachable code.
+- `LobbyState` is broadcast, as **full state**, on every change: selection, roster, and each member's
+  ready flag. Idempotent, like `Assignments`, so a client that misses one is corrected by the next.
+- `LobbyReady { selectionVersion }` and `LobbyUnready { selectionVersion }` travel upward. Two types
+  rather than one flag-carrying message, mirroring `Ready`/`Unready`.
+
+**The selection version is the lobby's turn number.** Change the save and every ready clears, so a
+peer that agreed to save A is never counted as agreeing to save B. Re-choosing the *same* save still
+advances it: one path, no equality branch, and clearing is the safe direction — the cost is a
+re-click, the alternative is loading a save somebody never confirmed.
+
+### Three things that are easy to get wrong here
+
+**`NeedsResync` does not mean what it means on the turn barrier.** There it is honest — a scenario
+force-execute can advance the host outside the barrier, so a peer really can fall behind. For a
+selection version there is no such path, so a peer claiming a version the host has not reached is
+misbehaving or buggy. The arm survives because messages do not validate and a test can deliver a
+forged one; the host answers with the truth rather than a kick, in case the bug is ours.
+
+**A departing peer can satisfy the lobby barrier**, exactly as it can satisfy the turn barrier — the
+last unready member simply leaves. A host that only re-checks after a ready misses that case
+entirely, which in M11d is a trigger that never fires.
+
+**Leaving combat clears lobby readiness** by advancing the selection. Without it, returning to the
+lobby after a fight finds everyone already "ready", and a `LobbyReady` still in flight from before
+the fight would be counted.
+
+### Scope: M11a is deliberately inert
+
+Nothing acts on a satisfied lobby barrier. `HostSession.LobbyIsSatisfied` and a log line are the
+whole output; broadcasting "load this save" is M11d's job, and building the trigger here would mean
+two mechanisms for one job. The eighth `peer-selftest` scenario is what stops that inertness becoming
+the M6 failure — a feature that ships with every test green and has never once run.
+
 ## The turn barrier
 
 **Batch-at-ready, not incremental streaming.**

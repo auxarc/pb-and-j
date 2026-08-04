@@ -152,5 +152,50 @@ namespace PBAndJ.Core.Tests.Net
         {
             Assert.Null(new ByeMessage(null).Reason);
         }
+
+        [Fact]
+        public void LobbyState_RetainsFields()
+        {
+            var m = new LobbyStateMessage(3, "pbj_campaign", "3f9c1a04", new[]
+            {
+                new LobbyPeerState(0, "host", true),
+            });
+            Assert.Equal(PbjMessageType.LobbyState, m.Type);
+            Assert.Equal(3, m.SelectionVersion);
+            Assert.Equal("pbj_campaign", m.SaveKey);
+            Assert.Equal("3f9c1a04", m.SaveDigest);
+            Assert.Single(m.Peers);
+        }
+
+        [Fact]
+        public void LobbyState_WithNullPeers_NormalisesToEmpty()
+        {
+            Assert.Empty(new LobbyStateMessage(0, null, null, null).Peers);
+        }
+
+        [Fact]
+        public void LobbyPeerState_RetainsFields()
+        {
+            var state = new LobbyPeerState(4, "someone", true);
+            Assert.Equal(4, state.PeerId);
+            Assert.Equal("someone", state.Name);
+            Assert.True(state.Ready);
+        }
+
+        [Fact]
+        public void LobbyReady_RetainsFields()
+        {
+            var m = new LobbyReadyMessage(3);
+            Assert.Equal(PbjMessageType.LobbyReady, m.Type);
+            Assert.Equal(3, m.SelectionVersion);
+        }
+
+        [Fact]
+        public void LobbyUnready_RetainsFields()
+        {
+            var m = new LobbyUnreadyMessage(3);
+            Assert.Equal(PbjMessageType.LobbyUnready, m.Type);
+            Assert.Equal(3, m.SelectionVersion);
+        }
     }
 }

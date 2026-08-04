@@ -674,6 +674,128 @@ namespace PBAndJ.Core.Tests.Net
 
         // --- culture ---
 
+        // --- lobby (M11a) ---
+
+        [Fact]
+        public void LobbySelected_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] lobby save is now 'pbj_campaign' (3f9c1a04) | selection 2 — everyone must ready again",
+                NetLog.LobbySelected("pbj_campaign", "3f9c1a04", 2));
+        }
+
+        [Fact]
+        public void LobbySelected_WithNoDigest_RendersThePlaceholder()
+        {
+            // A save this machine has not hashed is still a save.
+            Assert.Contains("(?)", NetLog.LobbySelected("pbj_campaign", null, 1));
+        }
+
+        [Fact]
+        public void LobbySelectionCleared_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] lobby save cleared | selection 3",
+                NetLog.LobbySelectionCleared(3));
+        }
+
+        [Fact]
+        public void LobbySelectIgnored_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] ignoring lobby save selection — not in the lobby",
+                NetLog.LobbySelectIgnored("not in the lobby"));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        public void LobbySelectIgnored_WithBlankReason_Throws(string? why)
+        {
+            var ex = Assert.Throws<ArgumentException>(() => NetLog.LobbySelectIgnored(why!));
+            Assert.Equal("why", ex.ParamName);
+        }
+
+        [Fact]
+        public void LobbyReadyReceived_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] lobby ready from #1 'ally' for selection 2",
+                NetLog.LobbyReadyReceived(1, "ally", 2));
+        }
+
+        [Fact]
+        public void LobbyUnreadyReceived_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] lobby unready from #1 'ally' for selection 2",
+                NetLog.LobbyUnreadyReceived(1, "ally", 2));
+        }
+
+        [Fact]
+        public void LobbyReadyIgnored_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] ignoring lobby ready from #1 for selection 2 — no save selected",
+                NetLog.LobbyReadyIgnored(1, 2, "no save selected"));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        public void LobbyReadyIgnored_WithBlankReason_Throws(string? why)
+        {
+            var ex = Assert.Throws<ArgumentException>(() => NetLog.LobbyReadyIgnored(1, 2, why!));
+            Assert.Equal("why", ex.ParamName);
+        }
+
+        [Fact]
+        public void LobbyReadyAhead_SaysTheHostIsResendingRatherThanResyncing()
+        {
+            // Deliberately not worded like ReadyNeedsResync: nothing can put a
+            // peer legitimately ahead of the host's selection, so this is a
+            // misbehaving peer, not one that fell behind honestly.
+            Assert.Equal(
+                "[pb-and-j] peer #1 claims lobby selection 9 but the host is on 2 — resending the lobby state",
+                NetLog.LobbyReadyAhead(1, 9, 2));
+        }
+
+        [Fact]
+        public void LobbyBarrierWaiting_ComposesTheLine()
+        {
+            Assert.Equal("[pb-and-j] lobby 1/3 ready", NetLog.LobbyBarrierWaiting(1, 3));
+        }
+
+        [Fact]
+        public void LobbyBarrierSatisfied_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] lobby 3/3 ready for 'pbj_campaign' — everyone has agreed",
+                NetLog.LobbyBarrierSatisfied(3, "pbj_campaign"));
+        }
+
+        [Fact]
+        public void LobbyStateReceived_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] lobby state | selection 2 | save 'pbj_campaign' | 1/3 ready",
+                NetLog.LobbyStateReceived(2, "pbj_campaign", 1, 3));
+        }
+
+        [Fact]
+        public void LobbyStateReceived_WithNothingSelected_RendersThePlaceholder()
+        {
+            Assert.Contains("save '?'", NetLog.LobbyStateReceived(0, null, 0, 2));
+        }
+
+        [Fact]
+        public void LobbySelectIsHostOnly_ComposesTheLine()
+        {
+            Assert.Equal("[pb-and-j] only the host picks the lobby save", NetLog.LobbySelectIsHostOnly());
+        }
+
         [Fact]
         public void Lines_AreCultureIndependent()
         {
