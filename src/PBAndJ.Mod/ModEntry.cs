@@ -27,6 +27,9 @@ namespace PBAndJ.Mod
             InjectGlue.RegisterConsoleCommand();
             Net.NetGlue.RegisterConsoleCommands();
             UpdateGlue.RegisterConsoleCommand();
+            // Throwaway — delete with LoadProbeGlue once M11's TryLoading
+            // question is answered in docs/design/campaign-coop.md.
+            Net.LoadProbeGlue.RegisterConsoleCommands();
         }
     }
 
