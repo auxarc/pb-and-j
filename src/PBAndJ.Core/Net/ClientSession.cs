@@ -39,6 +39,7 @@ namespace PBAndJ.Core.Net
 
         private static readonly int[] HostOnly = { HostConnectionId };
         private static readonly string[] NoUnits = new string[0];
+        private static readonly LobbyPeerState[] NoLobbyPeers = new LobbyPeerState[0];
 
         private readonly IPbjGameBridge bridge;
         private readonly string playerName;
@@ -141,6 +142,30 @@ namespace PBAndJ.Core.Net
         /// <summary>Units this client may plan, as last told by the host.</summary>
         public IReadOnlyList<string> OwnedUnits { get; private set; } = new string[0];
 
+        /// <summary>
+        /// The host's selection version, or -1 before any lobby state arrives.
+        /// </summary>
+        /// <remarks>
+        /// -1 rather than 0 so "we have never been told" is distinguishable from
+        /// "the host has not chosen yet", which is version 0. The ready guard
+        /// keys off this: a client must never invent a version.
+        /// </remarks>
+        public int LobbySelectionVersion { get; private set; } = -1;
+
+        /// <summary>The save the host has chosen, or null if none.</summary>
+        public string? LobbySaveKey { get; private set; }
+
+        public string? LobbySaveDigest { get; private set; }
+
+        /// <summary>The lobby roster with ready flags, for a screen to render.</summary>
+        public IReadOnlyList<LobbyPeerState> LobbyRoster { get; private set; } = NoLobbyPeers;
+
+        /// <summary>
+        /// Whether we have an outstanding lobby ready. Gates the withdrawal, the
+        /// way <c>submittedThisTurn</c> gates <c>Unready</c>.
+        /// </summary>
+        public bool LobbyReadySent { get; private set; }
+
         public IReadOnlyList<int> ConnectedPeerIds => HostOnly;
 
         /// <summary>
@@ -220,6 +245,21 @@ namespace PBAndJ.Core.Net
 
                 case LocalScenarioPullEvent:
                     HandleLocalScenarioPull(effects);
+                    break;
+
+                case LocalLobbySelectEvent:
+                    // The picker is the host's; ours is a display of it. Said
+                    // out loud rather than swallowed, because a button that does
+                    // nothing silently is the bug M10c already paid for.
+                    effects.Add(new LogEffect(NetLog.LobbySelectIsHostOnly()));
+                    break;
+
+                case LocalLobbyReadyEvent:
+                    HandleLocalLobbyReady(effects);
+                    break;
+
+                case LocalLobbyUnreadyEvent:
+                    HandleLocalLobbyUnready(effects);
                     break;
 
                 case OrderAppliedEvent:
@@ -337,6 +377,12 @@ namespace PBAndJ.Core.Net
                     Turn = combatStart.Turn;
                     State = ClientSessionState.Planning;
                     submittedThisTurn = false;
+                    // The lobby is over, and whatever we agreed to there is
+                    // spent. Without this a client carries "ready" into the
+                    // fight with nothing to clear it until the host next bumps
+                    // the selection — and the host drops lobby readies during
+                    // combat, so our flag and its roster would disagree.
+                    LobbyReadySent = false;
                     effects.Add(new LogEffect(NetLog.CombatStartedByHost(combatStart.Turn)));
                     effects.Add(new SetExecutionLockEffect(false));
                     break;
@@ -369,6 +415,10 @@ namespace PBAndJ.Core.Net
 
                 case KeyframesMessage keyframes:
                     HandleKeyframes(keyframes, effects);
+                    break;
+
+                case LobbyStateMessage lobbyState:
+                    HandleLobbyState(lobbyState, effects);
                     break;
 
                 case ScenarioOfferMessage offer:
@@ -485,6 +535,92 @@ namespace PBAndJ.Core.Net
                 }
             }
             return ours;
+        }
+
+        // --- lobby (M11a) ---
+
+        /// <summary>Takes the host's view of the lobby wholesale.</summary>
+        /// <remarks>
+        /// Full state, so there is nothing to merge and no ordering hazard
+        /// between "who joined" and "who is ready" — the same reason
+        /// <c>Assignments</c> is a full replacement.
+        /// </remarks>
+        private void HandleLobbyState(LobbyStateMessage state, List<PbjEffect> effects)
+        {
+            if (state.SelectionVersion != LobbySelectionVersion)
+            {
+                // A new selection clears everyone's agreement on the host, so
+                // ours is gone too whether we asked or not.
+                LobbyReadySent = false;
+            }
+
+            LobbySelectionVersion = state.SelectionVersion;
+            LobbySaveKey = state.SaveKey;
+            LobbySaveDigest = state.SaveDigest;
+            LobbyRoster = state.Peers;
+
+            var readyCount = 0;
+            for (var i = 0; i < state.Peers.Count; i++)
+            {
+                if (state.Peers[i].Ready)
+                {
+                    readyCount++;
+                }
+            }
+
+            effects.Add(new LogEffect(NetLog.LobbyStateReceived(
+                state.SelectionVersion, state.SaveKey, readyCount, state.Peers.Count)));
+        }
+
+        /// <summary>
+        /// Agrees to load the selected save.
+        /// </summary>
+        /// <remarks>
+        /// Gated on <em>data</em> — a selection we have actually been told about
+        /// — and deliberately NOT on <see cref="ClientSessionState.Lobby"/>.
+        /// <see cref="HandleWelcome"/> sets the state from this client's OWN
+        /// <c>bridge.InCombat</c>, so a player who joins while their local game
+        /// happens to be mid-combat is welcomed straight into
+        /// <see cref="ClientSessionState.Planning"/>. A state guard would then
+        /// refuse them the lobby forever, holding a perfectly good
+        /// <c>LobbyState</c>, and no harness test would ever catch it because
+        /// the scripted bridge is never in combat.
+        /// <para>
+        /// The host re-checks its own state regardless, so this being permissive
+        /// costs nothing: a ready sent at the wrong moment is logged and dropped
+        /// there rather than counted.
+        /// </para>
+        /// </remarks>
+        private void HandleLocalLobbyReady(List<PbjEffect> effects)
+        {
+            if (LobbySelectionVersion < 0)
+            {
+                effects.Add(new LogEffect(NetLog.LobbyReadyIgnored(
+                    PeerId, LobbySelectionVersion, "no lobby state received yet")));
+                return;
+            }
+            if (string.IsNullOrEmpty(LobbySaveKey))
+            {
+                effects.Add(new LogEffect(NetLog.LobbyReadyIgnored(
+                    PeerId, LobbySelectionVersion, "the host has not picked a save")));
+                return;
+            }
+
+            LobbyReadySent = true;
+            effects.Add(new SendEffect(HostConnectionId, new LobbyReadyMessage(LobbySelectionVersion)));
+            effects.Add(new LogEffect(NetLog.LobbyReadyReceived(PeerId, playerName, LobbySelectionVersion)));
+        }
+
+        private void HandleLocalLobbyUnready(List<PbjEffect> effects)
+        {
+            if (!LobbyReadySent)
+            {
+                return;
+            }
+
+            LobbyReadySent = false;
+            effects.Add(new SendEffect(HostConnectionId, new LobbyUnreadyMessage(LobbySelectionVersion)));
+            effects.Add(new LogEffect(NetLog.LobbyUnreadyReceived(PeerId, playerName, LobbySelectionVersion)));
         }
 
         /// <summary>Gives up on a host that has gone quiet.</summary>

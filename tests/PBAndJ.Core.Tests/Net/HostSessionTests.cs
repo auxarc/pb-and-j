@@ -1509,7 +1509,10 @@ namespace PBAndJ.Core.Tests.Net
             bridge.InCombat = false;
 
             var effects = host.Handle(new CombatExitedEvent());
-            Assert.IsType<CombatEndMessage>(Single<BroadcastEffect>(effects).Message);
+            // Two broadcasts now: CombatEnd, then the refreshed lobby — leaving
+            // the fight puts everyone back in a lobby whose readiness is stale.
+            Assert.Single(All<BroadcastEffect>(effects), e => e.Message is CombatEndMessage);
+            Assert.Single(All<BroadcastEffect>(effects), e => e.Message is LobbyStateMessage);
             Assert.False(Single<SetExecutionLockEffect>(effects).Locked);
             Assert.Equal(HostSessionState.Lobby, host.State);
         }
@@ -1633,5 +1636,457 @@ namespace PBAndJ.Core.Tests.Net
         {
             public override PbjInboundEventKind Kind => (PbjInboundEventKind)200;
         }
+
+        // --- lobby (M11a) ---
+        //
+        // The lobby only runs out of combat, so these start from a bridge that
+        // is not in one. WithPeer() alone would leave the host in Planning.
+
+        private HostSession LobbyHost(int peerId = 1, string name = "ally")
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            host.Handle(new PeerConnectedEvent(peerId, "127.0.0.1:1"));
+            host.HandleMessage(peerId, GoodHello(name));
+            return host;
+        }
+
+        private static LobbyStateMessage LobbyState(IEnumerable<PbjEffect> effects) =>
+            All<BroadcastEffect>(effects).Select(e => e.Message).OfType<LobbyStateMessage>().Last();
+
+        private static LobbySelectEventPair Select(string key = "pbj_campaign", string? digest = "abc") =>
+            new LobbySelectEventPair(key, digest);
+
+        private sealed class LobbySelectEventPair
+        {
+            public LobbySelectEventPair(string? key, string? digest)
+            {
+                Event = new LocalLobbySelectEvent(key, digest);
+            }
+
+            public LocalLobbySelectEvent Event { get; }
+        }
+
+        [Fact]
+        public void Lobby_StartsWithNothingSelectedAndOnlyTheHostPresent()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            Assert.Equal(LobbySelection.None.Version, host.Selection.Version);
+            Assert.False(host.Selection.HasSave);
+            Assert.Equal(1, host.LobbyParticipantCount);
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.False(host.LobbyIsSatisfied);
+        }
+
+        [Fact]
+        public void LobbySelect_AdvancesTheSelectionAndBroadcastsIt()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+
+            var effects = host.Handle(Select().Event);
+
+            Assert.Equal(1, host.Selection.Version);
+            Assert.Equal("pbj_campaign", host.Selection.SaveKey);
+            Assert.Equal("abc", host.Selection.SaveDigest);
+
+            var state = LobbyState(effects);
+            Assert.Equal(1, state.SelectionVersion);
+            Assert.Equal("pbj_campaign", state.SaveKey);
+            Assert.Equal("abc", state.SaveDigest);
+        }
+
+        [Fact]
+        public void LobbySelect_WithNoKey_ClearsTheSelection()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            host.Handle(Select().Event);
+
+            var effects = host.Handle(new LocalLobbySelectEvent(null, null));
+
+            Assert.False(host.Selection.HasSave);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("lobby save cleared"));
+        }
+
+        [Fact]
+        public void LobbySelect_OutsideTheLobby_IsIgnored()
+        {
+            // Mid-combat the save is already decided; changing it would be a
+            // promise the session cannot keep.
+            var host = WithPeer();
+            var effects = host.Handle(Select().Event);
+
+            Assert.Equal(LobbySelection.None.Version, host.Selection.Version);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("not in the lobby"));
+            Assert.Empty(All<BroadcastEffect>(effects));
+        }
+
+        [Fact]
+        public void LobbySelect_ClearsEveryExistingReady()
+        {
+            // The whole reason the selection is versioned: nobody agreed to
+            // the new save just because they agreed to the old one.
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            host.Handle(new LocalLobbyReadyEvent());
+            host.HandleMessage(1, new LobbyReadyMessage(1));
+            Assert.True(host.LobbyIsSatisfied);
+
+            host.Handle(Select("pbj_other").Event);
+
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.False(host.LobbyIsSatisfied);
+        }
+
+        [Fact]
+        public void LobbySelect_WithTheSameSaveAgain_StillClearsReady()
+        {
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            host.Handle(new LocalLobbyReadyEvent());
+
+            host.Handle(Select().Event);
+
+            Assert.Equal(2, host.Selection.Version);
+            Assert.Equal(0, host.LobbyReadyCount);
+        }
+
+        [Fact]
+        public void LocalLobbyReady_WithNoSaveSelected_IsRefused()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+
+            var effects = host.Handle(new LocalLobbyReadyEvent());
+
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("no save selected"));
+        }
+
+        [Fact]
+        public void LocalLobbyReady_OutsideTheLobby_IsRefused()
+        {
+            var host = WithPeer();
+            var effects = host.Handle(new LocalLobbyReadyEvent());
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("not in the lobby"));
+        }
+
+        [Fact]
+        public void LocalLobbyReady_MarksTheHostAndBroadcasts()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            host.Handle(Select().Event);
+
+            var effects = host.Handle(new LocalLobbyReadyEvent());
+
+            Assert.Equal(1, host.LobbyReadyCount);
+            // Host alone in the lobby, so its own ready fills the barrier.
+            Assert.True(host.LobbyIsSatisfied);
+            Assert.True(LobbyState(effects).Peers[0].Ready);
+        }
+
+        [Fact]
+        public void LocalLobbyUnready_WithdrawsIt()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            host.Handle(Select().Event);
+            host.Handle(new LocalLobbyReadyEvent());
+
+            var effects = host.Handle(new LocalLobbyUnreadyEvent());
+
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.False(LobbyState(effects).Peers[0].Ready);
+        }
+
+        [Fact]
+        public void LocalLobbyUnready_WhenNotReady_DoesNothing()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            Assert.Empty(host.Handle(new LocalLobbyUnreadyEvent()));
+        }
+
+        [Fact]
+        public void LocalLobbyUnready_OutsideTheLobby_DoesNothing()
+        {
+            Assert.Empty(WithPeer().Handle(new LocalLobbyUnreadyEvent()));
+        }
+
+        [Fact]
+        public void Handshake_AddsThePeerToTheLobbyAndTellsEveryone()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            host.Handle(Select().Event);
+
+            host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            var effects = host.HandleMessage(1, GoodHello());
+
+            Assert.Equal(2, host.LobbyParticipantCount);
+            var state = LobbyState(effects);
+            Assert.Equal(2, state.Peers.Count);
+            Assert.Equal("host", state.Peers[0].Name);
+            Assert.Equal("ally", state.Peers[1].Name);
+            // The newcomer learns the selection from the same message.
+            Assert.Equal("pbj_campaign", state.SaveKey);
+        }
+
+        [Fact]
+        public void Handshake_MidLobby_UnfillsAnAlreadySatisfiedBarrier()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            host.Handle(Select().Event);
+            host.Handle(new LocalLobbyReadyEvent());
+            Assert.True(host.LobbyIsSatisfied);
+
+            host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            host.HandleMessage(1, GoodHello());
+
+            // They have not agreed to anything yet.
+            Assert.False(host.LobbyIsSatisfied);
+        }
+
+        [Fact]
+        public void LobbyReady_FromAPeer_FillsTheBarrier()
+        {
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            host.Handle(new LocalLobbyReadyEvent());
+            Assert.False(host.LobbyIsSatisfied);
+
+            var effects = host.HandleMessage(1, new LobbyReadyMessage(1));
+
+            Assert.True(host.LobbyIsSatisfied);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("everyone has agreed"));
+        }
+
+        [Fact]
+        public void LobbyReady_ForAStaleSelection_IsIgnored()
+        {
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            host.Handle(Select("pbj_other").Event);
+
+            var effects = host.HandleMessage(1, new LobbyReadyMessage(1));
+
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("the save has changed since"));
+        }
+
+        [Fact]
+        public void LobbyReady_ForASelectionAheadOfTheHost_ResendsTheState()
+        {
+            // Nothing can legitimately put a peer ahead — only the host mints a
+            // selection version and it never rewinds. So this is a misbehaving
+            // or buggy peer, and the answer is the truth rather than a kick.
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+
+            var effects = host.HandleMessage(1, new LobbyReadyMessage(99));
+
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.IsType<LobbyStateMessage>(Single<SendEffect>(effects).Message);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("claims lobby selection 99"));
+        }
+
+        [Fact]
+        public void LobbyReady_WhileTheHostIsInCombat_IsIgnored()
+        {
+            var host = WithPeer();
+            var effects = host.HandleMessage(1, new LobbyReadyMessage(0));
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("host is not in the lobby"));
+        }
+
+        [Fact]
+        public void LobbyReady_BeforeHello_DisconnectsThem()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            var effects = host.HandleMessage(9, new LobbyReadyMessage(0));
+            Assert.Equal("lobby ready before hello", Single<DisconnectEffect>(effects).Reason);
+        }
+
+        [Fact]
+        public void LobbyUnready_BeforeHello_DisconnectsThem()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            var effects = host.HandleMessage(9, new LobbyUnreadyMessage(0));
+            Assert.Equal("lobby unready before hello", Single<DisconnectEffect>(effects).Reason);
+        }
+
+        [Fact]
+        public void LobbyUnready_WithdrawsAPeerReady()
+        {
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            host.HandleMessage(1, new LobbyReadyMessage(1));
+            Assert.Equal(1, host.LobbyReadyCount);
+
+            var effects = host.HandleMessage(1, new LobbyUnreadyMessage(1));
+
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("lobby unready from #1"));
+        }
+
+        [Fact]
+        public void LobbyUnready_ForAnotherSelection_IsIgnored()
+        {
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            host.HandleMessage(1, new LobbyReadyMessage(1));
+
+            var effects = host.HandleMessage(1, new LobbyUnreadyMessage(0));
+
+            Assert.Equal(1, host.LobbyReadyCount);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("not the current selection"));
+        }
+
+        [Fact]
+        public void LobbyUnready_WhenNotReady_IsANoOpNotAFault()
+        {
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            var effects = host.HandleMessage(1, new LobbyUnreadyMessage(1));
+            Assert.Empty(All<DisconnectEffect>(effects));
+            Assert.Equal(0, host.LobbyReadyCount);
+        }
+
+        [Fact]
+        public void PeerLeaving_CanSatisfyTheLobbyBarrier()
+        {
+            // The case a ready-only check misses entirely: the last unready
+            // member simply leaves. Same shape as the turn barrier's, and in
+            // M11d this is the trigger, not just a log line.
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            host.Handle(new LocalLobbyReadyEvent());
+            Assert.False(host.LobbyIsSatisfied);
+
+            var effects = host.Handle(new PeerDisconnectedEvent(1, "closed"));
+
+            Assert.True(host.LobbyIsSatisfied);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("everyone has agreed"));
+        }
+
+        [Fact]
+        public void PeerLeaving_BroadcastsTheShrunkenRoster()
+        {
+            var host = LobbyHost();
+            var effects = host.Handle(new PeerDisconnectedEvent(1, "closed"));
+            Assert.Single(LobbyState(effects).Peers);
+            Assert.Equal(1, host.LobbyParticipantCount);
+        }
+
+        [Fact]
+        public void PeerKickedForAProtocolViolation_BroadcastsTheShrunkenRoster()
+        {
+            // The kick paths never reach HandleDisconnect — by the time the
+            // socket closes, the registry entry is gone and it returns early.
+            // Without a broadcast here the departed peer haunts every other
+            // client's lobby.
+            var host = LobbyHost();
+            var effects = host.HandleMessage(1, new WelcomeMessage(3, "s", 1, "h", null, 0, null));
+
+            Assert.Single(LobbyState(effects).Peers);
+            Assert.Equal(1, host.LobbyParticipantCount);
+        }
+
+        [Fact]
+        public void PeerKickedForADuplicateHello_BroadcastsTheShrunkenRoster()
+        {
+            var host = LobbyHost();
+            var effects = host.HandleMessage(1, GoodHello());
+            Assert.Single(LobbyState(effects).Peers);
+        }
+
+        [Fact]
+        public void Rejoin_PutsThePeerBackInTheLobbyRoster()
+        {
+            // Reconnect holds exist to reserve UNITS, so they only happen in
+            // combat — a peer that drops from the lobby is simply gone. This
+            // therefore drops mid-combat and returns, which is the only way
+            // HandleRejoin runs at all.
+            var host = WithTickedPeer(out var token);
+            host.Handle(new CombatEnteredEvent());
+            host.Handle(new PeerDisconnectedEvent(1, "dropped"));
+            Assert.Equal(1, host.LobbyParticipantCount);
+
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            var effects = host.HandleMessage(2, Rejoin(token, claimedPeerId: 1));
+
+            Assert.Equal(2, host.LobbyParticipantCount);
+            var state = LobbyState(effects);
+            Assert.Equal(2, state.Peers.Count);
+            // Rebound onto the new peer id, like everything else keyed on it.
+            Assert.Equal(2, state.Peers[1].PeerId);
+        }
+
+        [Fact]
+        public void CombatExited_ClearsLobbyReadinessAndAdvancesTheSelection()
+        {
+            // Otherwise everyone comes out of the fight already "ready", and a
+            // LobbyReady still in flight from before it would be counted.
+            bridge.InCombat = false;
+            var host = Host();
+            host.Handle(Select().Event);
+            host.Handle(new LocalLobbyReadyEvent());
+            Assert.True(host.LobbyIsSatisfied);
+
+            bridge.InCombat = true;
+            host.Handle(new CombatEnteredEvent());
+            bridge.InCombat = false;
+            var effects = host.Handle(new CombatExitedEvent());
+
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.False(host.LobbyIsSatisfied);
+            // The save survives; only the agreement to it is withdrawn.
+            Assert.Equal("pbj_campaign", host.Selection.SaveKey);
+            Assert.Equal(2, host.Selection.Version);
+            Assert.Equal(2, LobbyState(effects).SelectionVersion);
+        }
+
+        [Fact]
+        public void CombatExited_MakesAnInFlightLobbyReadyStale()
+        {
+            bridge.InCombat = false;
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            bridge.InCombat = true;
+            host.Handle(new CombatEnteredEvent());
+            bridge.InCombat = false;
+            host.Handle(new CombatExitedEvent());
+
+            // Sent before the fight ended, arriving after.
+            var effects = host.HandleMessage(1, new LobbyReadyMessage(1));
+
+            Assert.Equal(0, host.LobbyReadyCount);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("the save has changed since"));
+        }
+
+        [Fact]
+        public void LobbyState_DuringCombat_StillTracksTheRoster()
+        {
+            // Broadcast even while the lobby is dormant: suppressing it would
+            // leave every client's roster stale at exactly the moment combat
+            // ends and the lobby matters again.
+            var host = WithPeer();
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            var effects = host.HandleMessage(2, GoodHello("ally2"));
+
+            Assert.Equal(3, LobbyState(effects).Peers.Count);
+            // ...but the barrier says nothing while it is not in play.
+            Assert.DoesNotContain(All<LogEffect>(effects), l => l.Line.Contains("lobby "));
+        }
+
+        private string Token(int peerId, string name) =>
+            StateDigest.Mix("secret:" + peerId + ":" + name);
     }
 }

@@ -102,6 +102,14 @@ namespace PBAndJ.Core.Net
         /// sent. The mod version is the real compatibility gate; this constant
         /// guards <em>layout</em>, and no layout moved.
         /// </para>
+        /// <para>
+        /// M11a's three lobby types follow the same rule, and lean on the same
+        /// gate: <see cref="ModVersion"/> moved to 0.7.0 in the very commit that
+        /// added them, deliberately rather than at the next release. A host
+        /// broadcasts <c>LobbyState</c> on every handshake, so a peer that got
+        /// in without those types would fault on its first message — the mod
+        /// version has to move with the surface, not after it.
+        /// </para>
         /// </remarks>
         public const int Version = 3;
 
@@ -117,7 +125,7 @@ namespace PBAndJ.Core.Net
         /// mod/metadata.yaml; the Makefile refuses to build a distributable when
         /// they disagree, since that is the one file this constant cannot reach.
         /// </remarks>
-        public const string ModVersion = "0.6.0";
+        public const string ModVersion = "0.7.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.

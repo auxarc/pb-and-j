@@ -41,6 +41,7 @@ namespace PBAndJ.Peer
                 ("keyframe stream", RunKeyframeStream),
                 ("remote guards", RunRemoteGuards),
                 ("scenario transfer", RunScenarioTransfer),
+                ("lobby barrier", RunLobbyBarrier),
             };
 
             foreach (var scenario in scenarios)
@@ -1360,6 +1361,167 @@ namespace PBAndJ.Peer
             new OrderPayload("move_run", unit, 0f, 2f,
                 pathPoints: new[] { new Vec3(0f, 0f, 0f), new Vec3(10f, 0f, 0f) },
                 pathLinks: new[] { new PathLink(0, 0) });
+
+        /// <summary>
+        /// M11a end to end: the host picks a save, everyone agrees, and changing
+        /// the save takes every agreement back.
+        /// </summary>
+        /// <remarks>
+        /// This scenario is the reason M11a does not ship inert. Nothing in the
+        /// game acts on the lobby barrier yet — M11d owns that — so every unit
+        /// test could pass with the wire never actually carrying a lobby, which
+        /// is exactly how M6 shipped a feature that had never run. Here it runs:
+        /// real sockets, the real codec, the same PbjRuntime the game pumps.
+        /// </remarks>
+        private static int RunLobbyBarrier()
+        {
+            // Out of combat on both sides — the lobby is the main-menu case.
+            var hostBridge = new ScriptedGameBridge { CurrentTurn = -1, InCombat = false };
+            var hostMailbox = new PbjMailbox(4096);
+            var hostTransport = new TcpHostTransport(hostMailbox, IPAddress.Loopback, 0);
+            hostTransport.Start();
+            var hostSession = new HostSession("host", "selftest", 3, hostBridge, "secret", SessionRequirements.None);
+            var hostLog = new PrefixedLog("host");
+            var host = new PbjRuntime(hostTransport, hostBridge, hostLog, hostMailbox, hostSession);
+
+            var clientBridge = new ScriptedGameBridge { CurrentTurn = -1, InCombat = false };
+            var clientMailbox = new PbjMailbox(4096);
+            var clientTransport = new TcpClientTransport(clientMailbox);
+            var clientSession = new ClientSession("ally", "0.2.0", clientBridge);
+            var client = new PbjRuntime(
+                clientTransport, clientBridge, new PrefixedLog("ally"), clientMailbox, clientSession);
+
+            var clock = Stopwatch.StartNew();
+            double Now() => clock.Elapsed.TotalSeconds;
+
+            bool WaitFor(string what, Func<bool> condition)
+            {
+                var deadline = Now() + TimeoutSeconds;
+                while (Now() < deadline)
+                {
+                    host.Pump(Now());
+                    client.Pump(Now());
+                    if (condition())
+                    {
+                        Console.WriteLine($"[selftest] OK   {what}");
+                        return true;
+                    }
+                    Thread.Sleep(5);
+                }
+                Console.WriteLine($"[selftest] FAIL {what}");
+                return false;
+            }
+
+            try
+            {
+                clientTransport.Connect("127.0.0.1", hostTransport.Port);
+
+                // The roster reaches the client on handshake, before any save is
+                // picked — nothing is selected yet and that is a real state, not
+                // a missing one.
+                if (!WaitFor("client received the lobby on handshake",
+                        () => clientSession.LobbyRoster.Count == 2
+                              && clientSession.LobbySelectionVersion == 0
+                              && clientSession.LobbySaveKey == null))
+                {
+                    return 1;
+                }
+
+                // Readying for nothing is refused, on the client, before a byte
+                // is spent.
+                client.Post(new LocalLobbyReadyEvent());
+                if (!WaitFor("a ready with no save selected went nowhere",
+                        () => !clientSession.LobbyReadySent && hostSession.LobbyReadyCount == 0))
+                {
+                    return 1;
+                }
+
+                host.Post(new LocalLobbySelectEvent("pbj_campaign", "3f9c1a04"));
+                if (!WaitFor("the host's save reached the client",
+                        () => clientSession.LobbySelectionVersion == 1
+                              && clientSession.LobbySaveKey == "pbj_campaign"
+                              && clientSession.LobbySaveDigest == "3f9c1a04"))
+                {
+                    return 1;
+                }
+
+                host.Post(new LocalLobbyReadyEvent());
+                if (!WaitFor("the host's own ready is not enough on its own",
+                        () => hostSession.LobbyReadyCount == 1 && !hostSession.LobbyIsSatisfied))
+                {
+                    return 1;
+                }
+
+                client.Post(new LocalLobbyReadyEvent());
+                if (!WaitFor("the barrier filled once the client agreed",
+                        () => hostSession.LobbyIsSatisfied && hostSession.LobbyReadyCount == 2))
+                {
+                    return 1;
+                }
+
+                // The client learns the whole roster's readiness, not just its
+                // own — this is what a lobby screen renders.
+                if (!WaitFor("the client sees everyone ready",
+                        () => clientSession.LobbyRoster.Count == 2
+                              && clientSession.LobbyRoster[0].Ready
+                              && clientSession.LobbyRoster[1].Ready))
+                {
+                    return 1;
+                }
+
+                // Changing the save must take every agreement back, on both
+                // sides, or somebody loads a save they never confirmed.
+                host.Post(new LocalLobbySelectEvent("pbj_other", null));
+                if (!WaitFor("changing the save cleared every ready",
+                        () => !hostSession.LobbyIsSatisfied
+                              && hostSession.LobbyReadyCount == 0
+                              && clientSession.LobbySelectionVersion == 2
+                              && !clientSession.LobbyReadySent))
+                {
+                    return 1;
+                }
+
+                // A ready for the save that was just replaced must be recognised
+                // and dropped, not counted toward the new one.
+                clientTransport.Send(ClientSession.HostConnectionId,
+                    FrameEncoder.Encode(PbjMessageCodec.Encode(new LobbyReadyMessage(1))));
+                if (!WaitFor("a ready for the previous save was ignored",
+                        () => hostLog.Saw("the save has changed since") && hostSession.LobbyReadyCount == 0))
+                {
+                    return 1;
+                }
+
+                // And the lobby still works afterwards: a stale ready is a
+                // recoverable annoyance, not a broken session.
+                client.Post(new LocalLobbyReadyEvent());
+                host.Post(new LocalLobbyReadyEvent());
+                if (!WaitFor("the lobby still fills after a stale ready",
+                        () => hostSession.LobbyIsSatisfied))
+                {
+                    return 1;
+                }
+
+                // And a satisfied barrier can be un-satisfied again: agreement is
+                // withdrawable right up until M11d acts on it. (The other way a
+                // barrier fills — the last unready member simply leaving — is
+                // driven in HostSessionTests, since killing a socket here would
+                // race the assertions.)
+                host.Post(new LocalLobbyUnreadyEvent());
+                if (!WaitFor("the host withdrew its own agreement",
+                        () => !hostSession.LobbyIsSatisfied))
+                {
+                    return 1;
+                }
+
+                Console.WriteLine("[selftest] PASS");
+                return 0;
+            }
+            finally
+            {
+                client.Stop();
+                host.Stop();
+            }
+        }
 
         /// <summary>
         /// Echoes and remembers. Remembering is what lets the self-test assert on

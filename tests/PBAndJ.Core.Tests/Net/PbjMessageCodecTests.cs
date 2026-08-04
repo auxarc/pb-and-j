@@ -63,6 +63,16 @@ namespace PBAndJ.Core.Tests.Net
             {
                 new ScenarioMessage("pbj_combat_test", "3f9c1a04", new[] { File("content.zip", 4) }),
             };
+            yield return new object[]
+            {
+                new LobbyStateMessage(2, "pbj_campaign", "3f9c1a04", new[]
+                {
+                    new LobbyPeerState(0, "host", true),
+                    new LobbyPeerState(1, "ally", false),
+                }),
+            };
+            yield return new object[] { new LobbyReadyMessage(2) };
+            yield return new object[] { new LobbyUnreadyMessage(2) };
         }
 
         private static ScenarioFile File(string name, int bytes)
@@ -822,6 +832,97 @@ namespace PBAndJ.Core.Tests.Net
             var full = PbjMessageCodec.Encode(new TurnCompleteMessage(7, "digest"));
             var truncated = full.Take(full.Length - 3).ToArray();
             Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(truncated));
+        }
+
+        // --- lobby (M11a) ---
+
+        [Fact]
+        public void Encode_LobbyState_ProducesExactBytes()
+        {
+            var bytes = PbjMessageCodec.Encode(new LobbyStateMessage(2, "s", "ab", new[]
+            {
+                new LobbyPeerState(0, "h", true),
+            }));
+
+            var expected = new byte[]
+            {
+                0x17,                               // type LobbyState (23)
+                0x02, 0x00, 0x00, 0x00,             // selectionVersion 2
+                0x01, 0x00, 0x00, 0x00, 0x73,       // saveKey "s"
+                0x02, 0x00, 0x00, 0x00, 0x61, 0x62, // saveDigest "ab"
+                0x01, 0x00, 0x00, 0x00,             // one peer
+                0x00, 0x00, 0x00, 0x00,             // peerId 0
+                0x01, 0x00, 0x00, 0x00, 0x68,       // name "h"
+                0x01,                               // ready
+            };
+            Assert.Equal(expected, bytes);
+        }
+
+        [Fact]
+        public void Encode_LobbyReady_ProducesExactBytes()
+        {
+            Assert.Equal(
+                new byte[] { 0x18, 0x02, 0x00, 0x00, 0x00 },
+                PbjMessageCodec.Encode(new LobbyReadyMessage(2)));
+        }
+
+        [Fact]
+        public void Encode_LobbyUnready_ProducesExactBytes()
+        {
+            Assert.Equal(
+                new byte[] { 0x19, 0x02, 0x00, 0x00, 0x00 },
+                PbjMessageCodec.Encode(new LobbyUnreadyMessage(2)));
+        }
+
+        [Fact]
+        public void RoundTrip_LobbyState_PreservesEveryField()
+        {
+            var m = RoundTrip(new LobbyStateMessage(4, "pbj_campaign", "3f9c1a04", new[]
+            {
+                new LobbyPeerState(0, "host", true),
+                new LobbyPeerState(1, "ally", false),
+            }));
+
+            Assert.Equal(4, m.SelectionVersion);
+            Assert.Equal("pbj_campaign", m.SaveKey);
+            Assert.Equal("3f9c1a04", m.SaveDigest);
+            Assert.Equal(2, m.Peers.Count);
+            Assert.Equal(0, m.Peers[0].PeerId);
+            Assert.Equal("host", m.Peers[0].Name);
+            Assert.True(m.Peers[0].Ready);
+            Assert.Equal("ally", m.Peers[1].Name);
+            Assert.False(m.Peers[1].Ready);
+        }
+
+        [Fact]
+        public void RoundTrip_LobbyState_WithNothingSelected_KeepsTheNulls()
+        {
+            // "No save chosen yet" is a real lobby state, not a malformed one.
+            var m = RoundTrip(new LobbyStateMessage(0, null, null, null));
+            Assert.Equal(0, m.SelectionVersion);
+            Assert.Null(m.SaveKey);
+            Assert.Null(m.SaveDigest);
+            Assert.Empty(m.Peers);
+        }
+
+        [Fact]
+        public void RoundTrip_LobbyReadyAndUnready_PreserveTheSelection()
+        {
+            Assert.Equal(9, RoundTrip(new LobbyReadyMessage(9)).SelectionVersion);
+            Assert.Equal(9, RoundTrip(new LobbyUnreadyMessage(9)).SelectionVersion);
+        }
+
+        [Fact]
+        public void Decode_LobbyStateOverThePeerCap_Throws()
+        {
+            // The roster shares Welcome's cap, since it is the same roster.
+            var peers = new LobbyPeerState[PbjMessageCodec.MaxPeersPerWelcome + 1];
+            for (var i = 0; i < peers.Length; i++)
+            {
+                peers[i] = new LobbyPeerState(i, "p" + i, false);
+            }
+            var encoded = PbjMessageCodec.Encode(new LobbyStateMessage(1, "s", null, peers));
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(encoded));
         }
 
         [Fact]

@@ -6,7 +6,7 @@ namespace PBAndJ.Core.Net
     /// Discriminator byte at the head of every encoded message.
     /// </summary>
     /// <remarks>
-    /// Values are assigned once and never reused. 19+ are unallocated.
+    /// Values are assigned once and never reused. 26+ are unallocated.
     /// </remarks>
     public enum PbjMessageType : byte
     {
@@ -32,6 +32,9 @@ namespace PBAndJ.Core.Net
         ScenarioOffer = 20,
         ScenarioRequest = 21,
         Scenario = 22,
+        LobbyState = 23,
+        LobbyReady = 24,
+        LobbyUnready = 25,
     }
 
     /// <summary>
@@ -669,6 +672,123 @@ namespace PBAndJ.Core.Net
         public string? Digest { get; }
 
         public IReadOnlyList<ScenarioFile> Files { get; }
+    }
+
+    /// <summary>One roster entry in a <see cref="LobbyStateMessage"/>.</summary>
+    /// <remarks>
+    /// Carries the ready flag that <see cref="PeerInfo"/> does not. Kept
+    /// separate rather than adding a field to <c>PeerInfo</c>, whose layout is
+    /// pinned by byte-exact tests on <see cref="WelcomeMessage"/> — and where a
+    /// lobby flag would mean nothing anyway.
+    /// </remarks>
+    public readonly struct LobbyPeerState
+    {
+        public LobbyPeerState(int peerId, string? name, bool ready)
+        {
+            PeerId = peerId;
+            Name = name;
+            Ready = ready;
+        }
+
+        public int PeerId { get; }
+        public string? Name { get; }
+
+        /// <summary>Whether this member has agreed to load the selected save.</summary>
+        public bool Ready { get; }
+    }
+
+    /// <summary>
+    /// The whole lobby, as the host sees it: which save is selected and who has
+    /// agreed to it. Host to everyone, on every change.
+    /// </summary>
+    /// <remarks>
+    /// Full state rather than a per-peer delta, for the same reason
+    /// <see cref="AssignmentsMessage"/> is: it is idempotent, a client that
+    /// misses one is corrected by the next, and there is no ordering hazard
+    /// between "who joined" and "who is ready". A lobby is small — the roster
+    /// caps at 16 — so the bytes are not worth a diff protocol.
+    /// <para>
+    /// <see cref="SelectionVersion"/> is what a <see cref="LobbyReadyMessage"/>
+    /// names, so a ready for a save the host has since changed away from can be
+    /// recognised and ignored rather than counted.
+    /// </para>
+    /// </remarks>
+    public sealed class LobbyStateMessage : PbjMessage
+    {
+        private static readonly LobbyPeerState[] NoPeers = new LobbyPeerState[0];
+
+        public LobbyStateMessage(
+            int selectionVersion,
+            string? saveKey,
+            string? saveDigest,
+            IReadOnlyList<LobbyPeerState>? peers)
+        {
+            SelectionVersion = selectionVersion;
+            SaveKey = saveKey;
+            SaveDigest = saveDigest;
+            Peers = peers ?? NoPeers;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.LobbyState;
+
+        /// <summary>Bumped by the host every time the selected save changes.</summary>
+        public int SelectionVersion { get; }
+
+        /// <summary>The chosen save, or null when the host has not chosen one.</summary>
+        public string? SaveKey { get; }
+
+        /// <summary>
+        /// Identifies the contents, so a peer can tell whether it already holds
+        /// this save. Null is normal — the host may not have hashed it.
+        /// </summary>
+        public string? SaveDigest { get; }
+
+        /// <summary>Everyone in the lobby, the host included, with their ready flag.</summary>
+        public IReadOnlyList<LobbyPeerState> Peers { get; }
+    }
+
+    /// <summary>
+    /// "I agree to load that save." Peer to host.
+    /// </summary>
+    /// <remarks>
+    /// A separate type from <see cref="LobbyUnreadyMessage"/> rather than one
+    /// message with a flag, mirroring <see cref="ReadyMessage"/> and
+    /// <see cref="UnreadyMessage"/> so both barriers read the same way in the
+    /// codec, the switch arms and the logs.
+    /// <para>
+    /// Carries the selection it is answering for the same reason a
+    /// <see cref="ReadyMessage"/> carries its turn: without it, a ready sent
+    /// just before the host changed the save would be counted as agreement to
+    /// the new one.
+    /// </para>
+    /// </remarks>
+    public sealed class LobbyReadyMessage : PbjMessage
+    {
+        public LobbyReadyMessage(int selectionVersion)
+        {
+            SelectionVersion = selectionVersion;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.LobbyReady;
+
+        public int SelectionVersion { get; }
+    }
+
+    /// <summary>"Actually, wait." Peer to host.</summary>
+    /// <remarks>
+    /// Idempotent like <see cref="UnreadyMessage"/>: withdrawing when not ready
+    /// is a no-op, not an error.
+    /// </remarks>
+    public sealed class LobbyUnreadyMessage : PbjMessage
+    {
+        public LobbyUnreadyMessage(int selectionVersion)
+        {
+            SelectionVersion = selectionVersion;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.LobbyUnready;
+
+        public int SelectionVersion { get; }
     }
 
     /// <summary>Graceful goodbye from either side.</summary>

@@ -48,8 +48,10 @@ namespace PBAndJ.Peer
             "  pbj-peer selftest\n" +
             "\n" +
             "REPL commands: status, units, order <unit> <dx> <dy> <dz>, orders, clear,\n" +
-            "               ready, unready, digest, snapshot, keyframes, scenario, pull, quit\n" +
-            "  order coordinates are an OFFSET from the unit's current position";
+            "               ready, unready, digest, snapshot, keyframes, scenario, pull,\n" +
+            "               lobby, lobby-select <key> [digest], lobby-ready, lobby-unready, quit\n" +
+            "  order coordinates are an OFFSET from the unit's current position\n" +
+            "  lobby-select is host-only; a client is told so and ignored";
 
         private static int Connect(Options options)
         {
@@ -291,6 +293,32 @@ namespace PBAndJ.Peer
                     Console.WriteLine("[pbj-peer] asked the host for its combat save");
                     break;
 
+                case "lobby-select":
+                    // Host-side only; a client is told so and ignored. The key
+                    // and digest are typed rather than read off a disk — M11a's
+                    // sessions never touch one, and the catalogue is M11b.
+                    runtime.Post(new LocalLobbySelectEvent(
+                        parts.Length > 1 ? parts[1] : null,
+                        parts.Length > 2 ? parts[2] : null));
+                    Console.WriteLine("[pbj-peer] lobby selection posted");
+                    break;
+
+                case "lobby-ready":
+                    runtime.Post(new LocalLobbyReadyEvent());
+                    Console.WriteLine("[pbj-peer] lobby ready posted");
+                    break;
+
+                case "lobby-unready":
+                    runtime.Post(new LocalLobbyUnreadyEvent());
+                    Console.WriteLine("[pbj-peer] lobby un-ready posted");
+                    break;
+
+                case "lobby":
+                    // A read, not a post — like `status`, and unlike the three
+                    // above.
+                    Console.WriteLine(DescribeLobby(runtime));
+                    break;
+
                 default:
                     Console.WriteLine(Usage);
                     break;
@@ -461,6 +489,42 @@ namespace PBAndJ.Peer
                     + $" --session {client.SessionId} --peer-id {client.PeerId}";
             }
             return line;
+        }
+
+        /// <summary>
+        /// The lobby as this peer sees it — M11a's gate against a real game.
+        /// </summary>
+        /// <remarks>
+        /// Both halves are shown from whichever side this peer is playing. On a
+        /// host it reads the authoritative barrier; on a client it reads the last
+        /// <c>LobbyState</c> that arrived, which is the whole point — the roster
+        /// and ready flags a lobby screen will render come from exactly here.
+        /// </remarks>
+        private static string DescribeLobby(PbjRuntime runtime)
+        {
+            if (runtime.Session is HostSession host)
+            {
+                return $"[pbj-peer] lobby HOST | selection {host.Selection.Version}"
+                    + $" | save '{host.Selection.SaveKey ?? "(none)"}'"
+                    + $" | {host.LobbyReadyCount}/{host.LobbyParticipantCount} ready"
+                    + (host.LobbyIsSatisfied ? " | EVERYONE AGREED" : string.Empty);
+            }
+
+            var client = (ClientSession)runtime.Session;
+            if (client.LobbySelectionVersion < 0)
+            {
+                return "[pbj-peer] lobby CLIENT | no lobby state received yet";
+            }
+
+            var roster = new List<string>();
+            foreach (var peer in client.LobbyRoster)
+            {
+                roster.Add($"#{peer.PeerId} '{peer.Name}'{(peer.Ready ? " READY" : string.Empty)}");
+            }
+            return $"[pbj-peer] lobby CLIENT | selection {client.LobbySelectionVersion}"
+                + $" | save '{client.LobbySaveKey ?? "(none)"}'"
+                + $" | we are {(client.LobbyReadySent ? "READY" : "not ready")}"
+                + $"\n[pbj-peer]   {string.Join(", ", roster)}";
         }
 
         private sealed class Options

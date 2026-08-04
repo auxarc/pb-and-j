@@ -101,9 +101,21 @@ state and send their ready. A `LobbyBarrier` alongside the existing `TurnBarrier
 second barrier rather than a reuse, because the turn barrier's participants are decided by combat
 assignment and the lobby's by the roster.
 
-New message types from `PbjMessageType` 23+ (unallocated), new effects from `PbjEffectKind` 13+, new
-local events from 105+. Per the project's own rule, **new message types do not bump the wire
-version** — no layout moves. `ModVersion` remains the real compatibility gate.
+**Done 2026-08-04.** `LobbyState = 23`, `LobbyReady = 24`, `LobbyUnready = 25`;
+`LocalLobbySelect = 105`, `LocalLobbyReady = 106`, `LocalLobbyUnready = 107`. Per the project's own
+rule, **new message types do not bump the wire version** — no layout moves — but `ModVersion` went to
+0.7.0 in the same commit, deliberately rather than at the next release: a host broadcasts
+`LobbyState` on every handshake, so a peer admitted without those types would fault on its first
+message.
+
+**No new `PbjEffectKind` was needed** — an earlier draft of this section promised effects from 13+,
+and that was wrong. State changes travel on the existing `Broadcast`/`Send`, logs on `Log`, and a
+screen polls session properties every tick exactly as M10c's connect screen already does. 13+ remains
+unallocated for M11d.
+
+See `networking.md`, "The lobby barrier (M11a)", for the three things that turned out to be easy to
+get wrong: `NeedsResync` meaning something different here, a departing peer satisfying the barrier,
+and leaving combat needing to clear readiness.
 
 **M11b — the save catalogue.** Enumerate `pbj_`-prefixed saves and their metadata; create a new
 multiplayer save; convert a singleplayer one by directory copy and rename, never a move. Filter
@@ -136,11 +148,34 @@ parallel. `M11c` needs both. `M11d` needs `a`. `M11e` needs a measurement before
 
 ### The risk worth naming
 
-**Whether `TryLoading` can be driven from outside the load screen's own flow is unverified.** Every
-call site read so far is inside `CIViewPauseLoad`. If it carries hidden assumptions about screen
-state, the synchronised load needs a different entry point and M11d changes shape. This is a
-decompile-shaped question, and this project has now paid five times for the difference between a
-careful reading and a running game — **answer it with a probe before designing around it.**
+**Corrected 2026-08-04.** An earlier version of this section said "every call site read so far is
+inside `CIViewPauseLoad`". That was false, and it was false in the direction that matters — a second,
+closer reading found **eight** caller classes, two of which are not view code at all:
+
+- **`PhantomBrigade.DebugConsole/ConsoleCommandsShared.cs:74`** — the game's own `load` console
+  command, `TryLoading(filename, SaveLocation.Normal)`, with no screen involved whatsoever.
+- **`PhantomBrigade.Data/DataManagerSave.cs:3518`** — `QuickLoad()`, which loads **by key, with a
+  completion callback, from arbitrary game states**, every time a player presses quickload.
+
+So the shipping game already drives M11d's exact shape from outside a load screen. What the same
+reading found *instead*, and what the probe (`pbj.load-probe` / `pbj.load-try`) exists to measure:
+
+1. **The completion callback is success-only.** It fires from `LoadingEnd2:384`, and every failure
+   path returns before reaching it. **M11d cannot detect a peer whose load failed from the callback
+   alone** — it needs a timeout or an explicit failure report.
+2. **`LoadingEnd2` dereferences three view singletons unconditionally before the callback**
+   (`:376-378`): `CIViewPauseRoot.ins`, `CIViewOverworldLog.ins`, and
+   `CIViewPauseLoad.ins.sidebarHelper.buttonConfirm` — a hard dependency on the *load screen's*
+   singleton for a load that never touched it. That, not `TryLoading` itself, is where "hidden
+   assumptions about screen state" actually live.
+3. **Losing the wrong-state race may wedge loading for the process.** `TryLoading:234` sets
+   `isLoadingInProgress`; `LoadingStart:259-264` bails on a non-`mainmenu` state **without clearing
+   it** (the clears are at `:270`, `:277`, `:306`, `:375`). `isTeardownOfCampaignRequested` recovers
+   via `TeardownCampaignSystem.cs:57`; `isLoadingInProgress` has no visible rescuer. If it does not
+   recover, M11d needs a pre-flight check and cannot retry.
+
+The lesson stands even though the answer improved: two careful readings of the same file disagreed
+with each other, and the second one is only trusted because a probe is going to check it.
 
 ## Open questions
 
