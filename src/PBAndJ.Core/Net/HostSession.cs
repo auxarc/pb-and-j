@@ -450,6 +450,7 @@ namespace PBAndJ.Core.Net
             // Welcome so the newcomer knows its own peer id first.
             AnnounceLobby(effects);
             OfferScenario(peerId, effects);
+            TellNewcomerAboutCombat(peerId, effects);
 
             if (State == HostSessionState.Executing)
             {
@@ -585,6 +586,7 @@ namespace PBAndJ.Core.Net
             effects.Add(new LogEffect(NetLog.SessionSummary(ParticipantDescriptions())));
             AnnounceLobby(effects);
             OfferScenario(peerId, effects);
+            TellNewcomerAboutCombat(peerId, effects);
 
             if (State == HostSessionState.Executing)
             {
@@ -921,6 +923,37 @@ namespace PBAndJ.Core.Net
         private void AnnounceLobby(List<PbjEffect> effects)
         {
             effects.Add(new BroadcastEffect(ComposeLobbyState()));
+        }
+
+        /// <summary>
+        /// Tells a peer that joined mid-combat that combat is happening.
+        /// </summary>
+        /// <remarks>
+        /// The 2026-08-03 defect. The accept path sent Welcome, PeerJoined, the
+        /// scenario offer and Assignments — and <c>TurnCommit</c> only while
+        /// executing — but never <c>CombatStart</c>. So
+        /// <c>ClientSession.HandleWelcome</c> fell back to reading the client's
+        /// <em>own</em> combat flag, a peer joining from the menu landed in
+        /// <c>Lobby</c> with no route out, and its Execute was swallowed forever
+        /// by <c>HandleLocalReady</c>'s state guard.
+        /// <para>
+        /// <b>Its call site is load-bearing in both directions.</b> It must come
+        /// <em>after</em> <c>OfferScenario</c>, because <c>CombatStart</c> moves
+        /// the client to <c>Planning</c> and <c>HandleScenarioOffer</c> ignores
+        /// an offer unless it is in <c>Lobby</c> — send it first and the peer
+        /// silently declines the very save it needs. And it must come
+        /// <em>before</em> the <c>Executing</c> block, because that sends
+        /// <c>TurnCommit</c>: arriving after it, this would unlock a client the
+        /// commit had just locked and leave it planning a turn already running.
+        /// </para>
+        /// </remarks>
+        private void TellNewcomerAboutCombat(int peerId, List<PbjEffect> effects)
+        {
+            if (State != HostSessionState.Planning && State != HostSessionState.Executing)
+            {
+                return;
+            }
+            effects.Add(new SendEffect(peerId, new CombatStartMessage(barrier.Turn)));
         }
 
         private LobbyStateMessage ComposeLobbyState()

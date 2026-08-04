@@ -362,7 +362,10 @@ namespace PBAndJ.Core.Tests.Net
             runtime.Pump(0);
             runtime.Pump(0);
 
-            Assert.DoesNotContain(transport.MessagesTo(1), m => m is CombatStartMessage || m is CombatEndMessage);
+            // The handshake's own CombatStart is expected and does not repeat;
+            // pumping a state that has not changed must announce nothing further.
+            Assert.Single(transport.MessagesTo(1), m => m is CombatStartMessage);
+            Assert.DoesNotContain(transport.MessagesTo(1), m => m is CombatEndMessage);
         }
 
         [Fact]
@@ -372,7 +375,10 @@ namespace PBAndJ.Core.Tests.Net
             var runtime = WithHandshakenPeer();
             runtime.Pump(0);
 
-            Assert.DoesNotContain(transport.MessagesTo(1), m => m is CombatStartMessage);
+            // Exactly one, and it is the handshake's: a peer joining mid-combat
+            // is told so on purpose (M11d). What must not happen is a SECOND one
+            // from a combat-entered edge that never actually occurred.
+            Assert.Single(transport.MessagesTo(1), m => m is CombatStartMessage);
         }
 
         [Fact]

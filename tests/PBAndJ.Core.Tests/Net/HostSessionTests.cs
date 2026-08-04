@@ -2099,6 +2099,70 @@ namespace PBAndJ.Core.Tests.Net
             Assert.DoesNotContain(All<LogEffect>(effects), l => l.Line.Contains("lobby "));
         }
 
+        // --- a peer that joins mid-combat (the 2026-08-03 defect) ---
+
+        private static IReadOnlyList<PbjMessage> SentTo(IEnumerable<PbjEffect> effects, int peerId) =>
+            effects.OfType<SendEffect>().Where(e => e.PeerId == peerId).Select(e => e.Message).ToList();
+
+        [Fact]
+        public void Handshake_WhileInCombat_TellsTheNewcomerCombatIsHappening()
+        {
+            // Without this the peer never learns, HandleWelcome falls back to
+            // reading its OWN combat flag, and its Execute is swallowed forever.
+            var host = Host();
+            host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            var effects = host.HandleMessage(1, GoodHello());
+
+            var start = SentTo(effects, 1).OfType<CombatStartMessage>().Single();
+            Assert.Equal(host.Turn, start.Turn);
+        }
+
+        [Fact]
+        public void Handshake_WhileInCombat_SendsCombatStartAfterTheScenarioOffer()
+        {
+            // CombatStart moves the client to Planning, and HandleScenarioOffer
+            // ignores an offer unless it is in Lobby. Reversed, the joining peer
+            // silently declines the very save it needs to play.
+            var host = Host();
+            host.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            bridge.Scenario = new ScenarioPayload("pbj_combat_test", new[]
+            {
+                new ScenarioFile("content.zip", new byte[] { 1 }),
+                new ScenarioFile("metadata.yaml", new byte[] { 2 }),
+            });
+            var sent = SentTo(host.HandleMessage(1, GoodHello()), 1);
+
+            var offerAt = sent.ToList().FindIndex(m => m is ScenarioOfferMessage);
+            var startAt = sent.ToList().FindIndex(m => m is CombatStartMessage);
+            Assert.True(offerAt >= 0, "the scenario must still be offered");
+            Assert.True(startAt > offerAt, "CombatStart must follow the scenario offer");
+        }
+
+        [Fact]
+        public void Handshake_WhileExecuting_SendsCombatStartBeforeTurnCommit()
+        {
+            // The other side of the same constraint. TurnCommit locks the client
+            // and moves it to Watching; a CombatStart arriving afterwards would
+            // unlock it and leave it planning a turn that is already running.
+            var host = Executing();
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            var sent = SentTo(host.HandleMessage(2, GoodHello("third")), 2).ToList();
+
+            var startAt = sent.FindIndex(m => m is CombatStartMessage);
+            var commitAt = sent.FindIndex(m => m is TurnCommitMessage);
+            Assert.True(startAt >= 0, "CombatStart must be sent");
+            Assert.True(commitAt > startAt, "TurnCommit must follow CombatStart");
+        }
+
+        [Fact]
+        public void Handshake_OutOfCombat_SendsNoCombatStart()
+        {
+            var host = LobbyHost();
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            var effects = host.HandleMessage(2, GoodHello("third"));
+            Assert.Empty(SentTo(effects, 2).OfType<CombatStartMessage>());
+        }
+
         // --- the synchronised load (M11d) ---
 
         /// <summary>A host and one peer, both agreed, so the load has just fired.</summary>
