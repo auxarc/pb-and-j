@@ -172,7 +172,11 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void ModVersion_MatchesTheShippedModMetadata()
         {
-            Assert.Equal("0.8.0", PbjProtocol.ModVersion);
+            // 0.9.0 for M11e: a transfer may now carry content split into numbered
+            // parts, and a 0.8.0 peer would refuse content.zip.0 as a disallowed
+            // name. A real compatibility break, not the documented false positive
+            // the wire-surface guard raises on edits that move no bytes.
+            Assert.Equal("0.9.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

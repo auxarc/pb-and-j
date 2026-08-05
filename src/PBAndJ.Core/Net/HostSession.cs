@@ -40,6 +40,38 @@ namespace PBAndJ.Core.Net
         /// <see cref="barrier"/> on purpose — see <see cref="LobbyBarrier"/>.
         /// </summary>
         private readonly LobbyBarrier lobby = new LobbyBarrier(LobbySelection.None.Version);
+
+        /// <summary>
+        /// Whether the campaign has begun and the door has closed. M11e.
+        /// </summary>
+        /// <remarks>
+        /// M11e transfers the save when the lobby selects it, so a peer arriving
+        /// after everyone has loaded would never be offered one and could never
+        /// ready. Rather than build a second, reactive transfer path for a case
+        /// that should not happen, the session stops admitting strangers once it
+        /// is under way — and says so, rather than refusing the socket silently.
+        /// </remarks>
+        private bool lobbySealed;
+
+        /// <summary>
+        /// Everyone who has been admitted to this session, by identity.
+        /// </summary>
+        /// <remarks>
+        /// What makes the seal a closed door rather than a wall: a player who
+        /// drops out of the overworld campaign — a wifi blip, a crash — must still
+        /// be able to come back. The reconnect path cannot carry them, because a
+        /// resume token is only minted when the peer held units in combat
+        /// (<c>holdUnits</c> below), which is never true in the out-of-campaign
+        /// lobby where the seal lives. So the seal admits anyone it has already
+        /// seen and refuses only genuine strangers.
+        /// <para>
+        /// Never pruned. A session's membership is the set of people who have ever
+        /// been in it; forgetting someone the moment they disconnect would lock
+        /// out exactly the person this exists to let back in.
+        /// </para>
+        /// </remarks>
+        private readonly HashSet<string> admitted =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private LobbySelection selection = LobbySelection.None;
         private readonly LoadBarrier load = new LoadBarrier();
         private readonly Dictionary<int, List<OrderPayload>> submitted = new Dictionary<int, List<OrderPayload>>();
@@ -411,6 +443,18 @@ namespace PBAndJ.Core.Net
                 return;
             }
 
+            // M11e's seal. Only on the Hello path: a Rejoin carries a resume token
+            // that was issued by this session, so it is self-evidently not a
+            // stranger. Refused with a reason rather than a dropped socket —
+            // silence here is indistinguishable from the host being down, and this
+            // project has paid for that confusion before.
+            if (lobbySealed && !admitted.Contains(IdentityOf(hello.PlayerName)))
+            {
+                Reject(peerId, hello.PlayerName, RejectReason.NotAcceptingPeers,
+                    "the campaign is already under way", effects);
+                return;
+            }
+
             if (RefuseIncompatible(
                     peerId, hello.PlayerName, hello.ModVersion, hello.GameBuild, hello.Passphrase, effects))
             {
@@ -432,6 +476,10 @@ namespace PBAndJ.Core.Net
                 Reject(peerId, hello.PlayerName, refusal.Value, null, effects);
                 return;
             }
+
+            // Remembered from here — after every refusal — so only a peer that was
+            // genuinely let in can come back through a sealed door.
+            admitted.Add(IdentityOf(hello.PlayerName));
 
             // It handshook, so it is a peer now and the registry tracks it.
             pendingHandshakes.Remove(peerId);
@@ -613,7 +661,26 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         private void OfferScenario(int peerId, List<PbjEffect> effects)
         {
-            var scenario = bridge.ReadScenario();
+            OfferSave(peerId, LobbySaveNames.ScenarioSlot, effects);
+
+            // M11e: the lobby's campaign save, when one has been chosen. A peer
+            // joining after the selection is otherwise never offered it and can
+            // never ready — and nothing times a lobby out, so the whole thing would
+            // sit there fully connected and never start.
+            var selected = selection.SaveKey;
+            if (!string.IsNullOrEmpty(selected)
+                && !string.Equals(selected, LobbySaveNames.ScenarioSlot, StringComparison.OrdinalIgnoreCase))
+            {
+                OfferSave(peerId, selected, effects);
+            }
+        }
+
+        /// <summary>
+        /// Offers one named save to one peer. M11e.
+        /// </summary>
+        private void OfferSave(int peerId, string? saveKey, List<PbjEffect> effects)
+        {
+            var scenario = bridge.ReadScenario(saveKey);
             var rejection = scenario.Inspect();
             if (rejection != ScenarioRejection.None)
             {
@@ -651,7 +718,7 @@ namespace PBAndJ.Core.Net
                 return;
             }
 
-            var scenario = bridge.ReadScenario();
+            var scenario = ResolveRequested(request.Digest);
             var rejection = scenario.Inspect();
             if (rejection != ScenarioRejection.None)
             {
@@ -670,6 +737,69 @@ namespace PBAndJ.Core.Net
                 scenario.SaveName, scenario.Digest, scenario.Files)));
             effects.Add(new LogEffect(NetLog.ScenarioSent(
                 peerId, scenario.SaveName, (int)scenario.TotalBytes)));
+        }
+
+        /// <summary>
+        /// Which of the host's saves a request is asking for. M11e.
+        /// </summary>
+        /// <remarks>
+        /// <b>Resolved by digest against the saves this host would offer, never by
+        /// a name off the wire.</b> A request could have carried the key, and that
+        /// would have put the <em>host</em> in the position M9 spent three guards
+        /// avoiding on the receiving side — reading its own disk under a name a peer
+        /// chose. Matching a digest against the short list we already decided to
+        /// offer gives the same answer and grants a peer no say in it.
+        /// <para>
+        /// A null digest is <c>pbj.scenario-pull</c>'s deliberate override — "send
+        /// me the combat save whatever I hold" — so it resolves to the slot. When
+        /// nothing matches, the lobby's campaign wins if one is selected, because
+        /// that is what a peer in a lobby is waiting on; the mismatch is logged by
+        /// the caller either way, and answering with something keeps M9's rule that
+        /// a request always makes progress.
+        /// </para>
+        /// </remarks>
+        private ScenarioPayload ResolveRequested(string? digest)
+        {
+            var slot = bridge.ReadScenario(LobbySaveNames.ScenarioSlot);
+            if (digest == null)
+            {
+                return slot;
+            }
+            if (slot.Inspect() == ScenarioRejection.None && slot.Matches(digest))
+            {
+                return slot;
+            }
+
+            var selected = selection.SaveKey;
+            if (string.IsNullOrEmpty(selected)
+                || string.Equals(selected, LobbySaveNames.ScenarioSlot, StringComparison.OrdinalIgnoreCase))
+            {
+                return slot;
+            }
+            return bridge.ReadScenario(selected);
+        }
+
+        /// <summary>
+        /// What identifies a peer across disconnects, for M11e's seal.
+        /// </summary>
+        /// <remarks>
+        /// The player name today. The intent is a Steam ID, which is immutable and
+        /// cannot collide the way a typed name can — but two things keep it from
+        /// being the identity outright, and both are worth stating rather than
+        /// discovering later. It would be <b>self-asserted</b>: nothing stops a
+        /// peer claiming any ID without Steamworks auth tickets, so it is a
+        /// stabler label and not a credential — the passphrase remains the door
+        /// lock. And <c>pbj-peer</c> has no Steam at all, yet is the second party
+        /// for every selftest that gates <c>make deploy</c>, so a Steam ID can
+        /// never be <em>required</em> without taking the harness offline.
+        /// <para>
+        /// Hence one funnel: when the claim arrives on the wire it is preferred
+        /// here and the name stays as the fallback, and nothing else has to change.
+        /// </para>
+        /// </remarks>
+        private static string IdentityOf(string? playerName)
+        {
+            return playerName ?? string.Empty;
         }
 
         /// <summary>
@@ -800,8 +930,50 @@ namespace PBAndJ.Core.Net
             effects.Add(new LogEffect(selection.HasSave
                 ? NetLog.LobbySelected(selection.SaveKey, selection.SaveDigest, selection.Version)
                 : NetLog.LobbySelectionCleared(selection.Version)));
+
+            // Ordering, and it matters for the same reason M11d's does: the offer
+            // names a save, and a peer not yet told what the lobby selected has
+            // nothing to match it against. AnnounceLobby first, then the bytes —
+            // and both before anything that could fire the load.
             AnnounceLobby(effects);
+            OfferSelectedSave(effects);
             ReviewLobbyAfterDeparture(effects);
+        }
+
+        /// <summary>
+        /// Broadcasts the newly selected campaign save, so peers can fetch it
+        /// before anyone readies. M11e.
+        /// </summary>
+        /// <remarks>
+        /// The whole reason M11e transfers on selection rather than on a failed
+        /// load: a peer only readies once it holds the save, so by the time the
+        /// barrier fills every machine can actually load. That is what keeps
+        /// <see cref="LoadOutcome.Unavailable"/> off the barrier — which matters
+        /// because the barrier completes on failure reports, so the host would
+        /// otherwise enter the campaign alone and leave the peer behind.
+        /// </remarks>
+        private void OfferSelectedSave(List<PbjEffect> effects)
+        {
+            if (!selection.HasSave
+                || string.Equals(selection.SaveKey, LobbySaveNames.ScenarioSlot, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var save = bridge.ReadScenario(selection.SaveKey);
+            var rejection = save.Inspect();
+            if (rejection != ScenarioRejection.None)
+            {
+                // The host picked a save it cannot send. Worth saying out loud:
+                // every peer will sit unready and the lobby will never start.
+                effects.Add(new LogEffect(NetLog.ScenarioNotOffered(selection.SaveKey, rejection)));
+                return;
+            }
+
+            effects.Add(new BroadcastEffect(new ScenarioOfferMessage(
+                save.SaveName, (int)save.TotalBytes, save.Digest)));
+            effects.Add(new LogEffect(NetLog.ScenarioOffered(
+                PbjPeerRegistry.HostPeerId, save.SaveName, (int)save.TotalBytes, save.Digest)));
         }
 
         private void HandleLocalLobbyReady(List<PbjEffect> effects)
@@ -1025,7 +1197,7 @@ namespace PBAndJ.Core.Net
             AnnounceLobby(effects);
             effects.Add(new BroadcastEffect(
                 new LobbyLoadMessage(selection.Version, selection.SaveKey, selection.SaveDigest)));
-            effects.Add(new BeginLoadEffect(selection.SaveKey, selection.Version));
+            effects.Add(new BeginLoadEffect(selection.SaveKey, selection.Version, selection.SaveDigest));
         }
 
         private void HandleLobbyLoaded(int peerId, LobbyLoadedMessage loaded, List<PbjEffect> effects)
@@ -1085,6 +1257,17 @@ namespace PBAndJ.Core.Net
             effects.Add(new LogEffect(
                 NetLog.LoadComplete(load.Loaded.Count, lobby.ParticipantCount)));
             load.Finish();
+
+            // M11e: the campaign has begun, so the door closes to newcomers.
+            // ⚠️ Sealed HERE and not in TryFireLoad, and the difference matters.
+            // A load can be abandoned — the host's own load failing (above) or
+            // ExpireLoads timing it out — and both hand the lobby back. Sealing
+            // when the load *starts* would leave a session that never entered a
+            // campaign refusing joins forever, with nothing to reopen it. Sealing
+            // when it completes means only a campaign that actually began closes
+            // the door.
+            lobbySealed = true;
+
             ReportLobbyBarrier(effects);
             return true;
         }

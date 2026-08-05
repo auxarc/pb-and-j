@@ -187,33 +187,51 @@ namespace PBAndJ.Core.Net
         void StopKeyframes();
 
         /// <summary>
-        /// The combat save this machine holds, or
+        /// The save this machine holds under <paramref name="saveKey"/>, or
         /// <see cref="ScenarioPayload.None"/> if there is none.
         /// </summary>
+        /// <param name="saveKey">
+        /// Which save to read. M9 asks for <see cref="LobbySaveNames.ScenarioSlot"/>;
+        /// M11e asks for whatever the lobby selected.
+        /// </param>
         /// <remarks>
         /// Read by <em>both</em> sides, which is what makes the offer cheap: a
         /// host reads it to know what it can offer, and a client reads its own to
         /// know whether the offer is worth accepting. A peer rejoining a session
         /// it already transferred from therefore costs nothing.
         /// <para>
-        /// Never throws for the ordinary "no save yet" case — a host that has
-        /// never run <c>pbj.combat-save</c> is not in error, it simply has
-        /// nothing to offer.
+        /// Never throws for the ordinary "no save yet" case — a machine that does
+        /// not hold this save is not in error, it simply has nothing to offer and
+        /// everything to receive.
+        /// </para>
+        /// <para>
+        /// <b>The key is not trusted here.</b> It reaches a path only after
+        /// <see cref="ScenarioPayload.IsAllowedDestination"/>, because a request
+        /// naming a save is the one place a peer's word decides what the
+        /// <em>host</em> reads off its own disk.
         /// </para>
         /// </remarks>
-        ScenarioPayload ReadScenario();
+        ScenarioPayload ReadScenario(string? saveKey);
 
         /// <summary>
         /// Writes a received save to disk, replacing any of the same name.
-        /// Client only. False if it could not be written.
+        /// False if it could not be written.
         /// </summary>
         /// <remarks>
-        /// The implementation takes the save <em>directory</em> name from its own
-        /// constant and must treat <see cref="ScenarioPayload.SaveName"/> as
-        /// informational — see the guards on <see cref="ScenarioPayload"/>. It
-        /// must also stage and move rather than write in place, so an interrupted
-        /// transfer cannot leave a half-written save for <c>pbj.combat-load</c> to
-        /// find.
+        /// The destination is <see cref="ScenarioPayload.SaveName"/>, and M11e is
+        /// what changed that: M9 used its own constant and treated the wire's name
+        /// as informational, but the synchronised load makes every peer load the
+        /// lobby's key, so the name has to travel. It is therefore
+        /// <b>validated rather than trusted</b> — the implementation must refuse
+        /// anything <see cref="ScenarioPayload.IsAllowedDestination"/> rejects, on
+        /// its own terms and not merely because a session checked first.
+        /// <para>
+        /// Content may arrive split into numbered parts and must be reassembled
+        /// with <see cref="ScenarioPayload.JoinContent"/> — the parts are a wire
+        /// concern and the game must find the ordinary <c>content.zip</c> it wrote.
+        /// It must also stage and move rather than write in place, so an
+        /// interrupted transfer cannot leave a half-written save behind.
+        /// </para>
         /// </remarks>
         bool WriteScenario(ScenarioPayload payload);
 
@@ -237,6 +255,6 @@ namespace PBAndJ.Core.Net
         /// the caller worked out for itself.
         /// </para>
         /// </remarks>
-        LoadOutcome? BeginLoad(string? saveKey, int selectionVersion);
+        LoadOutcome? BeginLoad(string? saveKey, int selectionVersion, string? saveDigest);
     }
 }

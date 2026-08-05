@@ -270,7 +270,7 @@ namespace PBAndJ.Core.Net
                     // waits out the whole timeout on a machine that already knows
                     // the answer.
                 {
-                    var refusal = bridge.BeginLoad(begin.SaveKey, begin.SelectionVersion);
+                    var refusal = bridge.BeginLoad(begin.SaveKey, begin.SelectionVersion, begin.SaveDigest);
                     return refusal == null
                         ? NoEffects
                         : session.Handle(new LoadFinishedEvent(begin.SelectionVersion, refusal.Value));

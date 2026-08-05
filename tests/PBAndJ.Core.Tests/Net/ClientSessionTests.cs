@@ -901,17 +901,35 @@ namespace PBAndJ.Core.Tests.Net
 
         // --- lobby (M11a) ---
 
+        /// <summary>
+        /// The campaign save a lobby selects in these tests. Its real digest is
+        /// used in <see cref="Lobby"/> rather than a made-up string, because since
+        /// M11e readying is gated on actually holding the selected save and that
+        /// check compares digests.
+        /// </summary>
+        private static ScenarioPayload CampaignSave() =>
+            new ScenarioPayload("pbj_campaign", new[]
+            {
+                new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 1, 2, 3 }),
+                new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 4 }),
+            });
+
         private static LobbyStateMessage Lobby(
             int version = 1, string? saveKey = "pbj_campaign", bool allyReady = false) =>
-            new LobbyStateMessage(version, saveKey, "abc", new[]
+            new LobbyStateMessage(version, saveKey, CampaignSave().Digest, new[]
             {
                 new LobbyPeerState(0, "host", true),
                 new LobbyPeerState(1, "ally", allyReady),
             });
 
-        /// <summary>A welcomed client that has been told about a selected save.</summary>
+        /// <summary>
+        /// A welcomed client that has been told about a selected save <em>and</em>
+        /// holds it — the ordinary case once M11e's transfer has run, and the only
+        /// state from which readying is legitimate.
+        /// </summary>
         private ClientSession InLobby(int version = 1)
         {
+            bridge.ScenariosByKey["pbj_campaign"] = CampaignSave();
             var client = Welcomed();
             client.HandleMessage(ClientSession.HostConnectionId, Lobby(version));
             return client;
@@ -937,7 +955,7 @@ namespace PBAndJ.Core.Tests.Net
 
             Assert.Equal(1, client.LobbySelectionVersion);
             Assert.Equal("pbj_campaign", client.LobbySaveKey);
-            Assert.Equal("abc", client.LobbySaveDigest);
+            Assert.Equal(CampaignSave().Digest, client.LobbySaveDigest);
             Assert.Equal(2, client.LobbyRoster.Count);
             Assert.True(client.LobbyRoster[1].Ready);
             Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("2/2 ready"));
@@ -981,6 +999,56 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void LocalLobbyReady_WithoutTheSelectedSaveYet_IsRefused()
+        {
+            // M11e's promise: readying means "I can load this". A peer that readies
+            // without the bytes would report Unavailable when the host fires the
+            // load, and the load barrier completes on failure reports — so everyone
+            // else enters the campaign and this peer is stranded, with no way back
+            // in once the lobby seals.
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Lobby(4));
+
+            var effects = client.Handle(new LocalLobbyReadyEvent());
+
+            Assert.Empty(All<SendEffect>(effects));
+            Assert.False(client.LobbyReadySent);
+        }
+
+        [Fact]
+        public void LocalLobbyReady_WithASameNamedButDifferentSave_IsRefused()
+        {
+            // Same name, different contents is the silent-divergence case: everyone
+            // loads "their" copy and the campaigns drift apart with nothing to
+            // notice. Hence the digest comparison rather than a name check.
+            bridge.ScenariosByKey["pbj_campaign"] = new ScenarioPayload("pbj_campaign", new[]
+            {
+                new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 9, 9, 9 }),
+                new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 4 }),
+            });
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Lobby(4));
+
+            Assert.Empty(All<SendEffect>(client.Handle(new LocalLobbyReadyEvent())));
+            Assert.False(client.LobbyReadySent);
+        }
+
+        [Fact]
+        public void LocalLobbyReady_WhenTheLobbyPublishedNoDigest_AcceptsTheSaveByName()
+        {
+            // A selection can reach us before its digest does. Refusing outright
+            // would wedge a lobby that is otherwise fine, so the name carries it
+            // until the digest arrives and the host re-offers on every selection.
+            bridge.ScenariosByKey["pbj_campaign"] = CampaignSave();
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, new LobbyStateMessage(
+                2, "pbj_campaign", null, new[] { new LobbyPeerState(0, "host", true) }));
+
+            Assert.IsType<LobbyReadyMessage>(
+                Single<SendEffect>(client.Handle(new LocalLobbyReadyEvent())).Message);
+        }
+
+        [Fact]
         public void LocalLobbyReady_BeforeAnyLobbyState_IsRefused()
         {
             var client = Welcomed();
@@ -1013,6 +1081,7 @@ namespace PBAndJ.Core.Tests.Net
             // and no harness test could catch it, since the scripted bridge is
             // never in combat.
             bridge.InCombat = true;
+            bridge.ScenariosByKey["pbj_campaign"] = CampaignSave();
             var client = Welcomed();
             Assert.Equal(ClientSessionState.Planning, client.State);
 
