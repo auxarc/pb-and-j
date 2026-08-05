@@ -190,28 +190,53 @@ namespace PBAndJ.Core.Net
             return true;
         }
 
-        private static bool IsReserved(string displayName)
+        /// <summary>
+        /// True if the <em>game</em> chose this name, rather than a player.
+        /// </summary>
+        /// <remarks>
+        /// The autosaves the game writes on its own schedule, and the only names a
+        /// load may safely be redirected into the <c>pbj_</c> namespace: a name a
+        /// player typed or picked from a grid is theirs, and steering it elsewhere
+        /// would load a save they did not choose. See
+        /// <see cref="LobbySaveWrites.NameForRead"/>.
+        /// <para>
+        /// Deliberately <b>not</b> the scenario slot, which is M9's and not the
+        /// game's, and deliberately not a blanket <c>autosave_*</c> rule — the game
+        /// itself claims only the timed prefix and these exact names, so
+        /// <c>autosave_myrun</c> belongs to whoever typed it.
+        /// </para>
+        /// </remarks>
+        public static bool IsGameGeneratedSaveName(string? name)
         {
-            if (string.Equals(
-                    LobbySaveNames.KeyFor(displayName),
-                    LobbySaveNames.ScenarioSlot,
-                    StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrEmpty(name))
             {
-                return true;
+                return false;
             }
-            if (displayName.StartsWith(TimedPrefix, StringComparison.OrdinalIgnoreCase))
+            if (name!.StartsWith(TimedPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
 
             for (var i = 0; i < ReservedNames.Length; i++)
             {
-                if (string.Equals(displayName, ReservedNames[i], StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(name, ReservedNames[i], StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
                 }
             }
             return false;
+        }
+
+        private static bool IsReserved(string displayName)
+        {
+            // The scenario slot is reserved without being the game's own: M9's
+            // WriteScenario deletes and rewrites it wholesale, so a campaign must
+            // never be created there.
+            return string.Equals(
+                       LobbySaveNames.KeyFor(displayName),
+                       LobbySaveNames.ScenarioSlot,
+                       StringComparison.OrdinalIgnoreCase)
+                   || IsGameGeneratedSaveName(displayName);
         }
 
         private static bool Collides(string key, IEnumerable<string?>? existingKeys)

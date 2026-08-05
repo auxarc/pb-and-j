@@ -1436,14 +1436,37 @@ namespace PBAndJ.Peer
                     return 1;
                 }
 
-                host.Post(new LocalLobbySelectEvent("pbj_campaign", "3f9c1a04"));
+                // M11e: the host must actually hold the save it selects, or the
+                // transfer has nothing to send and no peer can ever ready. The
+                // digest is the payload's real one, because readying is gated on
+                // holding *these* bytes and not merely a save of that name.
+                var campaign = new ScenarioPayload("pbj_campaign", new[]
+                {
+                    new ScenarioFile(ScenarioPayload.ContentFileName, System.Text.Encoding.UTF8.GetBytes("campaign")),
+                    new ScenarioFile(ScenarioPayload.MetadataFileName, System.Text.Encoding.UTF8.GetBytes("ver: 1")),
+                });
+                hostBridge.ScenariosByKey["pbj_campaign"] = campaign;
+
+                host.Post(new LocalLobbySelectEvent("pbj_campaign", campaign.Digest));
                 if (!WaitFor("the host's save reached the client",
                         () => clientSession.LobbySelectionVersion == 1
                               && clientSession.LobbySaveKey == "pbj_campaign"
-                              && clientSession.LobbySaveDigest == "3f9c1a04"))
+                              && clientSession.LobbySaveDigest == campaign.Digest))
                 {
                     return 1;
                 }
+
+                // The bytes cross before anyone can agree to load them. This is
+                // M11e's whole shape: transfer on selection, so that by the time
+                // the barrier fills every machine can genuinely load.
+                if (!WaitFor("the campaign save crossed to the client",
+                        () => clientBridge.WrittenScenarios.Count == 1
+                              && clientBridge.WrittenScenarios[0].SaveName == "pbj_campaign"
+                              && clientBridge.WrittenScenarios[0].Digest == campaign.Digest))
+                {
+                    return 1;
+                }
+                clientBridge.ScenariosByKey["pbj_campaign"] = campaign;
 
                 host.Post(new LocalLobbyReadyEvent());
                 if (!WaitFor("the host's own ready is not enough on its own",

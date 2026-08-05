@@ -132,10 +132,137 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("no combat save to send"));
         }
 
+        // --- the lobby's campaign save (M11e) ---
+
+        [Fact]
+        public void Host_OnSelectingACampaignSave_OffersItToEveryone()
+        {
+            // The fake bridge starts in combat, and a host in combat is not in
+            // its lobby — LocalLobbySelect would be ignored outright.
+            bridge.InCombat = false;
+            // The heart of M11e: the bytes move when the save is chosen, not when
+            // someone fails to load it. By the time anyone readies, everyone can.
+            var campaign = Save("pbj_campaign", "campaign-bytes");
+            bridge.ScenariosByKey["pbj_campaign"] = campaign;
+            var host = Host();
+            Handshake(host);
+
+            var effects = host.Handle(new LocalLobbySelectEvent("pbj_campaign", campaign.Digest));
+
+            var offer = Assert.IsType<ScenarioOfferMessage>(
+                Single<BroadcastEffect>(All<BroadcastEffect>(effects)
+                    .Where(b => b.Message is ScenarioOfferMessage)).Message);
+            Assert.Equal("pbj_campaign", offer.SaveName);
+            Assert.Equal(campaign.Digest, offer.Digest);
+        }
+
+        [Fact]
+        public void Host_OnSelectingASaveItCannotSend_SaysSoRatherThanGoingQuiet()
+        {
+            // The fake bridge starts in combat, and a host in combat is not in
+            // its lobby — LocalLobbySelect would be ignored outright.
+            bridge.InCombat = false;
+            // Otherwise every peer sits unready forever and the lobby never starts,
+            // with nothing anywhere saying why.
+            bridge.ScenariosByKey["pbj_broken"] = new ScenarioPayload("pbj_broken", new[]
+            {
+                new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 1 }),
+            });
+            var host = Host();
+            Handshake(host);
+
+            var effects = host.Handle(new LocalLobbySelectEvent("pbj_broken", "whatever"));
+
+            Assert.DoesNotContain(All<BroadcastEffect>(effects), b => b.Message is ScenarioOfferMessage);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("MissingRequiredFile"));
+        }
+
+        [Fact]
+        public void Host_OnSelectingTheScenarioSlot_DoesNotOfferItTwice()
+        {
+            // The fake bridge starts in combat, and a host in combat is not in
+            // its lobby — LocalLobbySelect would be ignored outright.
+            bridge.InCombat = false;
+            // The slot is already offered on handshake; re-offering it as a
+            // campaign would be a second copy of the same bytes for nothing.
+            bridge.Scenario = Save();
+            var host = Host();
+            Handshake(host);
+
+            var effects = host.Handle(new LocalLobbySelectEvent(
+                LobbySaveNames.ScenarioSlot, Save().Digest));
+
+            Assert.DoesNotContain(All<BroadcastEffect>(effects), b => b.Message is ScenarioOfferMessage);
+        }
+
+        [Fact]
+        public void Host_OnRequestMatchingNeitherSave_ServesTheLobbysCampaign()
+        {
+            // The fake bridge starts in combat, and a host in combat is not in
+            // its lobby — LocalLobbySelect would be ignored outright.
+            bridge.InCombat = false;
+            // A peer in a lobby is waiting on the campaign, so that is what makes
+            // progress. Resolving by digest rather than by a name off the wire is
+            // what keeps the host from reading its own disk under a peer's word.
+            var campaign = Save("pbj_campaign", "campaign-bytes");
+            bridge.Scenario = Save();
+            bridge.ScenariosByKey["pbj_campaign"] = campaign;
+            var host = Host();
+            Handshake(host);
+            host.Handle(new LocalLobbySelectEvent("pbj_campaign", campaign.Digest));
+
+            var effects = host.HandleMessage(1, new ScenarioRequestMessage("deadbeef"));
+
+            var sent = Assert.IsType<ScenarioMessage>(Single<SendEffect>(
+                All<SendEffect>(effects).Where(s => s.Message is ScenarioMessage)).Message);
+            Assert.Equal("pbj_campaign", sent.SaveName);
+        }
+
+        [Fact]
+        public void Host_OnRequestMatchingTheCampaignDigest_ServesTheCampaign()
+        {
+            // The fake bridge starts in combat, and a host in combat is not in
+            // its lobby — LocalLobbySelect would be ignored outright.
+            bridge.InCombat = false;
+            var campaign = Save("pbj_campaign", "campaign-bytes");
+            bridge.Scenario = Save();
+            bridge.ScenariosByKey["pbj_campaign"] = campaign;
+            var host = Host();
+            Handshake(host);
+            host.Handle(new LocalLobbySelectEvent("pbj_campaign", campaign.Digest));
+
+            var effects = host.HandleMessage(1, new ScenarioRequestMessage(campaign.Digest));
+
+            var sent = Assert.IsType<ScenarioMessage>(Single<SendEffect>(
+                All<SendEffect>(effects).Where(s => s.Message is ScenarioMessage)).Message);
+            Assert.Equal("pbj_campaign", sent.SaveName);
+        }
+
+        [Fact]
+        public void Host_WithNoCombatSaveAtAll_StillServesTheLobbysCampaign()
+        {
+            // The ordinary campaign co-op host: it has never run pbj.combat-save,
+            // so there is no scenario slot to check the digest against. That must
+            // not stop the campaign transfer — M9's slot and M11e's campaign are
+            // two saves on one mechanism, not one save with two names.
+            bridge.InCombat = false;
+            var campaign = Save("pbj_campaign", "campaign-bytes");
+            bridge.ScenariosByKey["pbj_campaign"] = campaign;
+            var host = Host();
+            Handshake(host);
+            host.Handle(new LocalLobbySelectEvent("pbj_campaign", campaign.Digest));
+
+            var effects = host.HandleMessage(1, new ScenarioRequestMessage(campaign.Digest));
+
+            var sent = Assert.IsType<ScenarioMessage>(Single<SendEffect>(
+                All<SendEffect>(effects).Where(s => s.Message is ScenarioMessage)).Message);
+            Assert.Equal("pbj_campaign", sent.SaveName);
+        }
+
         [Fact]
         public void Host_OnRequestWithAnUnusableSave_RefusesRatherThanSending()
         {
-            bridge.Scenario = new ScenarioPayload("s", new[]
+            bridge.Scenario = new ScenarioPayload(LobbySaveNames.ScenarioSlot, new[]
             {
                 new ScenarioFile("../escape", new byte[] { 1 }),
                 new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 2 }),
@@ -229,17 +356,37 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
-        public void Client_InCombat_DeclinesTheOfferSilently()
+        public void Client_WhenTheHostIsFighting_DeclinesTheOfferSilently()
         {
             // Mid-combat is the wrong moment: at best wasted bandwidth, at worst
             // an invitation to load it and lose the session.
+            var client = InLobby();
+            client.HandleMessage(ClientSession.HostConnectionId, new CombatStartMessage(3));
+
+            Assert.Empty(All<SendEffect>(
+                client.HandleMessage(ClientSession.HostConnectionId, Offer(Save()))));
+        }
+
+        [Fact]
+        public void Client_WhoseOwnGameIsInCombat_StillAcceptsTheOffer()
+        {
+            // ⚠️ The defect this replaces. The gate used to read ClientSessionState,
+            // which HandleWelcome seeds from *this machine's own* bridge.InCombat —
+            // so a player who joined while their own singleplayer game happened to
+            // be mid-combat landed in Planning against a host sitting in its lobby,
+            // silently declined every offer, never held the save, and so could
+            // never ready. Nothing else in the suite could catch it: the scripted
+            // bridge is never in combat, which is exactly why this test sets the
+            // flag by hand.
             bridge.InCombat = true;
             var client = Client();
             client.Start();
             client.HandleMessage(ClientSession.HostConnectionId, new WelcomeMessage(
                 PbjProtocol.Version, "7f3a91", 1, "host", new[] { new PeerInfo(0, "host") }, 3, "tok"));
 
-            Assert.Empty(client.HandleMessage(ClientSession.HostConnectionId, Offer(Save())));
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, Offer(Save()));
+
+            Assert.IsType<ScenarioRequestMessage>(Single<SendEffect>(effects).Message);
         }
 
         [Fact]
@@ -302,8 +449,10 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void Client_OnAScenarioWithADisallowedName_WritesNothing()
         {
+            // A valid destination on purpose, so the refusal proved here is the
+            // per-file one and not the destination guard firing first.
             var effects = InLobby().HandleMessage(ClientSession.HostConnectionId,
-                new ScenarioMessage("evil", "whatever", new[]
+                new ScenarioMessage(LobbySaveNames.ScenarioSlot, "whatever", new[]
                 {
                     new ScenarioFile("../../.bashrc", Encoding.UTF8.GetBytes("rm -rf")),
                     new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 1 }),
@@ -311,6 +460,41 @@ namespace PBAndJ.Core.Tests.Net
 
             Assert.Empty(All<WriteScenarioEffect>(effects));
             Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("DisallowedName"));
+        }
+
+        [Fact]
+        public void Client_OnAScenarioAimedOutsideTheNamespace_WritesNothing()
+        {
+            // M11e's own boundary. M9 never took a directory name from the wire —
+            // the receiver used its own constant. The synchronised load forces every
+            // peer onto the lobby's key, so the name now has to travel, and this is
+            // the check that keeps a peer past the passphrase from steering a write
+            // onto a singleplayer campaign.
+            var effects = InLobby().HandleMessage(ClientSession.HostConnectionId,
+                new ScenarioMessage("firstrun", "whatever", new[]
+                {
+                    new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 1 }),
+                    new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 2 }),
+                }));
+
+            Assert.Empty(All<WriteScenarioEffect>(effects));
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("DisallowedDestination"));
+        }
+
+        [Fact]
+        public void Client_OnAScenarioWhoseDestinationEscapesTheSaveFolder_WritesNothing()
+        {
+            // The case LobbyCatalogue's offer test would have let through: it checks
+            // the prefix and not-the-scenario-slot, and this satisfies both.
+            var effects = InLobby().HandleMessage(ClientSession.HostConnectionId,
+                new ScenarioMessage("pbj_../../elsewhere", "whatever", new[]
+                {
+                    new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 1 }),
+                    new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 2 }),
+                }));
+
+            Assert.Empty(All<WriteScenarioEffect>(effects));
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("DisallowedDestination"));
         }
 
         [Fact]

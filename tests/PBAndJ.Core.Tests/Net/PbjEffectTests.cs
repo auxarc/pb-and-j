@@ -182,10 +182,13 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void BeginLoad_CarriesTheSaveAndTheVersion()
         {
-            var effect = new BeginLoadEffect("pbj_campaign", 4);
+            var effect = new BeginLoadEffect("pbj_campaign", 4, "a1b2c3d4");
             Assert.Equal(PbjEffectKind.BeginLoad, effect.Kind);
             Assert.Equal("pbj_campaign", effect.SaveKey);
             Assert.Equal(4, effect.SelectionVersion);
+            // The digest the lobby agreed on, so the machine about to load can
+            // check its copy is the one everyone else is loading.
+            Assert.Equal("a1b2c3d4", effect.SaveDigest);
         }
 
         [Fact]
@@ -194,7 +197,7 @@ namespace PBAndJ.Core.Tests.Net
             // No throw: the session emits what the selection holds, and refusing
             // here would move a decision the glue is better placed to make into
             // a constructor that cannot explain itself.
-            Assert.Null(new BeginLoadEffect(null, 0).SaveKey);
+            Assert.Null(new BeginLoadEffect(null, 0, null).SaveKey);
         }
 
         [Fact]

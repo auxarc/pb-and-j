@@ -40,10 +40,11 @@ namespace PBAndJ.Core.Net
     /// </remarks>
     public sealed class BeginLoadEffect : PbjEffect
     {
-        public BeginLoadEffect(string? saveKey, int selectionVersion)
+        public BeginLoadEffect(string? saveKey, int selectionVersion, string? saveDigest)
         {
             SaveKey = saveKey;
             SelectionVersion = selectionVersion;
+            SaveDigest = saveDigest;
         }
 
         public override PbjEffectKind Kind => PbjEffectKind.BeginLoad;
@@ -51,6 +52,18 @@ namespace PBAndJ.Core.Net
         public string? SaveKey { get; }
 
         public int SelectionVersion { get; }
+
+        /// <summary>
+        /// The contents the lobby agreed on, or null if it published none.
+        /// </summary>
+        /// <remarks>
+        /// Carried so the machine about to load can check that its copy is the one
+        /// everyone else is loading. Without it the check could only be "a save of
+        /// that name exists", and same-name-different-contents is precisely the case
+        /// that diverges silently — every peer loads its own campaign and nothing
+        /// notices until the states disagree.
+        /// </remarks>
+        public string? SaveDigest { get; }
     }
 
     /// <summary>

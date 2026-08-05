@@ -102,7 +102,21 @@ namespace PBAndJ.Core.Tests.Net
         /// <summary>Simulates the write failing — no space, no permission.</summary>
         public bool ScenarioWriteSucceeds { get; set; } = true;
 
-        public ScenarioPayload ReadScenario() => Scenario;
+        /// <summary>
+        /// Saves this machine holds under specific keys, for tests that need a
+        /// machine to hold one save and not another. Anything not named here falls
+        /// back to <see cref="Scenario"/>, so tests written before M11e — which
+        /// only ever modelled a single save — keep meaning what they meant.
+        /// </summary>
+        public Dictionary<string, ScenarioPayload> ScenariosByKey { get; }
+            = new Dictionary<string, ScenarioPayload>(StringComparer.OrdinalIgnoreCase);
+
+        public ScenarioPayload ReadScenario(string? saveKey)
+        {
+            return saveKey != null && ScenariosByKey.TryGetValue(saveKey, out var found)
+                ? found
+                : Scenario;
+        }
 
         public bool WriteScenario(ScenarioPayload payload)
         {
@@ -115,7 +129,7 @@ namespace PBAndJ.Core.Tests.Net
         /// <summary>Set to make the next load refuse instead of starting.</summary>
         public LoadOutcome? LoadRefusal { get; set; }
 
-        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion)
+        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion, string? saveDigest)
         {
             LoadsBegun.Add(saveKey);
             return LoadRefusal;

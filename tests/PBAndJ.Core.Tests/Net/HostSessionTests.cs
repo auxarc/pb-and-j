@@ -1726,6 +1726,100 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Empty(All<BroadcastEffect>(effects));
         }
 
+        // --- sealing the lobby once the campaign starts (M11e) ---
+
+        /// <summary>
+        /// Drives a host all the way through a completed synchronised load, which
+        /// is the point the door closes.
+        /// </summary>
+        private HostSession LoadedHost(int peerId = 1, string name = "ally")
+        {
+            var host = LobbyHost(peerId, name);
+            host.Handle(Select().Event);
+            host.Handle(new LocalLobbyReadyEvent());
+            host.HandleMessage(peerId, new LobbyReadyMessage(host.Selection.Version));
+            host.Handle(new LoadFinishedEvent(host.Selection.Version, LoadOutcome.Loaded));
+            host.HandleMessage(peerId, new LobbyLoadedMessage(host.Selection.Version, LoadOutcome.Loaded));
+            return host;
+        }
+
+        [Fact]
+        public void AfterTheCampaignLoads_AStrangerIsRefusedWithAReason()
+        {
+            // M11e transfers on selection, so a peer arriving now would never be
+            // offered the save and could never ready. Refused with a reason rather
+            // than a dropped socket: silence is indistinguishable from the host
+            // being down, which this project has already paid for once.
+            var host = LoadedHost();
+            host.Handle(new PeerConnectedEvent(9, "127.0.0.1:9"));
+
+            var effects = host.HandleMessage(9, GoodHello("newcomer"));
+
+            var reject = Messages<RejectMessage>(effects).Single();
+            Assert.Equal(RejectReason.NotAcceptingPeers, reject.Reason);
+        }
+
+        [Fact]
+        public void AfterTheCampaignLoads_SomeoneWhoWasAlreadyInMayComeBack()
+        {
+            // ⚠️ What keeps the seal a door and not a wall. A resume token is only
+            // minted when a peer held units in combat, and the seal lives in the
+            // out-of-combat campaign — so a wifi blip out there produces no token
+            // at all, and the ordinary recovery is a fresh Hello. Sealing against
+            // that would make one dropped packet permanent.
+            var host = LoadedHost();
+            host.Handle(new PeerDisconnectedEvent(1, "wifi"));
+            host.Handle(new PeerConnectedEvent(7, "127.0.0.1:7"));
+
+            var effects = host.HandleMessage(7, GoodHello("ally"));
+
+            Assert.Empty(Messages<RejectMessage>(effects));
+            Assert.Single(Messages<WelcomeMessage>(effects));
+        }
+
+        [Fact]
+        public void AfterTheCampaignLoads_ANamelessPeerIsRefusedByTheSealFirst()
+        {
+            // A null name is a malformed Hello and would be refused as InvalidName
+            // anyway, but the seal is checked ahead of that on purpose: once the
+            // campaign is under way, a stranger's other problems are beside the
+            // point. Pinned so the ordering is a decision rather than an accident.
+            var host = LoadedHost();
+            host.Handle(new PeerConnectedEvent(9, "127.0.0.1:9"));
+
+            var effects = host.HandleMessage(9, new HelloMessage(
+                PbjProtocol.Magic, PbjProtocol.Version, PbjProtocol.ModVersion, null, null, null));
+
+            Assert.Equal(RejectReason.NotAcceptingPeers, Messages<RejectMessage>(effects).Single().Reason);
+        }
+
+        [Fact]
+        public void BeforeTheCampaignLoads_AnyoneMayJoin()
+        {
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            host.Handle(new PeerConnectedEvent(9, "127.0.0.1:9"));
+
+            Assert.Empty(Messages<RejectMessage>(host.HandleMessage(9, GoodHello("newcomer"))));
+        }
+
+        [Fact]
+        public void AnAbandonedLoad_LeavesTheDoorOpen()
+        {
+            // ⚠️ The trap this design avoids. Sealing when the load *starts* would
+            // mean a load that never completed — the host's own load failing, or
+            // ExpireLoads timing it out — left a session refusing joins forever
+            // with no campaign ever entered and nothing able to reopen it.
+            var host = LobbyHost();
+            host.Handle(Select().Event);
+            host.Handle(new LocalLobbyReadyEvent());
+            host.HandleMessage(1, new LobbyReadyMessage(host.Selection.Version));
+            host.Handle(new LoadFinishedEvent(host.Selection.Version, LoadOutcome.Refused));
+
+            host.Handle(new PeerConnectedEvent(9, "127.0.0.1:9"));
+            Assert.Empty(Messages<RejectMessage>(host.HandleMessage(9, GoodHello("newcomer"))));
+        }
+
         [Fact]
         public void LobbySelect_ClearsEveryExistingReady()
         {

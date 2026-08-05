@@ -230,7 +230,19 @@ namespace PBAndJ.Peer
         /// <summary>Every scenario written, in order, for the self-test to check.</summary>
         public List<ScenarioPayload> WrittenScenarios { get; } = new List<ScenarioPayload>();
 
-        public ScenarioPayload ReadScenario() => Scenario;
+        /// <summary>
+        /// Saves this peer holds under specific keys; anything else falls back to
+        /// <see cref="Scenario"/> so the pre-M11e selftests keep their meaning.
+        /// </summary>
+        public Dictionary<string, ScenarioPayload> ScenariosByKey { get; }
+            = new Dictionary<string, ScenarioPayload>(StringComparer.OrdinalIgnoreCase);
+
+        public ScenarioPayload ReadScenario(string? saveKey)
+        {
+            return saveKey != null && ScenariosByKey.TryGetValue(saveKey, out var found)
+                ? found
+                : Scenario;
+        }
 
         /// <summary>Save keys this bridge has been asked to load.</summary>
         /// <remarks>
@@ -244,7 +256,7 @@ namespace PBAndJ.Peer
         /// <summary>Set to make the next load refuse instead of starting.</summary>
         public LoadOutcome? LoadRefusal { get; set; }
 
-        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion)
+        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion, string? saveDigest)
         {
             LoadsBegun.Add(saveKey);
             return LoadRefusal;

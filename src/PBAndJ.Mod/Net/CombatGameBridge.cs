@@ -439,28 +439,34 @@ namespace PBAndJ.Mod.Net
         // works unchanged on Windows and under Proton, where the same logical
         // folder lives somewhere quite different.
 
-        public ScenarioPayload ReadScenario()
+        public ScenarioPayload ReadScenario(string? saveKey)
         {
             try
             {
-                var folder = SaveFolder();
+                var folder = SaveFolder(saveKey);
                 if (folder == null || !Directory.Exists(folder))
                 {
                     return ScenarioPayload.None;
                 }
 
+                // Content is split into parts only when it has to be — M11e. Every
+                // save measured is far under one part, so the common case still
+                // sends a single content.zip exactly as M9 did. Splitting here
+                // rather than at the session keeps the wire-size decision in one
+                // place: PbjWriter throws on an oversize blob and PbjRuntime.SendTo
+                // does not guard encoding, so nothing above may hand it one.
                 var files = new List<ScenarioFile>();
-                foreach (var name in new[]
-                         {
-                             ScenarioPayload.ContentFileName,
-                             ScenarioPayload.MetadataFileName,
-                         })
+                var contentPath = Path.Combine(folder, ScenarioPayload.ContentFileName);
+                if (File.Exists(contentPath))
                 {
-                    var path = Path.Combine(folder, name);
-                    if (File.Exists(path))
-                    {
-                        files.Add(new ScenarioFile(name, File.ReadAllBytes(path)));
-                    }
+                    files.AddRange(ScenarioPayload.SplitContent(File.ReadAllBytes(contentPath)));
+                }
+
+                var metadataPath = Path.Combine(folder, ScenarioPayload.MetadataFileName);
+                if (File.Exists(metadataPath))
+                {
+                    files.Add(new ScenarioFile(
+                        ScenarioPayload.MetadataFileName, File.ReadAllBytes(metadataPath)));
                 }
 
                 // A partial directory is handed over as-is rather than patched
@@ -469,7 +475,7 @@ namespace PBAndJ.Mod.Net
                 // glue is how the two drift apart.
                 return files.Count == 0
                     ? ScenarioPayload.None
-                    : new ScenarioPayload(SaveLoadGlue.SaveName, files);
+                    : new ScenarioPayload(saveKey, files);
             }
             catch (Exception e)
             {
@@ -481,10 +487,14 @@ namespace PBAndJ.Mod.Net
 
         public bool WriteScenario(ScenarioPayload payload)
         {
-            var folder = SaveFolder();
+            // The destination now travels with the payload — M11e. SaveFolder
+            // refuses anything outside the namespace, so a forged key fails here
+            // rather than composing a path.
+            var folder = SaveFolder(payload.SaveName);
             if (folder == null)
             {
-                Debug.LogWarning("[pb-and-j] the game did not report a save folder — cannot write the scenario");
+                Debug.LogWarning("[pb-and-j] no writable save folder for '"
+                    + payload.SaveName + "' — cannot write the save");
                 return false;
             }
 
@@ -500,6 +510,11 @@ namespace PBAndJ.Mod.Net
                 }
                 Directory.CreateDirectory(staging);
 
+                // Split content is reassembled here, never written out as parts:
+                // the parts are a wire concern and the game must find the ordinary
+                // content.zip it wrote. JoinContent orders by part index rather
+                // than by arrival, because the digest is order-independent and
+                // nothing promises the wire preserved file order.
                 for (var i = 0; i < payload.Files.Count; i++)
                 {
                     var file = payload.Files[i];
@@ -514,8 +529,20 @@ namespace PBAndJ.Mod.Net
                         Directory.Delete(staging, true);
                         return false;
                     }
+                    if (ScenarioPayload.PartIndex(file.Name) >= 0)
+                    {
+                        continue;
+                    }
+                    if (string.Equals(file.Name, ScenarioPayload.ContentFileName, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
                     File.WriteAllBytes(Path.Combine(staging, file.Name), file.Content);
                 }
+
+                File.WriteAllBytes(
+                    Path.Combine(staging, ScenarioPayload.ContentFileName),
+                    ScenarioPayload.JoinContent(payload));
 
                 if (Directory.Exists(folder))
                 {
@@ -553,17 +580,36 @@ namespace PBAndJ.Mod.Net
         /// otherwise all ECS reads and writes, and a load is neither — it tears
         /// the ECS down and builds a new one.
         /// </remarks>
-        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion) =>
-            LoadGlue.Begin(saveKey, selectionVersion);
+        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion, string? saveDigest) =>
+            LoadGlue.Begin(saveKey, selectionVersion, saveDigest);
 
         /// <summary>
         /// Where this save lives, from the game's own path resolution. The
         /// directory name is always ours — never the one on the wire.
         /// </summary>
-        private static string? SaveFolder()
+        /// <summary>
+        /// Where a save lives, from the game's own path resolution.
+        /// </summary>
+        /// <remarks>
+        /// <b>The one statement in the mod that turns a wire-supplied name into a
+        /// path</b>, so the guard is here and not only at the caller. M9 passed a
+        /// constant and needed no check; M11e carries the lobby's key, and
+        /// <see cref="ScenarioPayload.IsAllowedDestination"/> is what stands between
+        /// that and a <c>Path.Combine</c>. Refusing here rather than trusting the
+        /// session keeps this safe on its own terms — the session checking first is
+        /// defence in depth, not a substitute.
+        /// </remarks>
+        private static string? SaveFolder(string? saveKey)
         {
+            if (!ScenarioPayload.IsAllowedDestination(saveKey))
+            {
+                Debug.LogWarning("[pb-and-j] refusing to resolve a save folder for '"
+                    + saveKey + "' — not an allowed destination");
+                return null;
+            }
+
             var root = DataManagerSave.GetSaveFolderPath(SaveLocation.Normal);
-            return string.IsNullOrEmpty(root) ? null : Path.Combine(root, SaveLoadGlue.SaveName);
+            return string.IsNullOrEmpty(root) ? null : Path.Combine(root, saveKey);
         }
     }
 }

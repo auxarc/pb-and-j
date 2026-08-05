@@ -58,6 +58,45 @@ namespace PBAndJ.Core.Net
         }
 
         /// <summary>
+        /// The name a load must actually ask for.
+        /// </summary>
+        /// <param name="saveKey">The key the game asked to load.</param>
+        /// <param name="multiplayerCampaign">
+        /// Whether the campaign currently loaded is a multiplayer one.
+        /// </param>
+        /// <param name="normalLocation">Whether this is <c>SaveLocation.Normal</c>.</param>
+        /// <remarks>
+        /// The counterpart <see cref="NameForWrite"/> needed from the start and did
+        /// not have. M11d redirected writes only, so inside a co-op campaign the
+        /// game wrote <c>pbj_autosave_before_combat</c> and then, on combat retry,
+        /// asked to load plain <c>autosave_before_combat</c>
+        /// (<c>CIViewCombatEnd.cs:333</c>) — the player's <em>singleplayer</em>
+        /// autosave, or nothing. <c>CampaignExit</c> fires on that path too, so a
+        /// retry that found nothing left the player inside the co-op campaign with
+        /// the campaign bit cleared, writing unprefixed saves from then on.
+        /// <para>
+        /// <b>Narrower than the write side on purpose.</b> Only names the game
+        /// generates for itself are redirected. Every other key reaching a load came
+        /// from a grid the player chose in — and inside a campaign that grid hides
+        /// <c>pbj_</c> saves (M11b), so it can only be a singleplayer save they
+        /// picked deliberately in order to leave. Redirecting those would load a
+        /// campaign nobody asked for.
+        /// </para>
+        /// </remarks>
+        public static string? NameForRead(string? saveKey, bool multiplayerCampaign, bool normalLocation)
+        {
+            if (string.IsNullOrEmpty(saveKey)
+                || !multiplayerCampaign
+                || !normalLocation
+                || LobbySaveNames.IsMultiplayerKey(saveKey)
+                || !LobbySaveRules.IsGameGeneratedSaveName(saveKey))
+            {
+                return saveKey;
+            }
+            return LobbySaveNames.KeyFor(saveKey);
+        }
+
+        /// <summary>
         /// Whether the singleplayer save screen must refuse to write
         /// <paramref name="key"/>.
         /// </summary>

@@ -77,6 +77,122 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void NameForRead_InACoopCampaign_RedirectsAnAutosaveTheGameNamedItself()
+        {
+            // The defect this exists to fix. Combat retry calls
+            // OnLoadingExternal("autosave_before_combat") (CIViewCombatEnd.cs:333)
+            // with the unprefixed name, but NameForWrite stored that campaign's copy
+            // as pbj_autosave_before_combat. Without this the retry loads the
+            // player's *singleplayer* autosave, or nothing at all.
+            Assert.Equal(
+                "pbj_autosave_before_combat",
+                LobbySaveWrites.NameForRead("autosave_before_combat", true, true));
+        }
+
+        [Fact]
+        public void NameForRead_InACoopCampaign_RedirectsATimedAutosave()
+        {
+            // The timed slots are generated on the overworld timer, so they are
+            // named by the game and never by a player.
+            Assert.Equal(
+                "pbj_autosave_timed_0",
+                LobbySaveWrites.NameForRead("autosave_timed_0", true, true));
+        }
+
+        [Fact]
+        public void NameForRead_LeavesAPlayerChosenNameAlone()
+        {
+            // The load grid inside a campaign hides pbj_ saves (M11b's
+            // SaveVisibilityPatches), so every key reaching OnLoadingExternal from
+            // CIViewPauseLoad.cs:574 or CIViewPauseSaveFileGrid.cs:377 is a
+            // singleplayer save the player deliberately chose in order to leave.
+            // Redirecting it would send them to a co-op save they did not pick.
+            Assert.Equal(
+                "Route Split",
+                LobbySaveWrites.NameForRead("Route Split", true, true));
+        }
+
+        [Fact]
+        public void NameForRead_OutsideACoopCampaign_LeavesTheNameAlone()
+        {
+            // Symmetric with NameForWrite: outside a co-op campaign the namespace
+            // is not ours to redirect into.
+            Assert.Equal(
+                "autosave_before_combat",
+                LobbySaveWrites.NameForRead("autosave_before_combat", false, true));
+        }
+
+        [Fact]
+        public void NameForRead_OnlyRedirectsTheNormalSaveLocation()
+        {
+            Assert.Equal(
+                "autosave_before_combat",
+                LobbySaveWrites.NameForRead("autosave_before_combat", true, false));
+        }
+
+        [Fact]
+        public void NameForRead_LeavesAnAlreadyPrefixedNameAlone()
+        {
+            // GetSaveHeaderLatest filters on key.StartsWith, so the load-latest path
+            // (CIViewPauseRoot.cs:1369) can hand us a key that is already inside the
+            // namespace. Prefixing again would ask for pbj_pbj_….
+            Assert.Equal(
+                "pbj_autosave_timed_0",
+                LobbySaveWrites.NameForRead("pbj_autosave_timed_0", true, true));
+        }
+
+        [Fact]
+        public void NameForRead_Null_ReturnsNull()
+        {
+            Assert.Null(LobbySaveWrites.NameForRead(null, true, true));
+        }
+
+        [Fact]
+        public void NameForRead_Empty_ReturnsItUnchanged()
+        {
+            Assert.Equal("", LobbySaveWrites.NameForRead("", true, true));
+        }
+
+        [Fact]
+        public void NameForRead_DoesNotRedirectTheScenarioSlotsUnprefixedName()
+        {
+            // combat_test is not a name the game generates for itself — it is M9's,
+            // and pbj_combat_test is a transfer slot that WriteScenario deletes and
+            // rewrites wholesale. A load must never be steered into it by accident.
+            Assert.Equal(
+                "combat_test",
+                LobbySaveWrites.NameForRead("combat_test", true, true));
+        }
+
+        [Fact]
+        public void IsGameGeneratedSaveName_RecognisesEveryNameTheGameWritesForItself()
+        {
+            // Mirrors DataPathHelper.IsReservedFilename. Deliberately not a blanket
+            // autosave_* rule: the game refuses only the timed prefix and these
+            // exact names, so autosave_myrun is a name a player may legitimately own
+            // and must not be redirected out from under them.
+            Assert.True(LobbySaveRules.IsGameGeneratedSaveName("autosave_quicksave"));
+            Assert.True(LobbySaveRules.IsGameGeneratedSaveName("autosave_before_combat"));
+            Assert.True(LobbySaveRules.IsGameGeneratedSaveName("autosave_after_combat"));
+            Assert.True(LobbySaveRules.IsGameGeneratedSaveName("autosave_before_travel"));
+            Assert.True(LobbySaveRules.IsGameGeneratedSaveName("autosave_after_stop"));
+            Assert.True(LobbySaveRules.IsGameGeneratedSaveName("autosave_campaign_end"));
+            Assert.True(LobbySaveRules.IsGameGeneratedSaveName("autosave_game_exit"));
+            Assert.True(LobbySaveRules.IsGameGeneratedSaveName("autosave_timed_7"));
+            Assert.False(LobbySaveRules.IsGameGeneratedSaveName("autosave_myrun"));
+            Assert.False(LobbySaveRules.IsGameGeneratedSaveName("firstrun"));
+            Assert.False(LobbySaveRules.IsGameGeneratedSaveName(null));
+            Assert.False(LobbySaveRules.IsGameGeneratedSaveName(""));
+        }
+
+        [Fact]
+        public void IsGameGeneratedSaveName_IgnoresCase()
+        {
+            Assert.True(LobbySaveRules.IsGameGeneratedSaveName("AUTOSAVE_GAME_EXIT"));
+            Assert.True(LobbySaveRules.IsGameGeneratedSaveName("Autosave_Timed_3"));
+        }
+
+        [Fact]
         public void IsProtectedFromOverwrite_TheScenarioSlot_AlwaysIsEvenInACoopCampaign()
         {
             // M9's WriteScenario deletes and rewrites this directory on every

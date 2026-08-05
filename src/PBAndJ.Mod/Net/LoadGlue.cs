@@ -30,7 +30,7 @@ namespace PBAndJ.Mod.Net
         /// <summary>
         /// Starts the load. Null if it began, or the outcome if it could not.
         /// </summary>
-        internal static LoadOutcome? Begin(string? saveKey, int selectionVersion)
+        internal static LoadOutcome? Begin(string? saveKey, int selectionVersion, string? expectedDigest)
         {
             if (string.IsNullOrEmpty(saveKey))
             {
@@ -53,10 +53,24 @@ namespace PBAndJ.Mod.Net
 
                 // 2. Is it the same one? Same name, different contents is a
                 //    campaign that would silently diverge from everyone else's.
+                //    This used to compute the digest and then never compare it —
+                //    the comment claimed a check the code did not make. The
+                //    comparison is the whole point: without it "have I got it"
+                //    means only "is there a directory with that name".
                 var digest = SaveCatalogueGlue.Digest(saveKey);
                 if (digest == null)
                 {
                     Debug.LogWarning("[pb-and-j] could not read '" + saveKey + "' to check it");
+                    return LoadOutcome.Unavailable;
+                }
+                if (!string.IsNullOrEmpty(expectedDigest)
+                    && !string.Equals(digest, expectedDigest, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Unavailable rather than Refused: as far as the lobby is
+                    // concerned we do not have the save it agreed on. M11e's
+                    // transfer is what fixes it, and it keys off exactly this.
+                    Debug.LogWarning("[pb-and-j] '" + saveKey + "' is " + digest
+                        + " here but the lobby agreed on " + expectedDigest);
                     return LoadOutcome.Unavailable;
                 }
 
