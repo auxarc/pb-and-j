@@ -541,7 +541,7 @@ namespace PBAndJ.Core.Tests.Net
             FrameEncoder.Encode(PbjMessageCodec.Encode(message));
 
         /// <summary>Drives a real client runtime from Welcome to a delivered save.</summary>
-        private RecordingLog RunTransferThroughRuntime()
+        private RecordingLog RunTransferThroughRuntime(ScenarioPayload? payload = null)
         {
             var log = new RecordingLog();
             var mailbox = new PbjMailbox(64);
@@ -552,7 +552,7 @@ namespace PBAndJ.Core.Tests.Net
             mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId, Frame(new WelcomeMessage(
                 PbjProtocol.Version, "7f3a91", 1, "host", new[] { new PeerInfo(0, "host") }, 0, "tok"))));
             mailbox.Post(new PeerBytesEvent(
-                ClientSession.HostConnectionId, Frame(Delivery(Save()))));
+                ClientSession.HostConnectionId, Frame(Delivery(payload ?? Save()))));
             runtime.Pump(0);
             return log;
         }
@@ -565,6 +565,23 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Single(bridge.WrittenScenarios);
             Assert.Equal(2, bridge.WrittenScenarios[0].Files.Count);
             Assert.True(log.Contains("run pbj.combat-load"));
+        }
+
+        /// <remarks>
+        /// Found on a running two-party session (2026-08-07): a client receiving
+        /// the lobby's CAMPAIGN save was told to "run pbj.combat-load to enter
+        /// it". That command loads M9's combat scenario slot — following the
+        /// instruction inside a co-op campaign would drop a combat scenario on
+        /// top of it. The campaign case needs no manual step at all: M11d's
+        /// synchronised load enters it for everyone once the lobby agrees.
+        /// </remarks>
+        [Fact]
+        public void Runtime_OnACampaignWrite_DoesNotSendThePlayerToLoadACombatScenario()
+        {
+            var log = RunTransferThroughRuntime(Save("pbj_campaign"));
+
+            Assert.False(log.Contains("pbj.combat-load"));
+            Assert.True(log.Contains("the lobby will load it"));
         }
 
         [Fact]
