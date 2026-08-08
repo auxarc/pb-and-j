@@ -24,16 +24,35 @@ The line runs through the out-of-combat game, not around it:
 | Everything else out of combat — mech customisation, loadouts, pilot assignment, salvage, repairs | **All players, concurrently** |
 | Combat | All players, under the existing turn barrier |
 
-This is deliberate and it is the cheap half of the problem. The overworld runs a *continuous* clock
-rather than the combat turn barrier, and "who moved the base" and "who spent the last of the alloy"
-are conflict problems with no good silent resolution. Keeping the map host-driven removes both. What
-survives is the part that makes co-op feel like co-op: between fights everyone kits out their own
-machines at the same time.
+Keeping the map host-driven removes the "who moved the base" conflict. What survives is the part that
+makes co-op feel like co-op: between fights everyone kits out their own machines at the same time.
 
-**Consequence to design for early:** concurrent management still needs an ownership rule. Two players
-editing the same mech, or spending from one shared resource pool, is the same class of conflict the
-map avoids. The likely answer is the one combat already uses — per-unit ownership, host validates —
-but it is unproven and it is the first real design question this direction raises.
+> ⚠️ **Two claims that used to be in this section were measured and found wrong on 2026-08-07.**
+> See `docs/notes/overworld-recon.md` for the evidence. They are corrected below and left visible
+> because both were built on and both would have shaped M12 in the wrong direction.
+
+**Corrected: the overworld clock is NOT continuous.** This section justified the host-only map by
+saying it was. It is not: `OverworldTimeUtility.RefreshTimeScale` derives `simulationTimeScale` from
+`overworld.isBaseMoving`, so **the campaign clock advances only while the base is travelling or a
+time skip is running** — measured as 60 consecutive samples frozen at the same `simulationTime` while
+idle, and confirmed at save level (three idle minutes changed nothing but wall-clock counters). The
+host-only map is still the right call, on the "who moved the base" ground alone. The continuous-clock
+reason was never real.
+
+**Corrected: per-unit ownership is NOT sufficient for concurrent management.** This section predicted
+"the likely answer is the one combat already uses — per-unit ownership, host validates". Measured on
+two machines: **the shared parts inventory lives on the mobile base entity**, and equipping moves an
+item out of it, so a loadout edit is never confined to a unit. Two players editing *different* mechs
+both claimed the same physical weapon (serial 2249) and equipped it on different machines, with
+neither aware. Per-unit ownership partitions the `Units/` files correctly — the conflict simply is
+not there. **M12 needs a claim protocol over the shared inventory, not a replication protocol**, and
+a client's management UI must be able to show a refused claim.
+
+**A third thing this section never anticipated:** generated contracts are rolled **per machine after
+the load** (the transferred save contains none), and they diverge wholesale — different `areaKey`,
+`biomeKey` and spawn points across 50–87% of each file. Two machines therefore disagree about what
+mission a map marker *is*, which would build different combat scenarios from the same selection.
+Mission generation has to be host-authoritative or resynced.
 
 ## Save storage
 
@@ -239,14 +258,33 @@ The lesson stands even though the answer improved: two careful readings of the s
 with each other, and the second was only trusted because the probe checked it. Reading harder is not
 the fix for a wrong reading.
 
-## Open questions
+## Open questions — answered 2026-08-07 except where noted
 
-1. **Ownership under concurrent management.** Per-unit like combat, or something coarser? What
-   happens to a shared resource pool?
-2. **Campaign save size**, measured, and whether the existing transfer path carries it.
-3. **What the client does while the host is on the tactical map.** A blocked screen is honest but
-   dull; the management UI staying live is more interesting and is the point of the split.
-4. **When the campaign save is written back**, and by whom. Only the host holds the authoritative
-   copy, so clients need re-sync at some cadence — plausibly the same handoff as entering combat.
-5. **Whether the game's management UI can be driven at all outside its normal flow**, which is a
-   decompile question and therefore one to answer by probe, not by reading.
+Evidence for all of these is in `docs/notes/overworld-recon.md`, measured on two real game instances
+running the same campaign.
+
+1. **Ownership under concurrent management.** ✅ **Answered, and not as predicted.** Per-unit
+   ownership is *necessary but not sufficient*: `Units/` partitions cleanly, but the shared parts
+   inventory lives on the mobile base and every equip mutates it. Two players editing different
+   mechs double-claimed one item on the first attempt. **A claim protocol over the shared pool is
+   required**, and a refused claim must be visible in the client's UI. The remaining *design*
+   decision is claim granularity — per item serial, or a coarser lease on the whole inventory.
+2. **Campaign save size.** ✅ **Answered.** 24–71 KB; the campaign used here transferred as
+   **62,076 bytes** in two files, byte-for-byte, between two real games, well inside the existing
+   path. No chunking needed.
+3. **What the client does while the host is on the tactical map.** ✅ **Answered, with a constraint
+   the question did not anticipate.** The client can watch: an external write to the base position
+   renders with the client's own clock stopped — but **only in game state `overworld`**, because the
+   bridge that feeds the renderer (`OverworldRangeSystem`) does not run in `basecrawler`, where the
+   management screens live. So "full UI access *and* watch the host drive" is not two states at
+   once; it is **catch-up on returning to the map**, which works because the position is already
+   correct by then. A blocked screen is not needed.
+4. **When the campaign save is written back**, and by whom. ⏳ **Still a design decision, but now an
+   informed one.** Everything that diverges between two machines is 5 files of 47, all carried by
+   the existing transfer — so a post-load resync closes the whole gap with no per-entity protocol.
+   Cadence remains to be chosen.
+5. **Whether the game's management UI can be driven outside its normal flow.** ⏳ **Partially
+   answered.** `basecrawler` is enterable with a session live and the clock stopped, every relevant
+   view singleton exists from the main menu onward, and loadout edits complete and serialise. What
+   has not been tested is driving that UI *from outside its own flow* — every edit so far was made
+   by a human clicking.
