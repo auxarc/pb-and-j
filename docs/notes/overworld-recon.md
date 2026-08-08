@@ -354,8 +354,15 @@ local success that is later reversed.
    scenario setup from a per-process counter, so identity depends on both machines creating the same
    items in the same order. The host should assign the identity clients refer to.
 3. **Unselected items are destroyed** (`destroyWithoutSelection: true`, `EquipmentUtility.cs:1844`),
-   so a player who never confirms — or who drops mid-screen — forfeits their pool. Decide whether an
-   absent player's pool is redistributed or falls to the host; silence here destroys loot.
+   so a player who never confirms — or who drops mid-screen — forfeits their pool.
+   **⭐ DECIDED (user, 2026-08-07), and it is a principle rather than an answer: the system never
+   decides loot on a player's behalf.** Not forfeit, not redistribute, not auto-recover to the base,
+   not host-decides. **Always roll back to a point where the humans still choose** — the session
+   combat autosave below is that point. If the resolved-window save works, they resume into the
+   salvage screen; if only the per-turn save works, they replay the last turn. Either costs time and
+   neither costs the decision.
+   **How to apply:** any time a co-op design reaches "what should the system do with the thing nobody
+   claimed", the answer is to preserve the moment, not to resolve it.
 4. **Splitting has a remainder — DECIDED (user, 2026-08-07): discard it.** `budget / N`, integer
    division, leftover dropped. Nobody argues about who gets the odd point, and the sum of pools is
    then strictly ≤ the total, which keeps the vanilla `costTotal <= budget` check at commit working
