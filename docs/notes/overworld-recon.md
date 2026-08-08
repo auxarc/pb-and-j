@@ -356,8 +356,10 @@ local success that is later reversed.
 3. **Unselected items are destroyed** (`destroyWithoutSelection: true`, `EquipmentUtility.cs:1844`),
    so a player who never confirms — or who drops mid-screen — forfeits their pool. Decide whether an
    absent player's pool is redistributed or falls to the host; silence here destroys loot.
-4. **Splitting has a remainder.** `budget / N` needs a stated rule. Sum of pools must not exceed the
-   total, or the vanilla `costTotal <= budget` check at commit stops being the safety net it is.
+4. **Splitting has a remainder — DECIDED (user, 2026-08-07): discard it.** `budget / N`, integer
+   division, leftover dropped. Nobody argues about who gets the odd point, and the sum of pools is
+   then strictly ≤ the total, which keeps the vanilla `costTotal <= budget` check at commit working
+   as the safety net rather than something the split can push past.
 
 ---
 
