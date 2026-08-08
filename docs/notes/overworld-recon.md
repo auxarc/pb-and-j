@@ -275,6 +275,90 @@ client: serial 2249 -> pb_mech_02 (Guardian-9)
 different-unit case did not already show, which is the point: **the worst outcome came from the
 configuration the design assumed was safe.**
 
+---
+
+## ✅ Gear ownership by custom tag — the mechanism exists and is already persisted
+
+Evaluated 2026-08-07 after the double-claim above, on the user's suggestion of extending "assigned
+units" to "assigned gear". **The idea is sound and the game already carries the field for it.**
+
+- **`customTags` is a free-form `HashSet<string>` per equipment item**, mutable at runtime
+  (`EquipmentEntity.ReplaceCustomTags`) and **round-tripped through the save**:
+  `DataHelperSaveSerialization.cs:1315-1321` writes it, `DataManagerSave.cs:2744-2746` restores it.
+  Measured: all 28 items in a real base inventory carry the field.
+- **Writing to it is safe.** Two lookalike APIs read *different* components —
+  `IsPartTaggedAs` reads `part.tagCache.tags` (static, blueprint-derived: the `type_damageable`
+  family the game branches on constantly), while `IsPartUsingCustomTag` reads `part.customTags.tags`.
+  ⚠️ **The custom namespace is not dead** — `CombatDamageSystem.cs:428,549` checks `flag_no_damage`
+  and `flag_no_loss`. A `pbj_`-prefixed tag is inert everywhere; an unprefixed one might not be.
+- **⭐ Ownership would ride the save.** Because tags serialise, an assignment made by the host
+  reaches every client through the transfer M11e already performs — **no new message type, no side
+  table keyed by item, and it survives the post-load resync for free.**
+- ⏳ **Verified by reading, not by running.** The write → serialise → restore path was traced
+  end-to-end in the decompile; no probe was run (judged not worth the effort, 2026-08-07). If tags
+  ever appear not to survive a round trip, this is the untested link.
+
+### Identity: `serial` is sound for existing items and unsound for new ones
+
+Serials are unique (28/28 in a real inventory) and monotonic, and every restored item calls
+`AdjustPartSerial` on load (`UnitUtilities.cs:2234`), pushing the counter above everything loaded.
+
+**But the counter is derived from the loaded save, so two machines holding the same save hold the
+same counter** — and the next item each creates gets *the same serial for a different object*
+(`DataHelperStats.GetNextPartSerial` is a bare `serialPartLast++`). So:
+
+- items that came from the shared save → serial is a safe key;
+- items minted after the split → serial is **not** a safe key.
+
+Salvage mints items. This is the same conclusion the design below reaches from the UI side, arrived
+at from the data.
+
+## The salvage design (user, 2026-08-07) — and why the game supports it
+
+**The design:** at end of mission the salvage budget is split into **equal pools, one per present
+player**. Everyone picks their own items from the shared list, spending only their own pool. **Every
+change is broadcast live, and items another player has taken are shown as `reserved`.** Nobody
+leaves the screen until **all players confirm** their selections.
+
+Every part of that maps onto something the game already does:
+
+| The design needs | The game provides |
+|---|---|
+| a divisible pool | `salvageBudgetLast`, a single `int` (`CIViewOverworldDebriefing.cs:2123-2208`) |
+| a running spend check | `salvageCostValid = salvageCostTotal <= salvageBudgetLast` (`:2368`) |
+| per-item selection state | a `SalvageSelection` component per entity, carrying `dismantle` (`EquipmentUtility.cs:1657-1662`) |
+| per-item price | `GetSalvageCost(entity, dismantle, costMultiplier)` (`:1660`) |
+| one commit point | `EquipmentUtility.ProcessSalvageSelections(host, inventory, budget, victory)` (`:1805`), called once from `:2825` |
+
+So a change to broadcast is small (item identity + `dismantle` + owner), the merge is a union of
+per-entity components, and the host commits once over the merged set.
+
+**It is also the third barrier in this codebase, not a new pattern.** `TurnBarrier` and
+`LobbyBarrier` already encode "everyone must agree", and the traps are recorded: a *departing peer
+must not silently satisfy it* (`HostSession:1066-1071`), and the trigger must be an **edge, not a
+level** (M11d invariant 1). A `SalvageBarrier` inherits both.
+
+**Why `reserved` matters more than it looks.** It converts a refusal into something shown *before*
+the fact. The two worst bugs this project has had are the same disease — M10c's connect screen where
+silent success was indistinguishable from silent failure, and the double-claim measured above where
+both machines believed they had the weapon. A reserved marker means a client never gets an optimistic
+local success that is later reversed.
+
+### Cautions to carry into the design
+
+1. **⚠️ The contract divergence is a prerequisite, not a parallel problem.** The budget derives from
+   `dataLinkPointPreset.data.combatProc.salvageBudget` — the *mission*. Two machines that disagree
+   about what the mission is will compute different budgets and split different pools. Fix generation
+   authority first.
+2. **⚠️ Do not key the wire protocol on `serial` for battlefield items.** They are minted during
+   scenario setup from a per-process counter, so identity depends on both machines creating the same
+   items in the same order. The host should assign the identity clients refer to.
+3. **Unselected items are destroyed** (`destroyWithoutSelection: true`, `EquipmentUtility.cs:1844`),
+   so a player who never confirms — or who drops mid-screen — forfeits their pool. Decide whether an
+   absent player's pool is redistributed or falls to the host; silence here destroys loot.
+4. **Splitting has a remainder.** `budget / N` needs a stated rule. Sum of pools must not exceed the
+   total, or the vanilla `costTotal <= budget` check at commit stops being the safety net it is.
+
 ## ⏳ Still unrun — do not treat as answered
 
 - **Whether the management UI can actually be driven (measurement 5) — PARTIAL, and the first
