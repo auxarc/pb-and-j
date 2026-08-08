@@ -505,10 +505,21 @@ namespace PBAndJ.Core.Net
                 + " but the bytes digest to " + Describe(actual);
         }
 
+        /// <remarks>
+        /// Two callers, two different truths. M9's scenario slot really does
+        /// need a manual load — nothing else enters it. A lobby's campaign save
+        /// needs no step at all: M11d loads it on every machine the moment the
+        /// lobby agrees. Telling a player in a co-op campaign to run
+        /// pbj.combat-load would have them drop a combat scenario on top of it.
+        /// Observed on a running two-party session, 2026-08-07.
+        /// </remarks>
         public static string ScenarioWritten(string? saveName)
         {
-            return Prefix + "scenario written to '" + Describe(saveName)
-                + "' — run pbj.combat-load to enter it";
+            var manual = string.Equals(saveName, LobbySaveNames.ScenarioSlot, StringComparison.Ordinal);
+            return Prefix + (manual ? "scenario written to '" : "save written to '") + Describe(saveName)
+                + (manual
+                    ? "' — run pbj.combat-load to enter it"
+                    : "' — the lobby will load it when everyone is ready");
         }
 
         public static string ScenarioWriteFailed(string? saveName)
