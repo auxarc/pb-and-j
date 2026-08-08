@@ -359,6 +359,57 @@ local success that is later reversed.
 4. **Splitting has a remainder.** `budget / N` needs a stated rule. Sum of pools must not exceed the
    total, or the vanilla `costTotal <= budget` check at commit stops being the safety net it is.
 
+---
+
+## Session-owned combat autosaves — the disconnect floor (design, user 2026-08-07)
+
+**The design:** the *session* writes automatic saves during combat — never surfaced to players,
+never in any picker — so a true disconnect loses as little as possible. Two variants, and they do
+different jobs rather than being first choice and fallback:
+
+**(b) A rolling per-turn save. The robustness floor, and it needs no new permission.**
+`CanSave(playerFacingSave)` only blocks combat saves when
+`playerFacingSave && inCombat && !DataShortcuts.debug.allowCombatSaves` — and **this mod already
+sets `allowCombatSaves = true`** at load (`SaveLoadGlue.EnableCombatSaves`), while `CombatSave()`
+calls `CanSave(false)`, skipping the check entirely. M3a already round-tripped a mid-combat save with
+an action-snapshot fidelity diff. The one hard rule is `if (flag && combat.Simulating) return false;`
+— **save at the planning phase, never during execution**, which is a turn boundary the session
+already owns.
+
+**(a) A save inside the resolved window. What makes salvage re-entry work.**
+`ScenarioUtility.cs:3586` calls `ReplaceCombatResolved(outcome, early)` — the outcome itself, so
+victory/defeat is detectable while still in the combat view. The window closes at
+`CIViewCombatEnd.cs:353` and `OverworldCombatCompletionSystem.cs:25`.
+⚠️ `CanSave()` refuses on `persistent.hasCombatResolved` (`DataManagerSave.cs:132`), so this needs a
+direct `DoSave` bypassing it. The game sanctions the pattern — `DataHelperLoading.OnAfterCombatSaveUnchecked`
+does exactly that — but **whether a save taken in that window restores into the debriefing is
+unknown**, and vanilla never restores to that state (its own after-combat autosave waits for
+`IsOverworldIdle`, i.e. until *after* salvage). This is the one probe worth running here.
+
+**Why both.** (b) alone does not give salvage re-entry: its newest save is the final *planning*
+phase, so resuming replays the last turn rather than landing in salvage. (b) is the floor — worst
+case one replayed turn — and it makes (a) optional rather than load-bearing.
+
+### Requirements that fall out of "the session owns them"
+
+1. **⚠️ Reserved names, excluded from the lobby catalogue.** This is the M11b trap exactly:
+   `pbj_combat_test` was already inside the namespace the catalogue claimed, and would have been
+   offered as a selectable campaign while `WriteScenario` rewrote it. A rolling combat save is the
+   same shape and worse — it is rewritten *every turn*. `LobbySaveNames` should own these names as it
+   owns `ScenarioSlot`, and `LobbyCatalogue` must exclude them.
+   **Reserve the unprefixed form**, per M11b: reserving the prefixed one is an arm nothing can reach
+   (`AlreadyPrefixed` fires first), which breaks the 100% gate while letting the colliding input
+   through.
+2. **One fixed name per slot**, so the rolling save self-overwrites. M11d's write-side namespace
+   prefixes it automatically inside a co-op campaign.
+3. **The host can order the write at a shared turn boundary**, so every machine's save is from the
+   same turn rather than from whenever each reached one independently.
+4. **Performance:** `DoSave` zips. Pass `previewScreenshot: false` and keep it off the critical path
+   — this runs every turn, and a hitch at the planning phase is where players would notice it.
+5. **Accepted tradeoff (user, 2026-08-07):** surfacing a resume only on disconnect is open to abuse —
+   a player could drop deliberately to reroll. Judged a fair price for robustness against accidents.
+   **Recorded so it is not re-litigated**, not as an oversight.
+
 ## ⏳ Still unrun — do not treat as answered
 
 - **Whether the management UI can actually be driven (measurement 5) — PARTIAL, and the first
