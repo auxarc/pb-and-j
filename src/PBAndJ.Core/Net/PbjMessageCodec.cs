@@ -254,6 +254,17 @@ namespace PBAndJ.Core.Net
                     writer.WriteSingle(basePosition.Z);
                     break;
 
+                case CombatOfferMessage combatOffer:
+                    writer.WriteString(combatOffer.SaveName);
+                    writer.WriteString(combatOffer.Digest);
+                    writer.WriteInt32(combatOffer.Turn);
+                    break;
+
+                case CombatEnteredMessage combatEntered:
+                    writer.WriteInt32(combatEntered.Turn);
+                    writer.WriteInt32((int)combatEntered.Outcome);
+                    break;
+
                 case PingMessage ping:
                     writer.WriteInt32(ping.Nonce);
                     break;
@@ -489,6 +500,16 @@ namespace PBAndJ.Core.Net
 
                 case PbjMessageType.BasePosition:
                     return new BasePositionMessage(reader.ReadSingle(), reader.ReadSingle());
+
+                case PbjMessageType.CombatOffer:
+                    return new CombatOfferMessage(
+                        reader.ReadString(), reader.ReadString(), reader.ReadInt32());
+
+                // Unvalidated cast, like LobbyLoaded's above: an unknown outcome
+                // from a peer becomes a value nothing matches, which the barrier
+                // treats as a failure rather than throwing.
+                case PbjMessageType.CombatEntered:
+                    return new CombatEnteredMessage(reader.ReadInt32(), (LoadOutcome)reader.ReadInt32());
 
                 case PbjMessageType.Ping:
                     return new PingMessage(reader.ReadInt32());

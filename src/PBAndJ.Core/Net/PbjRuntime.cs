@@ -290,6 +290,18 @@ namespace PBAndJ.Core.Net
                     bridge.StopKeyframes();
                     break;
 
+                case BeginCombatLoadEffect beginCombat:
+                    // Same effect-out, event-back shape as BeginLoad: a load that
+                    // started reports through the glue's callback later, and one
+                    // that could not start reports now, so the host is not left
+                    // waiting out a timeout for an answer this machine already has.
+                {
+                    var refusal = bridge.BeginCombatLoad(beginCombat.SaveName, beginCombat.Digest);
+                    return refusal == null
+                        ? NoEffects
+                        : session.Handle(new CombatLoadFinishedEvent(refusal.Value));
+                }
+
                 case MirrorBaseEffect mirror:
                     // Nothing comes back, for the same reason keyframes report
                     // nothing: the mirror is presentation and makes no

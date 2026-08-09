@@ -895,5 +895,63 @@ namespace PBAndJ.Core.Tests.Net
                 System.Globalization.CultureInfo.CurrentCulture = prev;
             }
         }
-    }
+    
+        // --- shipping the fight (M12b) ---
+
+        [Fact]
+        public void CombatShipping_SaysTheFightIsBeingWritten()
+        {
+            Assert.Contains("writing the fight", NetLog.CombatShipping(3, 2));
+        }
+
+        [Fact]
+        public void CombatShipFailed_SaysTheHostIsCarryingOnAlone()
+        {
+            Assert.Contains("starting alone", NetLog.CombatShipFailed());
+        }
+
+        [Fact]
+        public void CombatNobodyToWaitFor_IsSaidOutLoudRatherThanSkippedSilently()
+        {
+            // "The fight was never offered" and "everyone arrived instantly" look
+            // identical in a log otherwise.
+            Assert.Contains("nobody else is here", NetLog.CombatNobodyToWaitFor());
+        }
+
+        [Fact]
+        public void CombatOffered_NamesTheFightAndItsDigest()
+        {
+            var line = NetLog.CombatOffered("pbj_combat_test", "d1", 2);
+            Assert.Contains("pbj_combat_test", line);
+            Assert.Contains("d1", line);
+        }
+
+        [Fact]
+        public void CombatOffered_WithNothingToName_StillReads()
+        {
+            Assert.Contains("?", NetLog.CombatOffered(null, null, 1));
+        }
+
+        [Fact]
+        public void CombatEntryReported_NamesWhoAndHow()
+        {
+            Assert.Contains("ally", NetLog.CombatEntryReported(1, "ally", LoadOutcome.Loaded));
+            Assert.Contains("?", NetLog.CombatEntryReported(1, null, LoadOutcome.Refused));
+        }
+
+        [Fact]
+        public void CombatEntryTimedOut_SaysTheFightStartsWithoutThem()
+        {
+            Assert.Contains("starting without it", NetLog.CombatEntryTimedOut(2));
+        }
+
+        [Fact]
+        public void CombatAlreadyHeld_AndFetching_NameTheFight()
+        {
+            Assert.Contains("pbj_combat_test", NetLog.CombatAlreadyHeld("pbj_combat_test"));
+            Assert.Contains("pbj_combat_test", NetLog.CombatFetching("pbj_combat_test"));
+            Assert.Contains("?", NetLog.CombatAlreadyHeld(null));
+            Assert.Contains("?", NetLog.CombatFetching(null));
+        }
+}
 }

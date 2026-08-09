@@ -6,7 +6,7 @@ namespace PBAndJ.Core.Net
     /// Discriminator byte at the head of every encoded message.
     /// </summary>
     /// <remarks>
-    /// Values are assigned once and never reused. 28+ are unallocated.
+    /// Values are assigned once and never reused. 31+ are unallocated.
     /// </remarks>
     public enum PbjMessageType : byte
     {
@@ -40,6 +40,12 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Where the host's mobile base is. Host to client only.</summary>
         BasePosition = 28,
+
+        /// <summary>The host's fight is on disk and ready to be fetched.</summary>
+        CombatOffer = 29,
+
+        /// <summary>A client reporting whether it made it into the fight.</summary>
+        CombatEntered = 30,
     }
 
     /// <summary>
@@ -900,6 +906,73 @@ namespace PBAndJ.Core.Net
         public float X { get; }
 
         public float Z { get; }
+    }
+
+    /// <summary>
+    /// The host has entered a fight, written it to the scenario slot, and is
+    /// waiting for everyone to join it. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately <b>not</b> M9's <see cref="ScenarioOfferMessage"/>, even
+    /// though it says almost the same thing. A client refuses a scenario offer
+    /// outright while <c>HostIsFighting</c> — a guard built on purpose, since
+    /// pulling a save mid-fight is normally nonsense — and this is the one flow
+    /// where the host being in a fight is precisely the reason to pull. Relaxing
+    /// that guard would have re-opened it for every other case; a second message
+    /// leaves it exactly as strict as it was.
+    /// <para>
+    /// The digest is not decoration. The slot is rewritten at the start of every
+    /// mission, so a client may be holding the <em>previous</em> fight under the
+    /// same name, and the name alone cannot tell the two apart.
+    /// </para>
+    /// </remarks>
+    public sealed class CombatOfferMessage : PbjMessage
+    {
+        public CombatOfferMessage(string? saveName, string? digest, int turn)
+        {
+            SaveName = saveName;
+            Digest = digest;
+            Turn = turn;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.CombatOffer;
+
+        public string? SaveName { get; }
+
+        public string? Digest { get; }
+
+        /// <summary>The turn the fight starts on, for the barrier to quote back.</summary>
+        public int Turn { get; }
+    }
+
+    /// <summary>
+    /// A client saying whether it got into the host's fight. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Carries the turn it is answering about, for the same reason every other
+    /// barrier report in this protocol carries its version: a report for a fight
+    /// that has since been abandoned must be recognisable as stale rather than
+    /// counted toward the current one.
+    /// <para>
+    /// <see cref="LoadOutcome.Unavailable"/> is the interesting value. The load
+    /// callback is success-only, so a client that never answers is the host's
+    /// timeout to notice — but a client that knows it cannot join says so
+    /// immediately, which is the difference between a two-minute wait and none.
+    /// </para>
+    /// </remarks>
+    public sealed class CombatEnteredMessage : PbjMessage
+    {
+        public CombatEnteredMessage(int turn, LoadOutcome outcome)
+        {
+            Turn = turn;
+            Outcome = outcome;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.CombatEntered;
+
+        public int Turn { get; }
+
+        public LoadOutcome Outcome { get; }
     }
 
     /// <summary>Graceful goodbye from either side.</summary>

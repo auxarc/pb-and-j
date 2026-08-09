@@ -324,6 +324,10 @@ namespace PBAndJ.Core.Net
                     HandleLoadFinished(loadFinished, effects);
                     break;
 
+                case CombatLoadFinishedEvent combatLoaded:
+                    HandleCombatLoadFinished(combatLoaded, effects);
+                    break;
+
                 case LocalLobbyUnreadyEvent:
                     HandleLocalLobbyUnready(effects);
                     break;
@@ -483,6 +487,14 @@ namespace PBAndJ.Core.Net
 
                 case KeyframesMessage keyframes:
                     HandleKeyframes(keyframes, effects);
+                    break;
+
+                // M12b. The fight the host just entered. Handled here rather
+                // than through M9's ScenarioOffer because that path refuses
+                // everything while HostIsFighting -- which is exactly when this
+                // arrives, and is why a second message type exists.
+                case CombatOfferMessage combatOffer:
+                    HandleCombatOffer(combatOffer, effects);
                     break;
 
                 // M12a. No state guard, deliberately: the mirror is presentation,
@@ -907,6 +919,49 @@ namespace PBAndJ.Core.Net
         /// rule M11a set for lobby-ready.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// The fight the host is in, offered so we can join it. M12b.
+        /// </summary>
+        /// <remarks>
+        /// Same shape as M9's scenario offer — hold it already, or ask for the
+        /// bytes — with one difference that matters: the name alone is not
+        /// enough. The scenario slot is rewritten at the start of every mission,
+        /// so a client can be holding the <em>previous</em> fight under exactly
+        /// this name, and only the digest tells them apart.
+        /// </remarks>
+        private void HandleCombatOffer(CombatOfferMessage offer, List<PbjEffect> effects)
+        {
+            pendingCombatSave = offer.SaveName;
+            pendingCombatDigest = offer.Digest;
+            pendingCombatTurn = offer.Turn;
+
+            var local = bridge.ReadScenario(offer.SaveName);
+            if (local.Inspect() == ScenarioRejection.None && local.Matches(offer.Digest))
+            {
+                effects.Add(new LogEffect(NetLog.CombatAlreadyHeld(offer.SaveName)));
+                effects.Add(new BeginCombatLoadEffect(offer.SaveName, offer.Digest));
+                return;
+            }
+
+            effects.Add(new LogEffect(NetLog.CombatFetching(offer.SaveName)));
+            effects.Add(new SendEffect(HostConnectionId, new ScenarioRequestMessage(offer.SaveName)));
+        }
+
+        /// <summary>
+        /// Reports how the attempt to join the fight went. M12b.
+        /// </summary>
+        /// <remarks>
+        /// Sent even when it failed, and that is the point: the load callback is
+        /// success-only, so a client that says nothing costs the host its whole
+        /// timeout. A client that knows it could not join says so at once and the
+        /// fight starts without it.
+        /// </remarks>
+        private void HandleCombatLoadFinished(CombatLoadFinishedEvent finished, List<PbjEffect> effects)
+        {
+            effects.Add(new SendEffect(
+                HostConnectionId, new CombatEnteredMessage(pendingCombatTurn, finished.Outcome)));
+        }
+
         private void HandleScenarioOffer(ScenarioOfferMessage offer, List<PbjEffect> effects)
         {
             if (HostIsFighting)
@@ -955,6 +1010,11 @@ namespace PBAndJ.Core.Net
         /// recoverable annoyance into a lost game.
         /// </para>
         /// </remarks>
+        /// <summary>The fight we were last offered, so arriving bytes can be matched to it.</summary>
+        private string? pendingCombatSave;
+        private string? pendingCombatDigest;
+        private int pendingCombatTurn = -1;
+
         private void HandleScenario(ScenarioMessage scenario, List<PbjEffect> effects)
         {
             var payload = new ScenarioPayload(scenario.SaveName, scenario.Files);
@@ -975,6 +1035,16 @@ namespace PBAndJ.Core.Net
             effects.Add(new LogEffect(NetLog.ScenarioReceived(
                 scenario.SaveName, payload.Files.Count, payload.TotalBytes)));
             effects.Add(new WriteScenarioEffect(payload));
+
+            // If these are the bytes of a fight we were offered, load them. M9
+            // deliberately never auto-loads a scenario -- it tells the player to
+            // do it -- but a combat entry is not a suggestion: the host is
+            // already in the battle and waiting at a barrier for us.
+            if (pendingCombatSave != null
+                && string.Equals(pendingCombatSave, scenario.SaveName, StringComparison.Ordinal))
+            {
+                effects.Add(new BeginCombatLoadEffect(pendingCombatSave, pendingCombatDigest));
+            }
         }
 
         private void HandleSnapshotApplied(SnapshotAppliedEvent applied, List<PbjEffect> effects)

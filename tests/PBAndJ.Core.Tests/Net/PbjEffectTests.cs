@@ -180,6 +180,15 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void BeginCombatLoad_CarriesTheFightAndItsDigest()
+        {
+            var effect = new BeginCombatLoadEffect("pbj_combat_test", "d1");
+            Assert.Equal(PbjEffectKind.BeginCombatLoad, effect.Kind);
+            Assert.Equal("pbj_combat_test", effect.SaveName);
+            Assert.Equal("d1", effect.Digest);
+        }
+
+        [Fact]
         public void MirrorBase_CarriesTwoCoordinatesAndNoHeight()
         {
             // The absent Y is the design, not an omission: the receiving machine

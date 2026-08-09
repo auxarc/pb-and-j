@@ -468,6 +468,21 @@ namespace PBAndJ.Mod.Net
             }
         }
 
+        /// <summary>
+        /// Loads the fight the host shipped. M12b.
+        /// </summary>
+        /// <remarks>
+        /// Routed to <see cref="LoadGlue.BeginCombat"/> rather than
+        /// <see cref="LoadGlue.Begin"/>, and the difference is not cosmetic: the
+        /// campaign path checks the lobby catalogue, which deliberately excludes
+        /// the scenario slot, so a fight sent through it returns Unavailable
+        /// every single time and reads as a missing save rather than as wiring.
+        /// </remarks>
+        public LoadOutcome? BeginCombatLoad(string? saveName, string? digest)
+        {
+            return LoadGlue.BeginCombat(saveName, digest);
+        }
+
         public void ClearLocalOrders()
         {
             if (!InCombat)

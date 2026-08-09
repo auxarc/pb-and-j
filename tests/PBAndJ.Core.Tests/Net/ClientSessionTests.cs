@@ -46,6 +46,136 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(-37.25f, mirror.Z);
         }
 
+        // --- joining the host's fight (M12b) ---
+
+        [Fact]
+        public void CombatOffer_WhenWeAlreadyHoldTheFight_LoadsItWithoutFetching()
+        {
+            var client = Welcomed();
+            bridge.Scenario = CombatPayload();
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId,
+                new CombatOfferMessage("pbj_combat_test", bridge.Scenario.Digest, 4));
+
+            var load = Single<BeginCombatLoadEffect>(effects);
+            Assert.Equal("pbj_combat_test", load.SaveName);
+            Assert.Empty(All<SendEffect>(effects));
+        }
+
+        [Fact]
+        public void CombatOffer_WhenWeHoldADifferentFight_FetchesItRatherThanLoadingStaleBytes()
+        {
+            // The scenario slot is rewritten at the start of every mission, so
+            // holding the PREVIOUS fight under this exact name is the expected
+            // case, not an exotic one. Only the digest tells them apart.
+            var client = Welcomed();
+            bridge.Scenario = CombatPayload();
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId,
+                new CombatOfferMessage("pbj_combat_test", "a-different-fight", 4));
+
+            Assert.Empty(All<BeginCombatLoadEffect>(effects));
+            Assert.IsType<ScenarioRequestMessage>(Single<SendEffect>(effects).Message);
+        }
+
+        [Fact]
+        public void CombatOffer_IsNotRefusedTheWayAScenarioOfferWouldBe()
+        {
+            // The whole reason this is a separate message type. A client with
+            // HostIsFighting set declines every ScenarioOffer -- which is exactly
+            // the state it is in when the host ships a fight, so reusing M9's
+            // offer here would deadlock the entry every single time.
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, new CombatStartMessage(4));
+            Assert.True(client.HostIsFighting);
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId,
+                new CombatOfferMessage("pbj_combat_test", "d1", 4));
+
+            Assert.NotEmpty(effects);
+        }
+
+        [Fact]
+        public void CombatBytes_ArriveAndAreLoadedRatherThanJustWritten()
+        {
+            // M9 deliberately never auto-loads a received scenario -- it tells the
+            // player to. A combat entry is not a suggestion: the host is already
+            // in the battle, waiting at a barrier.
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId,
+                new CombatOfferMessage("pbj_combat_test", "d1", 4));
+            var payload = CombatPayload();
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId,
+                new ScenarioMessage("pbj_combat_test", payload.Digest, payload.Files));
+
+            Assert.Single(All<WriteScenarioEffect>(effects));
+            Assert.Single(All<BeginCombatLoadEffect>(effects));
+        }
+
+        [Fact]
+        public void ScenarioBytes_ForSomethingWeWereNotOfferedAsAFight_AreOnlyWritten()
+        {
+            var client = Welcomed();
+            var payload = CombatPayload();
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId,
+                new ScenarioMessage("pbj_combat_test", payload.Digest, payload.Files));
+
+            Assert.Single(All<WriteScenarioEffect>(effects));
+            Assert.Empty(All<BeginCombatLoadEffect>(effects));
+        }
+
+        [Theory]
+        [InlineData(LoadOutcome.Loaded)]
+        [InlineData(LoadOutcome.Refused)]
+        [InlineData(LoadOutcome.Unavailable)]
+        public void CombatLoadFinished_ReportsInEvenWhenItFailed(LoadOutcome outcome)
+        {
+            // Reported on failure too, and that is the point: the game's load
+            // callback is success-only, so a client that says nothing costs the
+            // host its entire timeout before the fight can start.
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId,
+                new CombatOfferMessage("pbj_combat_test", "d1", 4));
+
+            var effects = client.Handle(new CombatLoadFinishedEvent(outcome));
+
+            var report = Assert.IsType<CombatEnteredMessage>(Single<SendEffect>(effects).Message);
+            Assert.Equal(4, report.Turn);
+            Assert.Equal(outcome, report.Outcome);
+        }
+
+        /// <summary>A well-formed fight payload, as the host would ship one.</summary>
+        [Fact]
+        public void ScenarioBytes_ForADifferentSaveThanTheFightWeWereOffered_AreOnlyWritten()
+        {
+            // A campaign transfer can land while a combat offer is outstanding.
+            // Loading it because something was pending would drop the player into
+            // the wrong save entirely.
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId,
+                new CombatOfferMessage(LobbySaveNames.ScenarioSlot, "d1", 4));
+            var other = new ScenarioPayload("pbj_campaign", new[]
+            {
+                new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 7, 7 }),
+                new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 8 }),
+            });
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId,
+                new ScenarioMessage("pbj_campaign", other.Digest, other.Files));
+
+            Assert.Single(All<WriteScenarioEffect>(effects));
+            Assert.Empty(All<BeginCombatLoadEffect>(effects));
+        }
+
+        private static ScenarioPayload CombatPayload() =>
+            new ScenarioPayload(LobbySaveNames.ScenarioSlot, new[]
+            {
+                new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 1, 2, 3, 4 }),
+                new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 5 }),
+            });
+
         [Fact]
         public void BasePosition_IsMirroredWhateverTheSessionState()
         {

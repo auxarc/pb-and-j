@@ -230,6 +230,27 @@ namespace PBAndJ.Peer
         }
 
         /// <summary>
+        /// The fight the harness was told to load, and what it answered.
+        /// </summary>
+        /// <remarks>
+        /// The harness has no game to load into, so it reports success without
+        /// doing anything: the selftest's interest is that the offer crossed, the
+        /// bytes were fetched and the report came back, which is the whole
+        /// handshake Core owns. Set <see cref="CombatLoadRefusal"/> to drive the
+        /// failure arm instead.
+        /// </remarks>
+        public (string? SaveName, string? Digest)? CombatLoadRequested { get; private set; }
+
+        /// <summary>What to answer, or null to report that the load started.</summary>
+        public LoadOutcome? CombatLoadRefusal { get; set; }
+
+        public LoadOutcome? BeginCombatLoad(string? saveName, string? digest)
+        {
+            CombatLoadRequested = (saveName, digest);
+            return CombatLoadRefusal ?? LoadOutcome.Loaded;
+        }
+
+        /// <summary>
         /// The combat save this peer "holds". In-memory rather than on disk: the
         /// harness must be runnable anywhere, and the protocol does not care
         /// where the bytes came from.

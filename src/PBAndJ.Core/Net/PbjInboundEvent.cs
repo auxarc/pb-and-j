@@ -30,6 +30,8 @@ namespace PBAndJ.Core.Net
         LocalLobbyUnready = 107,
         LoadFinished = 108,
         LocalBasePosition = 109,
+        LocalCombatReady = 110,
+        CombatLoadFinished = 111,
     }
 
     /// <summary>
@@ -312,6 +314,54 @@ namespace PBAndJ.Core.Net
         public float X { get; }
 
         public float Z { get; }
+    }
+
+    /// <summary>
+    /// The host's glue has written the fight to the scenario slot. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Posted from glue rather than derived in Core, because the moment is a
+    /// property of the game rather than of the protocol: <c>CanSave(false)</c>
+    /// refuses while <c>combat.isScenarioIntroInProgress</c>, and that flag is
+    /// set in the same tick that makes <c>InCombat</c> true. The glue polls until
+    /// the write is permitted and then says so once. A Core guard for the same
+    /// thing would be a branch nothing could reach, which the coverage gate turns
+    /// into a build failure.
+    /// </remarks>
+    public sealed class LocalCombatReadyEvent : PbjInboundEvent
+    {
+        public LocalCombatReadyEvent(string? saveName, string? digest)
+        {
+            SaveName = saveName;
+            Digest = digest;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalCombatReady;
+
+        public string? SaveName { get; }
+
+        public string? Digest { get; }
+    }
+
+    /// <summary>
+    /// This machine finished trying to load the host's fight. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="LoadFinishedEvent"/>, which answers the lobby's
+    /// campaign load. Sharing one event would mean a client in a fight and a
+    /// client in the lobby reporting through the same channel, and the session
+    /// would have to guess which question was being answered.
+    /// </remarks>
+    public sealed class CombatLoadFinishedEvent : PbjInboundEvent
+    {
+        public CombatLoadFinishedEvent(LoadOutcome outcome)
+        {
+            Outcome = outcome;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.CombatLoadFinished;
+
+        public LoadOutcome Outcome { get; }
     }
 
     /// <summary>The local player agreed to load the selected save.</summary>

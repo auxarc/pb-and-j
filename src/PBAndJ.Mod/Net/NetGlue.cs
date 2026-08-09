@@ -537,6 +537,14 @@ namespace PBAndJ.Mod.Net
         internal static void PostLoadFinished(int selectionVersion, LoadOutcome outcome) =>
             runtime?.Post(new LoadFinishedEvent(selectionVersion, outcome));
 
+        /// <summary>The fight is written and can be offered. Host only. M12b.</summary>
+        internal static void PostLocalCombatReady(string? saveName, string? digest) =>
+            runtime?.Post(new LocalCombatReadyEvent(saveName, digest));
+
+        /// <summary>Reports how joining the host's fight went. Client only. M12b.</summary>
+        internal static void PostCombatLoadFinished(LoadOutcome outcome) =>
+            runtime?.Post(new CombatLoadFinishedEvent(outcome));
+
         /// <summary>Tells the session where our base is, for M12a's mirror.</summary>
         internal static void PostLocalBasePosition(float x, float z) =>
             runtime?.Post(new LocalBasePositionEvent(x, z));

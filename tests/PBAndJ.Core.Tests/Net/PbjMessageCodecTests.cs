@@ -44,6 +44,8 @@ namespace PBAndJ.Core.Tests.Net
             yield return new object[] { new CombatStartMessage(0) };
             yield return new object[] { new CombatEndMessage() };
             yield return new object[] { new BasePositionMessage(1024.5f, -37.25f) };
+            yield return new object[] { new CombatOfferMessage("pbj_combat_test", "d1", 4) };
+            yield return new object[] { new CombatEnteredMessage(4, LoadOutcome.Loaded) };
             yield return new object[] { new PingMessage(1) };
             yield return new object[] { new PongMessage(1) };
             yield return new object[] { new SnapshotMessage(3, "3f9c1a04", new[] { Snapshot("unit_a") }) };
@@ -135,6 +137,29 @@ namespace PBAndJ.Core.Tests.Net
                 0x01, 0x00, 0x00, 0x00, 0x64,       // passphrase "d"
             };
             Assert.Equal(expected, bytes);
+        }
+
+        [Theory]
+        [InlineData(LoadOutcome.Loaded)]
+        [InlineData(LoadOutcome.Refused)]
+        [InlineData(LoadOutcome.Unavailable)]
+        public void RoundTrip_CombatEntered_PreservesTheTurnAndOutcome(LoadOutcome outcome)
+        {
+            var m = RoundTrip(new CombatEnteredMessage(4, outcome));
+            Assert.Equal(4, m.Turn);
+            Assert.Equal(outcome, m.Outcome);
+        }
+
+        [Fact]
+        public void RoundTrip_CombatOffer_PreservesTheFightsIdentity()
+        {
+            // The digest is the load-bearing field: the scenario slot is
+            // rewritten every mission, so the name alone cannot tell this fight
+            // from the last one.
+            var m = RoundTrip(new CombatOfferMessage("pbj_combat_test", "d1", 4));
+            Assert.Equal("pbj_combat_test", m.SaveName);
+            Assert.Equal("d1", m.Digest);
+            Assert.Equal(4, m.Turn);
         }
 
         [Fact]

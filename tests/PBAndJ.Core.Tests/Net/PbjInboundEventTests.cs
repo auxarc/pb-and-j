@@ -206,6 +206,26 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void LocalCombatReady_CarriesTheFightOnDisk()
+        {
+            var evt = new LocalCombatReadyEvent("pbj_combat_test", "d1");
+            Assert.Equal(PbjInboundEventKind.LocalCombatReady, evt.Kind);
+            Assert.Equal("pbj_combat_test", evt.SaveName);
+            Assert.Equal("d1", evt.Digest);
+        }
+
+        [Theory]
+        [InlineData(LoadOutcome.Loaded)]
+        [InlineData(LoadOutcome.Refused)]
+        [InlineData(LoadOutcome.Unavailable)]
+        public void CombatLoadFinished_CarriesTheOutcome(LoadOutcome outcome)
+        {
+            var evt = new CombatLoadFinishedEvent(outcome);
+            Assert.Equal(PbjInboundEventKind.CombatLoadFinished, evt.Kind);
+            Assert.Equal(outcome, evt.Outcome);
+        }
+
+        [Fact]
         public void LocalBasePosition_CarriesWhereTheBaseIs()
         {
             var evt = new LocalBasePositionEvent(1024.5f, -37.25f);

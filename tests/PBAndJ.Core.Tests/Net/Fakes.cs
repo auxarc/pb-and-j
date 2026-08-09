@@ -98,6 +98,19 @@ namespace PBAndJ.Core.Tests.Net
 
         public void MirrorBase(float x, float z) => Mirrored.Add((x, z));
 
+        /// <summary>What a combat load should answer, or null to "it started".</summary>
+        public LoadOutcome? CombatLoadRefusal { get; set; }
+
+        /// <summary>Every combat load asked for, in order.</summary>
+        public List<(string? SaveName, string? Digest)> CombatLoads { get; } =
+            new List<(string?, string?)>();
+
+        public LoadOutcome? BeginCombatLoad(string? saveName, string? digest)
+        {
+            CombatLoads.Add((saveName, digest));
+            return CombatLoadRefusal;
+        }
+
         /// <summary>The local combat save, as ReadScenario hands it back.</summary>
         public ScenarioPayload Scenario { get; set; } = ScenarioPayload.None;
 

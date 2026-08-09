@@ -20,8 +20,44 @@ namespace PBAndJ.Core.Net
         WriteScenario = 12,
         BeginLoad = 13,
         MirrorBase = 14,
+        BeginCombatLoad = 15,
 
-        // 15+ unallocated.
+        // 16+ unallocated.
+    }
+
+    /// <summary>
+    /// Load the fight the host shipped us. Clients only. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="BeginLoadEffect"/> because the glue behind it
+    /// must skip the lobby catalogue check — <c>LobbyCatalogue.IsOffered</c>
+    /// excludes the scenario slot on purpose, so routing a fight through the
+    /// campaign path returns <c>Unavailable</c> every time, silently, and reads
+    /// as a save problem rather than a wiring one.
+    /// <para>
+    /// It also must not mark the campaign as entered: the slot is a fight, not
+    /// the campaign, and claiming it would point the save-namespace redirect at
+    /// a directory that is rewritten at the start of the next mission.
+    /// </para>
+    /// </remarks>
+    public sealed class BeginCombatLoadEffect : PbjEffect
+    {
+        public BeginCombatLoadEffect(string? saveName, string? digest)
+        {
+            SaveName = saveName;
+            Digest = digest;
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.BeginCombatLoad;
+
+        public string? SaveName { get; }
+
+        /// <summary>
+        /// What the host says the fight hashes to. Checked before loading,
+        /// because the slot is rewritten every mission and this machine may be
+        /// holding the previous one under the same name.
+        /// </summary>
+        public string? Digest { get; }
     }
 
     /// <summary>

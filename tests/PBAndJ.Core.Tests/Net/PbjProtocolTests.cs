@@ -172,12 +172,12 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void ModVersion_MatchesTheShippedModMetadata()
         {
-            // 0.10.0 for M12a: BasePosition = 28 is a new message type, and a
-            // host broadcasts it on every base move, so a 0.9.0 peer admitted by
-            // a matching version string would fault on the first one. The version
-            // moves in the same commit as the surface for exactly this reason —
-            // waiting for release day is how 0.5.0 came to mean two builds.
-            Assert.Equal("0.10.0", PbjProtocol.ModVersion);
+            // 0.11.0 for M12b: CombatOffer and CombatEntered are new types, and
+            // the meaning of an existing one moved — CombatStart now arrives only
+            // once everyone is in the fight. A 0.10.0 peer would both fault on the
+            // offer and hold a different idea of what CombatStart promises, which
+            // is the more dangerous half: a fault is loud, a changed meaning is not.
+            Assert.Equal("0.11.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

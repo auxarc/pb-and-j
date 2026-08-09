@@ -213,6 +213,25 @@ namespace PBAndJ.Core.Net
         void MirrorBase(float x, float z);
 
         /// <summary>
+        /// Loads the fight the host shipped. Clients only. M12b.
+        /// </summary>
+        /// <returns>
+        /// Null if the load began, or the outcome if it could not start.
+        /// </returns>
+        /// <remarks>
+        /// Distinct from <see cref="BeginLoad"/> because the implementation must
+        /// skip the lobby catalogue -- which excludes the scenario slot on
+        /// purpose -- and must not mark the campaign as entered. See
+        /// <see cref="BeginCombatLoadEffect"/> for why both matter.
+        /// <para>
+        /// The digest is checked before loading rather than after: the slot is
+        /// rewritten every mission, so holding the wrong fight under the right
+        /// name is the expected failure, not an exotic one.
+        /// </para>
+        /// </remarks>
+        LoadOutcome? BeginCombatLoad(string? saveName, string? digest);
+
+        /// <summary>
         /// The save this machine holds under <paramref name="saveKey"/>, or
         /// <see cref="ScenarioPayload.None"/> if there is none.
         /// </summary>
