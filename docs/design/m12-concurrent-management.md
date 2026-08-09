@@ -1,8 +1,15 @@
 # M12 — concurrent management, planned from measurements
 
-Status: **designed 2026-08-07, nothing built.** Every claim here rests on
-`docs/notes/overworld-recon.md`, which records two real game instances running one campaign. Where
-this document and `campaign-coop.md` disagree, this one is newer and measured.
+Status: **designed 2026-08-07, adversarially reviewed and corrected 2026-08-08, nothing built.**
+Every claim here rests on `docs/notes/overworld-recon.md`, which records two real game instances
+running one campaign. Where this document and `campaign-coop.md` disagree, this one is newer and
+measured.
+
+**The 2026-08-08 review refuted six premises of the first draft**, every refutation confirmed by
+hand against the decompile before being written here. The corrections are inline and marked
+**⚠️ REVIEW**. The shape of the error was the same one this project has now paid for six times: a
+path traced correctly and then generalised one step too far — parts to "equipment", a movement
+funnel to "base control", one generation site to "generation".
 
 M11 ended the moment everyone was loaded into the same save. M12 is everything after that.
 
@@ -20,9 +27,10 @@ version:
 - **Per-unit ownership is not sufficient.** The shared parts inventory lives on the mobile base, so
   every equip mutates shared state. Two machines editing *different* mechs both claimed weapon
   serial 2249.
-- **Generated contracts are rolled per machine after the load** and diverge wholesale — different
-  `areaKey`, `biomeKey`, spawn points. Two players disagree about what a mission is.
-- Base control has a **single funnel**: `OverworldUtility.OrderMovementToPosition`.
+- **Generated contracts are rolled per machine** and diverge wholesale — different `areaKey`,
+  `biomeKey`, spawn points. Two players disagree about what a mission is.
+- Player *movement orders* have a **single funnel**: `OverworldUtility.OrderMovementToPosition`.
+  ⚠️ **REVIEW: base control does not.** See M12a.
 
 ## The principle this milestone is built on
 
@@ -43,12 +51,40 @@ silently reversed is the failure mode to design out.
 
 **Build:**
 
-- **Suppress base control on a client.** One Harmony prefix on
-  `OverworldUtility.OrderMovementToPosition` — observed to catch every player movement order, always
-  identifying the player base. Note it also restarts the clock from `simulationTimeScaleBackUp`, so
-  suppressing it suppresses both. The time-scale buttons need nothing: they route through
-  `RefreshTimeScale`, which derives from `isBaseMoving`, so they are already inert on a base that
-  cannot move. `CIViewOverworldRoot.ForceTimeScale` is the only bypass and is console-only.
+- **Suppress movement orders on a client.** One Harmony prefix on
+  `OverworldUtility.OrderMovementToPosition` — three call sites, all player input
+  (`CIViewOverworldNav.cs:1060`, `CIViewOverworldProcess.cs:854`,
+  `OverworldMoveToOrderSystem.cs:128`), always identifying the player base. It also restarts the
+  clock from `simulationTimeScaleBackUp`, so suppressing it suppresses both.
+
+- ⚠️ **REVIEW: that prefix is necessary and nowhere near sufficient.** The first draft said the base
+  had one control funnel and the time-scale buttons were already inert. Both were refuted:
+
+  - **A simulation lock bypasses `RefreshTimeScale` entirely.** `OverworldTimeUtility.RefreshTimeScale`
+    only acts `if (IsGameState("overworld") && !overworld.hasSimulationLockCountdown)` — so the
+    `isBaseMoving` derivation is skipped in exactly the case that matters, and
+    `OverworldSimulationLockActivationSystem` writes the time scale directly instead. **A client can
+    advance its own clock without ever issuing a move order.**
+  - **Camp is a clock-advancing button on the client's screen.** `CIViewOverworldRoster.OnCampInitiated`
+    (`:1022`) spends supplies and calls `ReplaceSimulationLockCountdown(f, duration, "camp")`.
+  - **Retreat both locks the clock and moves the base**, outside the funnel:
+    `OverworldUtility.TryRetreatToResupplyBase` starts a `"resupply"` lock and a
+    `SimulationLockReposition`.
+  - **Sim-lock exit re-rolls every generated contract** — `CIViewOverworldRoster.cs:1829-1830` wipes
+    `world_gen_visited_` memory and calls `RefreshStandaloneGeneratorEncounters()`. One client camp
+    click destroys whatever M12b synchronised. This is the single sharpest coupling the first draft
+    missed: **M12a's suppression list is load-bearing for M12b**, not merely cosmetic.
+  - **Other base-position writers exist** and the mirror must tolerate them rather than assume they
+    cannot fire: post-combat `OffsetFromInteraction`, and the event functions
+    `TeleportBaseToPosition` / `TeleportBaseToEntityName`.
+  - `CIViewOverworldRoot.ForceTimeScale` is **not** console-only — `DataHelperLoading.cs:391`,
+    `CIViewOverworldPointList.cs:193` and `CIViewPauseRoot.cs:566` all call it. All three pass `0f`,
+    so it is materially harmless, but the sentence was wrong and the tutorial path sets `3f`.
+
+  **So the client suppression set is: movement orders, camp, retreat, and mission engagement** (see
+  M12b — the client's own interaction dialog can call `EnterCombat` once the mirror puts its base in
+  range). Each is a refusal that must be **visible before the fact** per the principle — a greyed
+  button with a reason, not a silently swallowed click.
 - **Mirror the host's base**, using the game's own teleport recipe
   (`ConsoleCommandsOverworld.cs:893-901`, and `pbj.ow-mirror` is a working implementation):
   `StopMovement`, `ReplacePosition`, **`ReplacePositionTarget`** (not optional — `OverworldMovementSystem`
@@ -56,12 +92,33 @@ silently reversed is the failure mode to design out.
   `ReplaceSimulationTime(same value)` to kick the reactive collectors while paused.
 - **Send X and Z only.** The receiving machine's ground-snap finds its own Y — observed correcting
   33.3 to 13.3.
-- **Accept catch-up, do not fight it.** In `basecrawler` the write lands but does not render. That is
-  correct and needs no workaround: the position is already right when the player returns to the map.
+- **Accept catch-up, do not fight it.** In `basecrawler` the write lands but does not render. The
+  position should be right when the player returns to the map. ⚠️ **REVIEW: that is an inference,
+  not a measurement.** `GameController.PopUntilState` calls `DeactivateReactiveSystemsSelective()`,
+  and Entitas' `Collector.Deactivate` **clears collected entities** — so a kick issued in
+  `basecrawler` is discarded before it can execute, and catch-up depends instead on
+  `OverworldBootstrap.Enable`'s own self-replace firing on state re-entry. The mechanism exists and
+  is plausible; it is also exactly the one-entry-point-traced shape that has burned this project
+  repeatedly. **Measure it on the rig before building on it.**
+
+- **Never write the host's `simulationTime` value.** The mirror re-replaces the *same* value
+  deliberately. Verified at the Entitas source level (`vendor/Managed/Entitas.dll`): `replaceComponent`
+  raises `OnComponentReplaced` with no value-equality short-circuit, so a same-value replace does
+  collect — and ~20 overworld systems collect on `SimulationTime`. With an unchanged value they run
+  at dt = 0. Writing the host's value would run all twenty with a real dt. This is the overworld
+  cousin of the standing "never advance `combat.simulationTime` on a client" rule.
 
 **Verification:** two instances, client in the workshop while the host drives, client returns to the
-map and the base is in the right place; client cannot issue a move order; client's clock stays at
-scale 0 throughout.
+map and the base is in the right place; client cannot issue a move order, camp, retreat, or engage a
+site; client's clock stays at scale 0 throughout — **including across a host time skip and a client
+attempt to camp.**
+
+**⚠️ Known incomplete, by design.** Only the base is mirrored. Patrol positions, site
+spawn/destruction, detection state and contract expirations are all `SimulationTime`-reactive and
+advance on the host while the frozen client's do not. The recon's "nothing drifts when nobody acts"
+was measured with nobody acting; M12a's whole premise is that the host acts. First visible failure:
+the host's target expires or a site is destroyed and the client still displays it. M12a is the
+passenger seat, not world sync — name the gap rather than discovering it in play.
 
 ---
 
@@ -72,17 +129,46 @@ build a different combat scenario on each machine — breaking the combat path M
 The salvage budget also derives from the mission preset, so **every pool in M12d is wrong until this
 is fixed.**
 
-**What is known:** the transferred save contains **no** contract entities (44 files in, 47 after
-load). They are generated once, post-load, per machine, and do not regenerate while idle.
+**What was measured:** the transferred save contained **no** contract entities (44 files in, 47 after
+load), and nothing regenerated while idle.
 
-**Approach, in preference order:** make generation host-only and replicate the result; or, failing
-that, resync the three contract files through the existing transfer. Everything that diverges between
-two machines is 5 files of 47, all inside the 62 KB the transfer already moves reliably — so a
-post-load resync is a legitimate whole-problem answer, not a hack.
+⚠️ **REVIEW: "generated once, post-load" is a property of that one save, not a law.**
+`OverworldUtility.RefreshStandaloneGeneratorEncounters()` has four call sites, and the post-load one
+is the least important:
+
+1. `DataHelperLoading.cs:408` — post-load, but **only inside the
+   `!IsFeatureUnlocked("feature_base_standalone_ops_unlocked")` branch** (`:398-410`). The 44→47
+   measurement records that save's flag state. A save written after the flag is set already carries
+   the `scenario_gen_contract_*.yaml` files and will not re-roll them at load.
+2. `OverworldPointUtility.cs:451` — **after every combat**, on each machine, with unsynced
+   `UnityEngine.Random`. Both machines re-roll divergently after every co-op mission.
+3. `CIViewOverworldRoster.cs:1830` — after every sim-lock exit (camp, retreat, skip). See M12a.
+4. `ConsoleCommandsBasecrawler.cs:100` — console.
+
+**So a post-load file resync is not a whole-problem answer.** Divergence is re-introduced mid-session
+at sites 2 and 3, where a resync means save + transfer + synchronised reload — unacceptable after
+every fight. **Generation must be host-only and the result replicated, with the client's refresh
+suppressed at all three runtime sites.** One fact makes replication tractable: generator hosts are
+**name-addressed** (`"scenario_gen_" + key`, looked up through `IDUtility.GetOverworldEntity(name)`),
+so identity survives the machine boundary; the component set to replicate is `CombatGeneratorKey`,
+`CombatUnitLevel`, `FactionBranch`, `CombatEscalationLevel` plus the whole `UpdateCombatDescription`
+output. **Considered and rejected:** syncing an RNG seed and letting both machines roll — it makes
+every future divergence a silent one, and the project's own rule is that a refusal must be visible.
 
 **Also unbuilt and belonging here:** what a client experiences when the host starts a mission.
-`ScenarioSetupUtility.EnterCombat` is observable and fires in state `overworld`. M11's turn barrier
-assumes combat has already begun; nothing covers the transition into it.
+⚠️ **REVIEW: `ScenarioSetupUtility.EnterCombat` is the wrong hook.** It is the *briefing-open*, not
+the commit:
+
+- It hard-guards `gameControllerStateCurrent.s != "overworld"` and returns with a `LogWarning`, so a
+  client in the workshop — the exact case M12a endorses — **cannot replay it**.
+- On success it pushes `basecrawler` and opens `CIViewBaseBriefingV2`. The real commit is
+  `OnLoadingInitiate`, fired from briefing confirm (`CIViewBaseBriefingV2.cs:1955,2019,2052`), and
+  there is a **cancel path back out** (`ScenarioUtility.cs:683-689`) which also moves the player base.
+  Propagating on `EnterCombat` commits the client to a mission the host can still abandon.
+- Scenarios with `coreProc.loadImmediately` skip the briefing entirely — **two transition shapes**.
+- Its only non-console caller is the event function `OverworldEntityCombat.cs:15`, i.e. the site
+  interaction dialog — **which the client's own UI can also trigger** once the mirror puts its base
+  in range. Hence engagement suppression in M12a.
 
 ---
 
@@ -93,20 +179,58 @@ floor that makes M12d's rollback principle affordable.
 
 - **Rolling per-turn save.** Needs no new permission: the mod already sets `allowCombatSaves = true`
   at load and `CombatSave()` calls `CanSave(false)`. M3a already round-tripped a mid-combat save.
-  **Save at the planning phase, never while `combat.Simulating`.** The host should order the write at
-  a shared turn boundary so every machine's save is from the same turn.
+  **Save at the planning phase, never while `combat.Simulating`** — the `Simulating` refusal
+  (`DataManagerSave.cs:128`) is state-gated, not player-gated, so planning passes.
+
+  **⭐ The exact moment, found by using it (user, 2026-08-08): snapshot at Execute, after the turn
+  barrier fills, before `Simulating` flips.** A combat save **keeps the queued orders for the turn**,
+  so that save reloads into a fully-planned turn you can simply press Execute on again. That makes
+  the checkpoint *re-executable* rather than merely restorable, and it is the natural shared instant
+  — the barrier has just agreed, so every machine is provably at the same point with the same plan.
+  It is also the last instant at which `CanSave` still says yes.
+
+  **⚠️ The one thing it does not give you: the same outcome.** The sim is non-deterministic — that is
+  why lockstep was ruled out on day one — so replaying the turn produces *an* outcome, not *the*
+  outcome. For M12d's rollback that is acceptable and arguably correct under the principle: the
+  humans get the decision back, they do not get a guaranteed rerun of the dice. Record it so nobody
+  later reads "guaranteed good to reload" as "guaranteed to reproduce". The save is fully
+  synchronous on the main thread, so there is no mid-write window. The host should order the write at
+  a shared turn boundary so every machine's save is from the same turn. Two corrections from review:
+  the two permission facts are **causally redundant** (`allowCombatSaves` is only consulted when
+  `playerFacingSave` is true, `:107`, which the `CanSave(false)` path never sets); and `CanSave(false)`
+  **also refuses while the debriefing is entered** (`:144`) — no saving from inside the salvage screen,
+  which matters for M12d's rollback floor.
 - **Resolved-window save.** `ScenarioUtility.cs:3586` sets `CombatResolved(outcome, early)`; the
-  window closes at `CIViewCombatEnd.cs:353` / `OverworldCombatCompletionSystem.cs:25`. `CanSave()`
-  refuses on `hasCombatResolved`, so this needs a direct `DoSave` — the pattern the game itself uses
-  in `OnAfterCombatSaveUnchecked`. **⏳ Probe first:** vanilla never restores to that state, so
-  whether it restores into the debriefing is genuinely unknown. The per-turn save makes this optional
-  rather than load-bearing.
+  window closes at `CIViewCombatEnd.cs:353` / `OverworldCombatCompletionSystem.cs:25`.
+  ⚠️ **REVIEW: mostly answered from the decompile, and the answer is no.**
+  - **`CombatResolved` is not serialized** — zero hits in `DataHelperSaveSerialization.cs`. A save
+    taken in that window records game state `combat` with the outcome dropped on the floor. It
+    **cannot** restore into the debriefing unless the mod carries the outcome itself.
+  - **`OnAfterCombatSaveUnchecked` has no callers in code** (`DataHelperLoading.cs:502` is the
+    definition and the only hit), so it is not the sanctioned pattern the draft claimed; if it runs at
+    all it is invoked by name from scenario config, in `overworld`, *after* salvage has committed.
+  - **`DoSave`'s first line is `Co.StopAndClear(ref delayedSaveCoroutine)`** (`DataManagerSave.cs:426`),
+    so a mod `DoSave` here **cancels vanilla's pending `autosave_after_combat`**.
+
+  **Decision: drop the resolved-window save.** The per-turn save already made it optional; the review
+  turned it from unknown-cost into known-negative. Rollback lands on the last planning-phase save and
+  replays the turn.
 - **⚠️ Reserved names, excluded from the lobby catalogue.** The M11b trap exactly: `pbj_combat_test`
   sat inside the namespace the catalogue claimed and would have been offered as a campaign while
   being rewritten underneath. A save rewritten every turn is the same shape and worse. `LobbySaveNames`
   owns the names; **reserve the unprefixed form** or the guarding arm is unreachable and breaks the
   100% gate while letting the colliding input through.
-- `previewScreenshot: false`, off the critical path — this runs every turn.
+- `previewScreenshot: false`, off the critical path — this runs every turn. ⚠️ **REVIEW: the
+  screenshot is the small half of the cost.** Every write is synchronous on the main thread and does
+  a full `SaveFromECS`, ~47 YAML file writes, a whole-directory zip to temp plus copy-back, and then
+  **`RefreshSaveHeaders`, which re-enumerates and YAML-parses `metadata.yaml` for every save in both
+  the Normal and Internal folders** (`DataManagerSave.cs:551-556, 604-640`) — a cost that scales with
+  the player's lifetime save count, not with this save. Measure the stall on the rig before committing
+  to every turn; per-N-turns is the fallback.
+- **`DoSave` mutates two globals every write:** `SettingUtility.autoSaveTimer = 0` and
+  `DataManagerSave.saveName = <slot>` (`:433-434`). Anything reading "the current save name" — the
+  game's or ours — sees the rolling slot afterwards. Digest-safe, though: the zip excludes
+  `metadata.yaml`, so `DateTime.Now` stays out of content digests.
 - **Accepted tradeoff:** surfacing a resume only on disconnect invites deliberate drops. Judged a fair
   price for robustness against accidents. Recorded so it is not re-litigated.
 
@@ -114,42 +238,253 @@ floor that makes M12d's rollback principle affordable.
 
 ## M12d — assigned gear, and the salvage screen
 
-**Ownership rides the save.** `customTags` is a free-form `HashSet<string>` per equipment item,
-mutable at runtime and round-tripped through the save. So a `pbj_owner_<id>` tag set by the host
-reaches every client through the transfer M11e already performs — **no new message type, no side
-table.** ⚠️ Prefix with `pbj_`: the namespace is live, `CombatDamageSystem` reads `flag_no_damage`
-and `flag_no_loss`. ⏳ The round-trip is read-verified, not run-verified.
+**Ownership rides the save — for parts only.** `customTags` is a free-form `HashSet<string>`,
+mutable at runtime and round-tripped through the save: written at
+`DataHelperSaveSerialization.cs:1313-1321`, restored at `DataManagerSave.cs:2744-2746` (and the
+restore survives the version-regeneration branch). A `pbj_owner_<id>` tag on a **part** reaches every
+client through the transfer M11e already performs. ⚠️ Prefix with `pbj_`: the namespace is live,
+`CombatDamageSystem` reads `flag_no_damage` and `flag_no_loss`. Nothing clears or rebuilds tags, and
+every reader is a `Contains`, so an unknown tag is inert.
 
-**Identity:** `serial` is a sound key for items that came from the shared save and **unsound for
-anything minted afterwards** — the allocator is a per-process counter seeded from the save, so two
-machines holding the same save mint the same serial for different objects. Salvage mints items.
-**The host assigns the identity clients quote back.**
+✅ **MEASURED 2026-08-08, and the refutation holds: 606 subsystem tags in, 0 out.** `pbj.mg-tag`
+tagged **65 parts and 606 subsystems** in ECS; one save to `mod testing` and one load back, and the
+probe read **parts 65, subsystems 0**. It survived a game restart too — the next session's first
+probe read the same 65/0. This is no longer a decompile inference; it is a run.
+
+⚠️ **REVIEW — and this is the worst failure shape in the plan: `DataBlockSavedSubsystem` has no
+`customTags` field at all.** Its eight fields are `serial`, `blueprint`, `livery`, `destroyed`,
+`fused`, `salvageable`, `inventoryAdded`, `favorite` — no tags, and `CreateSavedSubsystem` never
+reads them. **A `pbj_owner_` tag on a subsystem works in ECS all session and is silently dropped by
+the next save — and the transfer to a client *is* a save.** Subsystems are a large share of the base
+inventory and of the salvage list. "No new message type, no side table" is true for parts and false
+for subsystems.
+
+**⭐ The domain shape, from the user 2026-08-08 and confirmed in the commit loops
+(`EquipmentUtility.cs:1837-1901`): a subsystem is either a guaranteed standalone drop or a rider on a
+part in the keep/scrap/skip list.** The code says it precisely:
+
+```
+foreach part in GetPartsInUnit(unit):
+    if part.isSalvageable:
+        ProcessSalvageOfEntity(part, 1f, ..., destroyWithoutSelection: false)
+        continue                                   // <-- riders follow the part
+    foreach subsystem in GetSubsystemsInPart(part):
+        if subsystem.isSalvageable: ProcessSalvageOfEntity(subsystem, 1f, ...)
+```
+
+- **Riders need no ownership of their own.** When the part is salvageable it is processed and that
+  `continue` skips its subsystems entirely — they are neither listed nor priced separately, they
+  simply follow the part's decision. So ownership *is* part ownership, stored in the tag that
+  provably round-trips. No extra machinery, and this is the common case.
+- **Standalone drops are the inventory loops** (`GetPartsInInventory` / `GetSubsystemsInInventory`,
+  `costMultiplier: 0f`, `transfer: true`, `destroyWithoutSelection: true`) — free, auto-selected at
+  creation, kept unless explicitly skipped. These are the loose subsystems that genuinely need
+  attribution, and **because they price at 0 they never touch the pool arithmetic.**
+- **One edge case worth naming:** a subsystem riding a part that is *not* salvageable becomes
+  individually selectable and priced at `1f`. Attribution still resolves through its parent part even
+  though that part cannot itself be claimed.
+
+**So the subsystem tag loss does not touch the salvage budget at all.** It touches who owns free
+drops and loose inventory items — a smaller and cheaper problem than the 606→0 number suggested.
+
+**The way through, in preference order — the identity survives even though the tag does not.**
+`DataBlockSavedSubsystem` persists `serial`, and the restore passes it straight back
+(`DataManagerSave.cs:1905` → `CreateSubsystemEntity(blueprint, livery, inventoryAdded, serial)`). So
+a subsystem is still *nameable* across the transfer; only the place to write the owner is missing.
+
+1. **Inheritance — subsystems take their parent part's owner.** A subsystem is either installed in a
+   part (`GetEntitiesWithSubsystemParentPart`) or loose in inventory. Installed ones need no storage
+   at all: the part already carries a tag that provably round-trips. This covers the large majority
+   and costs nothing.
+2. **A side table keyed by `(kind, serial)` for LOOSE inventory subsystems only.** Small, and it
+   rides the transfer we already perform. ✅ **MEASURED 2026-08-08: serials are stable across the
+   round trip, both kinds.** `pbj.mg-serials` before and after a save/load returned identical
+   fingerprints — parts `count 77 | min 1300 | max 2840 | sum 195248`, subsystems
+   `count 658 | min 445 | max 10011 | sum 4696955`. The side table is sound.
+
+   **That run also settled why the key needs the kind.** The two counters sit far apart but their
+   ranges **overlap**: parts span 1300–2840 while subsystems span 445–10011. Cross-kind collision is
+   not a theoretical consequence of two counters, it is the arithmetic of these two live ranges.
+3. **Scope ownership to parts and treat loose subsystems as shared** — acceptable only if measurement
+   shows loose subsystems are rare in practice.
+
+**Not an option: reusing a field that already persists.** `livery` is a persisted string on the saved
+subsystem and is the obvious place to smuggle an owner id. It drives the item's appearance, so
+writing to it corrupts what the player sees — the same class of mistake as the `customTags`
+namespace, but visible.
+
+**Scope note from the first live salvage screen:** it contained **zero** subsystems across 12 groups,
+so this may not touch the salvage path at all. It remains fully live for the base inventory, where
+the same probe counted 606.
+
+**Identity:** ⚠️ **REVIEW: `serial` alone is not a key.** There are **two independent counters** —
+`serialPartLast` and `serialSubsystemLast` (`DataHelperStats.cs:14-16`, `:200-210`) — both seeded
+from the save's maxima, so a part and a subsystem routinely hold the *same* serial, and the salvage
+list mixes both kinds. **The key is `(kind, serial)`.** It is also not stable across a round trip: a
+part whose `version < generationVersionExpected` is rebuilt by `CreatePartEntityFromPreset` with a
+**fresh** serial (`DataManagerSave.cs:2717-2725`). The rest of the draft's claim holds — the
+allocator is a per-process counter, so anything minted after the split collides across machines, and
+salvage mints items. **The host assigns the identity clients quote back.**
+
+**⚠️ REVIEW — there is no shared list to pick from.** Salvage rewards are generated *per machine*,
+post-combat, with `UnityEngine.Random`: `PrepareRewardsForSalvage` and its neighbours
+(`EquipmentUtility.cs:1381+`) call `GetRandomEntry`, `Random.Range`, `RollRandomQuality`. Two
+machines roll **different items, ratings and levels**.
+
+**✅ SOLVED, and by a mechanism the game already ships — `savedOutput`. Do not seed the RNG.** The
+chain, all read 2026-08-08:
+
+1. **The game pre-rolls the loot at scenario generation, not after combat.**
+   `ScenarioSetupUtility.UpdateCombatDescription` — which also takes a first-class **`scenarioSeed`**
+   parameter — ends by calling `GenerateRewardOutputs` for every reward group (`:368-375`), writing
+   concrete resources, parts (preset + level + rating) and subsystems (blueprint) into
+   `group.savedOutput`.
+2. **`savedOutput` rides the save.** The whole `CombatDescription` is cloned into the save through
+   YAML (`DataHelperSaveSerialization.cs:1219-1222`), and `CombatRewardGroupSavedOutput` is a plain
+   serialisable class hanging off it. **M11e's transfer already moves it — no new message type.**
+3. **Post-combat generation is skipped when it is present.** `EquipmentUtility.cs:1153-1156` routes
+   to `PrepareRewardsFromSavedOutput` instead of rolling.
+
+**So M12b subsumes this: replicate the contract and the loot comes with it.** One mechanism, both
+problems — which also removes the reason to treat M12d's reward set as separate work.
+
+**⚠️ The one gap: `savedOutput` carries no serial.** `CombatRewardSavedPart` is `{level, rating,
+preset}` and `CombatRewardSavedSubsystem` is `{blueprint}`, and `PrepareRewardsFromSavedOutput` calls
+`CreatePartEntityFromPreset(...)` / `CreateSubsystemEntity(blueprint)` **with no serial override**
+(`:1216, :1236`) — so each machine mints its own. Identical content in identical order from
+counters seeded by the same save *will* mint matching serials, but that is an alignment to verify,
+not to rely on: any other minting on one machine (a workshop craft) drifts the counters and every
+later serial disagrees. **Keep "the host assigns the identity clients quote back"** as the belt to
+this braces.
+
+**Considered and rejected: seeding `UnityEngine.Random`.** It is mechanically available —
+`Random.InitState`, and the game itself uses the capture/seed/restore idiom
+(`ActionProjectionSystem.cs:1047-1236`, `WeaponCustomizerSimple.cs:48`) — but `UnityEngine.Random` is
+process-global and shared with VFX, audio and every other system, so anything consuming a draw
+between the seed and the roll desynchronises it, and the *call sequence* must match too, which
+requires province level, faction branch and quality tables to already agree. It re-derives where
+`savedOutput` transports. Re-derivation fails **silently**, which is precisely the failure mode this
+milestone's principle exists to design out.
 
 **The salvage screen:** the budget splits into **equal pools, one per present player, remainder
-discarded** (integer division keeps the sum under the total, so the vanilla `costTotal <= budget`
-check at commit stays a real backstop). Everyone picks from the shared list, spending only their own
-pool. **Every change is broadcast, and another player's picks show as `reserved`** — a refusal before
-the fact. **Nobody leaves until all confirm.**
+discarded**. Everyone picks from the (replicated) shared list, spending only their own pool. **Every
+change is broadcast, and another player's picks show as `reserved`** — a refusal before the fact.
+**Nobody leaves until all confirm.**
 
-The game supplies each piece: `salvageBudgetLast` is one `int`; selection is a `SalvageSelection`
-component per entity carrying `dismantle`; price is `GetSalvageCost`; and there is a single commit
-funnel, `EquipmentUtility.ProcessSalvageSelections(host, inventory, budget, victory)`.
+⚠️ **REVIEW: the vanilla backstop the pool split was justified by does not exist.**
+`ProcessSalvageSelections` ends with a `Debug.LogWarning` — *"…letting the process continue…"*
+(`EquipmentUtility.cs:1903-1905`), not a refusal. The only enforcement is UI-side,
+`salvageCostValid = salvageCostTotal <= salvageBudgetLast` gating the finish button
+(`CIViewOverworldDebriefing.cs:2368-2370`). **Pool enforcement is 100% mod code**; the integer-division
+remainder is still worth keeping, but as tidiness, not as a safety net.
+
+⚠️ **REVIEW: the budget is not a stable function of the mission preset.** `salvageBudgetLast` is one
+`int`, but it is computed **once at screen open** (`CIViewOverworldDebriefing.cs:2111-2210`) from
+preset × difficulty multiplier + per-salvage-group offsets + base and per-surviving-unit
+`salvage_bonus` + world-memory modifiers — **two of which are consumable and removed as the screen
+opens**. Reopening the screen yields a different budget. So **the host computes the pool number once
+and broadcasts it**; machines must never derive it independently. M12b is necessary for this but not
+sufficient.
+
+⚠️ **REVIEW: `destroyWithoutSelection: true` does the opposite of what the draft assumed.** Every
+generated reward is auto-selected at creation (`ReplaceSalvageSelection(newDismantle: false)` at
+`EquipmentUtility.cs:1217, 1239, 1527, 1605`), and the flag is passed `true` only on the
+`costMultiplier: 0f` site-inventory calls (`:1844, :1862`) and `false` on the priced unit-mounted ones
+(`:1891, :1898`). So a player who never touches the screen **transfers their site loot for free**;
+the flag destroys only items whose selection was explicitly removed by the UI's skip. Unselected
+wreck parts are lost later via `FreeOrDestroyCombatParticipants`, a different mechanism. **"Silence
+destroys loot" is wrong.** The rollback principle still stands, but the real disconnect hazard is
+different and simpler: `FinishDebriefing` is click-driven, so **a machine that never clicks never
+commits at all.**
+
+**The commit is per-machine**, and the single funnel is real (one call site,
+`CIViewOverworldDebriefing.cs:2825`): each machine runs its own `SalvageFinish` over its own local
+entities, so the host cannot commit on everyone's behalf through it. The mod must merge selections
+and have every machine commit symmetrically — which means a satisfied `SalvageBarrier` has to drive
+each machine's debriefing from outside its own flow.
+
+✅ **MEASURED 2026-08-08 — the whole flow is drivable, end to end, with no reflection into a private
+method.** Driven entirely from the console on a live debriefing:
+
+| Step | Entry point | Result |
+| --- | --- | --- |
+| Select an item | `OnSalvageRecover/Scrap/Skip(entityID)`, public static | selection `<none>`→`True`, the **view's own** `salvageCostTotal` 0→5 |
+| Select a whole unit | `...Unit(unitID)`, public static | same, via the other redraw path |
+| Advance the stage | `OnStageNextExternal()`, public static | reached the game's own confirmation modal |
+| Commit | `buttonConfirm.callbackOnClick.Invoke()`, public `UICallback` | `Requesting province ownership refresh` → `Attempting to transfer salvage from generic_industry_1 (P-ID 22) to player base \| Last budget: 253 \| Victory: True`, both screens exited |
+
+The commit is gated behind `CIViewDialogConfirmation`, whose `callbackOnConfirm` **is** `SalvageFinish`
+(`OnSalvageFinish:2762`). `OnConfirm` is private, but the button's `callbackOnClick` is a plain
+public `UICallback` and `Invoke()` is public — so the last link needs no private access. **M12d is
+unblocked.**
+
+**Design consequence worth keeping:** that modal is a natural home for the barrier. "Nobody leaves
+until all confirm" can use the game's own confirmation dialog as the per-player confirm, with the
+barrier releasing the `Invoke()` on each machine once everyone has agreed.
+
+**Also outside the funnel:** `TransferStandaloneRewards` (`EquipmentUtility.cs:1735`, from
+`CIViewOverworldReward.cs:157`) is a second, budget-free transfer path for non-combat reward popups.
+Ownership tags must follow it too.
+
+**Two corrections from the first live salvage screen (2026-08-08, 12 groups, budget 253):**
+
+- **`costMultiplier` is not just 0 or 1.** The player's own recovered frame
+  (`workshop_utl_unit_frame_2`) priced at **0.4** while every enemy unit priced at 1.0. So pool
+  arithmetic must use each group's own multiplier, and "free site inventory" is not the only special
+  case. `GetSalvageCost` applies the multiplier only when `< 1f` and returns 0 when `<= 0f`.
+- **That screen's salvage list was parts-only — zero subsystems across all 12 groups.** So the
+  subsystem tag loss above, while real, may not bite the *salvage* path at all; it remains fully live
+  for the base inventory, where the same probe counted 606 subsystems. It also means this sample
+  could not exercise cross-kind serial collision (reported 0), so `(kind, serial)` stands on the
+  two-counter read, not on this measurement.
+- Scrap and recover are **separately priced** (`costDismantle*` vs `costTake*`, each with an
+  intact/damaged variant), so both move the budget — a scrap is not a free action.
+
+**What the game does supply, all confirmed:** `salvageBudgetLast` is one `int`; selection is a
+`SalvageSelection` component per entity carrying `dismantle`, and it is what the screen reads
+(`CIHelperEquipmentSelectorSalvage.cs:167-182`); price is `GetSalvageCost` — note site-inventory items
+are priced at **zero** (`costMultiplier: 0f` → `EquipmentUtility.cs:1622-1624`), so only unit-mounted
+salvage spends a pool at all; and the commit funnel
+`EquipmentUtility.ProcessSalvageSelections(host, inventory, budget, victory)` is genuinely the only
+one.
 
 **This is the third barrier in this codebase, not a new pattern.** `TurnBarrier` and `LobbyBarrier`
 already encode "everyone must agree", and a `SalvageBarrier` inherits their traps: a departing peer
 must not silently satisfy it, and the trigger must be an **edge, not a level**.
 
 **On a disconnect:** roll back per the principle. Never forfeit, never redistribute, never
-auto-recover — `destroyWithoutSelection: true` means silence destroys loot, and that is exactly the
-outcome the principle forbids.
+auto-recover. ⚠️ **REVIEW: the justification changes, the conclusion does not.** The concrete hazard
+is not that silence destroys loot — silence *transfers* free site loot and leaves priced salvage to a
+later, different mechanism. It is that `FinishDebriefing` is click-driven, so **a machine that never
+clicks never commits**, and the barrier's real failure mode is a stall. Rollback to M12c's last
+planning-phase save is what makes that stall survivable.
+
+**Divergence does not stop at the commit.** `FinishDebriefing` then runs `customExitBehaviour`
+functions, `ClearActionsAfterCombat`, `TryToDestroySite` and a province-ownership refresh, per machine
+(`CIViewOverworldDebriefing.cs:2780+`). Even perfectly merged selections diverge afterwards unless
+each of those is deterministic given synced inputs. **Unmeasured — check before declaring M12d done.**
 
 ---
 
 ## Sequencing
 
-`M12a` is independent and is the visible win. **`M12b` gates `M12d`** — pools computed from a mission
-the two machines disagree about are wrong pools. `M12c` is independent of both and should land before
-`M12d`, because it is what makes the rollback principle affordable. `M12d` is the largest.
+⚠️ **REVIEW: the first draft's independence claims were too generous.**
+
+`M12a` is the visible win and is *mostly* independent — but its suppression of camp and retreat is
+what stops a client re-rolling every contract, so **M12a is a prerequisite for M12b holding**, not
+merely parallel to it.
+
+**`M12b` gates `M12d`**, and by more than the budget: the salvage *item set itself* is rolled per
+machine, so M12d needs replicated reward generation on top of replicated contracts.
+
+`M12c` is code-independent of both, but its acceptance test — two machines resuming the same campaign
+combat turn — needs shared combat entry, which is M12b's unbuilt transition. Until then M12c is
+verifiable only through the M9 console flow. It should still land before `M12d`.
+
+**`M12d` is the largest, and is no longer gated on open question 3** — the flow is measured drivable
+end to end. It shrank twice over on 2026-08-08: `savedOutput` folds the reward-set problem into
+M12b's contract replication, and the riders/standalone split means most subsystem ownership is
+inherited from parts rather than stored.
 
 ## The rig, for whoever picks this up
 
@@ -164,8 +499,22 @@ deleted when M12a lands — every finding is already in `overworld-recon.md`.
 
 ## Still unanswered
 
-1. Whether a save taken in the `CombatResolved` window restores into the debriefing (M12c).
-2. Whether `customTags` survives the save round-trip in practice (M12d) — read-verified only.
-3. Whether the management UI can be driven **from outside its own flow**; every edit measured so far
-   was made by a human clicking.
-4. Claim granularity for the general inventory outside salvage — per item serial, or a coarser lease.
+1. ~~Whether a save taken in the `CombatResolved` window restores into the debriefing.~~
+   **Answered by review: no** — `CombatResolved` is not serialized. The window save is dropped from
+   M12c.
+2. ~~Whether `customTags` survives the save round-trip in practice.~~ **ANSWERED 2026-08-08 by
+   running it.** Parts survive; subsystems do not — 65 parts in and out, 606 subsystems in and **0**
+   out, across one save/load and again across a game restart. M12d's ownership scheme works for
+   parts and needs a different mechanism for subsystems.
+3. ~~Whether the management UI can be driven from outside its own flow.~~ **ANSWERED 2026-08-08:
+   yes, end to end** — selection, stage advance, confirmation modal and commit, all from the console,
+   all through public entry points. See the table in M12d. The `TryLoading` precedent held: the same
+   question about the load screen was also a no-problem, and again one console command settled it.
+4. Claim granularity for the general inventory outside salvage — per `(kind, serial)` (now measured
+   stable, and cross-kind overlap makes the `kind` mandatory), or a coarser lease.
+5. **New:** whether the basecrawler→overworld transition actually delivers the mirrored position,
+   given that `PopUntilState` clears pending collectors (M12a).
+6. **New:** what a per-turn save actually costs in main-thread stall, given `RefreshSaveHeaders`
+   re-parses every save's metadata (M12c).
+7. **New:** whether `FinishDebriefing`'s post-commit work is deterministic given synced inputs
+   (M12d).
