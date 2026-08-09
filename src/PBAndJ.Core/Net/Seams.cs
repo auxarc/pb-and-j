@@ -187,6 +187,32 @@ namespace PBAndJ.Core.Net
         void StopKeyframes();
 
         /// <summary>
+        /// Puts the mobile base at the host's position. Client only.
+        /// </summary>
+        /// <param name="x">Host's base X.</param>
+        /// <param name="z">Host's base Z.</param>
+        /// <remarks>
+        /// Two coordinates and no height: the implementation finds its own Y by
+        /// asking the game to validate the position against its own ground.
+        /// <para>
+        /// Like <see cref="PlayKeyframes"/> this is presentation, and like it,
+        /// the implementation may write ECS components — the overworld renderer
+        /// reads <c>PositionDetectedLast</c> and nothing short of a real write
+        /// reaches it. What it must not do is advance the simulation clock: a
+        /// same-value replace to wake the reactive collectors is the whole
+        /// permitted interaction with time, because the client is not simulating
+        /// and roughly twenty systems collect on that component.
+        /// </para>
+        /// <para>
+        /// A no-op is a legitimate implementation. The harness has no overworld,
+        /// and a client sitting in a management screen cannot render the change
+        /// even when it lands — the recon measured that as correct rather than
+        /// broken, since the position is right again on returning to the map.
+        /// </para>
+        /// </remarks>
+        void MirrorBase(float x, float z);
+
+        /// <summary>
         /// The save this machine holds under <paramref name="saveKey"/>, or
         /// <see cref="ScenarioPayload.None"/> if there is none.
         /// </summary>

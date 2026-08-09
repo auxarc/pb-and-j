@@ -485,6 +485,16 @@ namespace PBAndJ.Core.Net
                     HandleKeyframes(keyframes, effects);
                     break;
 
+                // M12a. No state guard, deliberately: the mirror is presentation,
+                // it cannot desynchronise anything by arriving early, and a
+                // client whose own ClientSessionState is untrustworthy is a
+                // known hazard here — HandleWelcome seeds it from this machine's
+                // OWN combat flag, which is how a peer joining mid-fight once
+                // locked itself out of the lobby forever.
+                case BasePositionMessage basePosition:
+                    effects.Add(new MirrorBaseEffect(basePosition.X, basePosition.Z));
+                    break;
+
                 case LobbyLoadMessage lobbyLoad:
                     HandleLobbyLoad(lobbyLoad, effects);
                     break;

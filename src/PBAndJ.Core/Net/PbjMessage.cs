@@ -37,6 +37,9 @@ namespace PBAndJ.Core.Net
         LobbyUnready = 25,
         LobbyLoad = 26,
         LobbyLoaded = 27,
+
+        /// <summary>Where the host's mobile base is. Host to client only.</summary>
+        BasePosition = 28,
     }
 
     /// <summary>
@@ -863,6 +866,40 @@ namespace PBAndJ.Core.Net
         public int SelectionVersion { get; }
 
         public LoadOutcome Outcome { get; }
+    }
+
+    /// <summary>
+    /// Where the host's mobile base is, so a passenger can watch it move.
+    /// </summary>
+    /// <remarks>
+    /// <b>X and Z only — the height is deliberately not on the wire.</b> The
+    /// receiving machine finds its own Y by setting <c>isPositionUnchecked</c>
+    /// and letting <c>OverworldPositionValidationSystem</c> snap to its own
+    /// ground; the recon watched it correct 33.3 to 13.3. Sending Y would be
+    /// sending the host's idea of a surface the client renders for itself, which
+    /// is how a base ends up hovering.
+    /// <para>
+    /// There is no simulation time on this message either, and that is the
+    /// point. The mirror re-replaces the client's <em>own</em> time value to
+    /// wake the reactive collectors; writing the host's value instead would run
+    /// roughly twenty <c>SimulationTime</c> systems with a real delta on a
+    /// machine that is not simulating — the overworld cousin of the standing
+    /// rule against advancing <c>combat.simulationTime</c> on a client.
+    /// </para>
+    /// </remarks>
+    public sealed class BasePositionMessage : PbjMessage
+    {
+        public BasePositionMessage(float x, float z)
+        {
+            X = x;
+            Z = z;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.BasePosition;
+
+        public float X { get; }
+
+        public float Z { get; }
     }
 
     /// <summary>Graceful goodbye from either side.</summary>

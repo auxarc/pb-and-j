@@ -172,11 +172,12 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void ModVersion_MatchesTheShippedModMetadata()
         {
-            // 0.9.0 for M11e: a transfer may now carry content split into numbered
-            // parts, and a 0.8.0 peer would refuse content.zip.0 as a disallowed
-            // name. A real compatibility break, not the documented false positive
-            // the wire-surface guard raises on edits that move no bytes.
-            Assert.Equal("0.9.0", PbjProtocol.ModVersion);
+            // 0.10.0 for M12a: BasePosition = 28 is a new message type, and a
+            // host broadcasts it on every base move, so a 0.9.0 peer admitted by
+            // a matching version string would fault on the first one. The version
+            // moves in the same commit as the surface for exactly this reason —
+            // waiting for release day is how 0.5.0 came to mean two builds.
+            Assert.Equal("0.10.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

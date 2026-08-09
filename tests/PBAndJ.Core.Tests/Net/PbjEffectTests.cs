@@ -180,6 +180,18 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void MirrorBase_CarriesTwoCoordinatesAndNoHeight()
+        {
+            // The absent Y is the design, not an omission: the receiving machine
+            // snaps to its own ground, and a height from elsewhere is how a base
+            // ends up hovering over terrain it did not generate.
+            var effect = new MirrorBaseEffect(1024.5f, -37.25f);
+            Assert.Equal(PbjEffectKind.MirrorBase, effect.Kind);
+            Assert.Equal(1024.5f, effect.X);
+            Assert.Equal(-37.25f, effect.Z);
+        }
+
+        [Fact]
         public void BeginLoad_CarriesTheSaveAndTheVersion()
         {
             var effect = new BeginLoadEffect("pbj_campaign", 4, "a1b2c3d4");

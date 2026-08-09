@@ -218,6 +218,18 @@ namespace PBAndJ.Peer
         }
 
         /// <summary>
+        /// Remembered and nothing else. The harness has no overworld to move a
+        /// base around, and the selftest's interest is that the message crossed
+        /// and was decoded, not that anything was rendered.
+        /// </summary>
+        public (float X, float Z)? MirroredBase { get; private set; }
+
+        public void MirrorBase(float x, float z)
+        {
+            MirroredBase = (x, z);
+        }
+
+        /// <summary>
         /// The combat save this peer "holds". In-memory rather than on disk: the
         /// harness must be runnable anywhere, and the protocol does not care
         /// where the bytes came from.

@@ -205,6 +205,15 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(PbjInboundEventKind.LocalLobbyUnready, new LocalLobbyUnreadyEvent().Kind);
         }
 
+        [Fact]
+        public void LocalBasePosition_CarriesWhereTheBaseIs()
+        {
+            var evt = new LocalBasePositionEvent(1024.5f, -37.25f);
+            Assert.Equal(PbjInboundEventKind.LocalBasePosition, evt.Kind);
+            Assert.Equal(1024.5f, evt.X);
+            Assert.Equal(-37.25f, evt.Z);
+        }
+
         [Theory]
         [InlineData(LoadOutcome.Loaded)]
         [InlineData(LoadOutcome.Refused)]

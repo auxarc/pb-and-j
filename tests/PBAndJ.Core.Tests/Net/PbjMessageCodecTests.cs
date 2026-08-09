@@ -43,6 +43,7 @@ namespace PBAndJ.Core.Tests.Net
             };
             yield return new object[] { new CombatStartMessage(0) };
             yield return new object[] { new CombatEndMessage() };
+            yield return new object[] { new BasePositionMessage(1024.5f, -37.25f) };
             yield return new object[] { new PingMessage(1) };
             yield return new object[] { new PongMessage(1) };
             yield return new object[] { new SnapshotMessage(3, "3f9c1a04", new[] { Snapshot("unit_a") }) };
@@ -134,6 +135,26 @@ namespace PBAndJ.Core.Tests.Net
                 0x01, 0x00, 0x00, 0x00, 0x64,       // passphrase "d"
             };
             Assert.Equal(expected, bytes);
+        }
+
+        [Fact]
+        public void RoundTrip_BasePosition_PreservesBothCoordinates()
+        {
+            var m = RoundTrip(new BasePositionMessage(1024.5f, -37.25f));
+
+            Assert.Equal(1024.5f, m.X);
+            Assert.Equal(-37.25f, m.Z);
+        }
+
+        [Fact]
+        public void Encode_BasePosition_IsNineBytes_SoNoHeightCanBeHidingInIt()
+        {
+            // A type byte and two floats, and nothing else. This is the guard on
+            // the design decision rather than on the arithmetic: the receiving
+            // machine snaps to its own ground, and a third coordinate appearing
+            // here later would mean somebody had started sending the host's idea
+            // of a surface the client renders for itself.
+            Assert.Equal(1 + 4 + 4, PbjMessageCodec.Encode(new BasePositionMessage(1f, 2f)).Length);
         }
 
         [Fact]

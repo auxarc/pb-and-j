@@ -290,6 +290,16 @@ namespace PBAndJ.Core.Net
                     bridge.StopKeyframes();
                     break;
 
+                case MirrorBaseEffect mirror:
+                    // Nothing comes back, for the same reason keyframes report
+                    // nothing: the mirror is presentation and makes no
+                    // correctness claim to verify. It is also the one effect that
+                    // may land somewhere it cannot be seen — a client in a
+                    // management screen gets the write without the redraw — and
+                    // that is measured-correct rather than a failure to report.
+                    bridge.MirrorBase(mirror.X, mirror.Z);
+                    break;
+
                 case WriteScenarioEffect write:
                     // Logged rather than fed back: nothing in the protocol waits
                     // on the write, so there is no session state to advance. The

@@ -48,6 +48,7 @@ namespace PBAndJ.Mod
             Debug.Log(LoadBanner.PatchFired("Heartbeat.Start"));
             UpdateGlue.SetCoroutineHost(__instance);
             Net.OverworldProbeGlue.SetCoroutineHost(__instance);
+            Net.BaseMirrorGlue.SetCoroutineHost(__instance);
         }
     }
 }

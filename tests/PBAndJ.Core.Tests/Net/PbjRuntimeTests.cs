@@ -483,6 +483,20 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void Pump_ReceivingABasePosition_HandsItToTheBridgeToPlace()
+        {
+            var runtime = ClientRuntime(out _);
+
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId,
+                Frame(new BasePositionMessage(1024.5f, -37.25f))));
+            runtime.Pump(1);
+
+            var (x, z) = Assert.Single(bridge.Mirrored);
+            Assert.Equal(1024.5f, x);
+            Assert.Equal(-37.25f, z);
+        }
+
+        [Fact]
         public void Pump_CombatEnding_StopsPlaybackOnTheBridge()
         {
             var runtime = ClientRuntime(out _);

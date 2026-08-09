@@ -249,6 +249,11 @@ namespace PBAndJ.Core.Net
                     writer.WriteInt32((int)lobbyLoaded.Outcome);
                     break;
 
+                case BasePositionMessage basePosition:
+                    writer.WriteSingle(basePosition.X);
+                    writer.WriteSingle(basePosition.Z);
+                    break;
+
                 case PingMessage ping:
                     writer.WriteInt32(ping.Nonce);
                     break;
@@ -481,6 +486,9 @@ namespace PBAndJ.Core.Net
                 case PbjMessageType.LobbyLoaded:
                     return new LobbyLoadedMessage(
                         reader.ReadInt32(), (LoadOutcome)reader.ReadInt32());
+
+                case PbjMessageType.BasePosition:
+                    return new BasePositionMessage(reader.ReadSingle(), reader.ReadSingle());
 
                 case PbjMessageType.Ping:
                     return new PingMessage(reader.ReadInt32());

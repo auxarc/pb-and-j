@@ -29,6 +29,7 @@ namespace PBAndJ.Core.Net
         LocalLobbyReady = 106,
         LocalLobbyUnready = 107,
         LoadFinished = 108,
+        LocalBasePosition = 109,
     }
 
     /// <summary>
@@ -279,6 +280,38 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Null is normal — this machine may not have hashed it.</summary>
         public string? SaveDigest { get; }
+    }
+
+    /// <summary>
+    /// This machine's mobile base is here. Posted by the host's glue.
+    /// </summary>
+    /// <remarks>
+    /// <b>When to post is a glue decision, and the recon settled it.</b> The
+    /// overworld clock is not continuous — it advances only while the base
+    /// travels or a time skip runs — so the host has nothing new to say while
+    /// idle, and the honest cadence is "on movement, plus a slow heartbeat".
+    /// The heartbeat is not there to track motion; it is there so a client that
+    /// missed an update while the base was moving does not sit wrong
+    /// indefinitely once everything goes still.
+    /// <para>
+    /// Core deliberately does not throttle. A session that silently dropped
+    /// updates it judged too frequent would be second-guessing the glue about a
+    /// cadence only the glue can see.
+    /// </para>
+    /// </remarks>
+    public sealed class LocalBasePositionEvent : PbjInboundEvent
+    {
+        public LocalBasePositionEvent(float x, float z)
+        {
+            X = x;
+            Z = z;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalBasePosition;
+
+        public float X { get; }
+
+        public float Z { get; }
     }
 
     /// <summary>The local player agreed to load the selected save.</summary>

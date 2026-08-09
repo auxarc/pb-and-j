@@ -19,8 +19,41 @@ namespace PBAndJ.Core.Net
         StopKeyframes = 11,
         WriteScenario = 12,
         BeginLoad = 13,
+        MirrorBase = 14,
 
-        // 14+ unallocated.
+        // 15+ unallocated.
+    }
+
+    /// <summary>
+    /// Put the mobile base where the host's is. Clients only.
+    /// </summary>
+    /// <remarks>
+    /// Carries X and Z and no height, because the receiving machine snaps to its
+    /// own ground — see <see cref="BasePositionMessage"/>, which explains why at
+    /// length.
+    /// <para>
+    /// The glue that applies this must use the game's own teleport recipe rather
+    /// than writing Position alone: <c>StopMovement</c> first or the client's own
+    /// path fights the write, then Position <em>and</em> PositionTarget, because
+    /// <c>OverworldMovementSystem</c> drags position back toward a stale target
+    /// whenever the clock runs. Then <c>isPositionUnchecked</c> for the ground
+    /// snap, and a same-value <c>ReplaceSimulationTime</c> to wake the reactive
+    /// collectors while paused.
+    /// </para>
+    /// </remarks>
+    public sealed class MirrorBaseEffect : PbjEffect
+    {
+        public MirrorBaseEffect(float x, float z)
+        {
+            X = x;
+            Z = z;
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.MirrorBase;
+
+        public float X { get; }
+
+        public float Z { get; }
     }
 
     /// <summary>

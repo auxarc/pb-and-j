@@ -312,6 +312,10 @@ namespace PBAndJ.Core.Net
                     HandleLocalUnready(effects);
                     break;
 
+                case LocalBasePositionEvent basePosition:
+                    HandleLocalBasePosition(basePosition, effects);
+                    break;
+
                 case LocalLobbySelectEvent select:
                     HandleLocalLobbySelect(select, effects);
                     break;
@@ -916,6 +920,27 @@ namespace PBAndJ.Core.Net
         /// clearing is the safe direction — the cost is a re-click, the
         /// alternative is loading a save somebody never confirmed.
         /// </remarks>
+        /// <summary>
+        /// Tells everyone where the base is. M12a — the host drives it, so this
+        /// is the one direction the position ever travels.
+        /// </summary>
+        /// <remarks>
+        /// Unconditional, and that is deliberate on three counts. It does not
+        /// check for peers, because <see cref="BroadcastEffect"/> to an empty
+        /// registry is already nothing and a count check here would be a branch
+        /// nothing can distinguish. It does not check state, because the base
+        /// has a position in the lobby, in the overworld and during a fight, and
+        /// a client that stopped hearing about it while the host was busy would
+        /// simply be wrong later. And it does not compare against the last value
+        /// sent: the glue decides cadence, and a session quietly dropping
+        /// updates it judged redundant is how a heartbeat stops being a
+        /// heartbeat.
+        /// </remarks>
+        private void HandleLocalBasePosition(LocalBasePositionEvent basePosition, List<PbjEffect> effects)
+        {
+            effects.Add(new BroadcastEffect(new BasePositionMessage(basePosition.X, basePosition.Z)));
+        }
+
         private void HandleLocalLobbySelect(LocalLobbySelectEvent select, List<PbjEffect> effects)
         {
             if (State != HostSessionState.Lobby)

@@ -93,6 +93,11 @@ namespace PBAndJ.Core.Tests.Net
 
         public void StopKeyframes() => StopKeyframesCalls++;
 
+        /// <summary>Every mirrored base position, in order.</summary>
+        public List<(float X, float Z)> Mirrored { get; } = new List<(float, float)>();
+
+        public void MirrorBase(float x, float z) => Mirrored.Add((x, z));
+
         /// <summary>The local combat save, as ReadScenario hands it back.</summary>
         public ScenarioPayload Scenario { get; set; } = ScenarioPayload.None;
 
