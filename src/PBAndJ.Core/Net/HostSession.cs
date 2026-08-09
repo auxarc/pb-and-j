@@ -74,6 +74,17 @@ namespace PBAndJ.Core.Net
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private LobbySelection selection = LobbySelection.None;
         private readonly LoadBarrier load = new LoadBarrier();
+
+        /// <summary>
+        /// Who still has to get into the fight the host just entered. M12b.
+        /// </summary>
+        /// <remarks>
+        /// A second <see cref="LoadBarrier"/> rather than a reuse of
+        /// <see cref="load"/>: the lobby load and the combat entry can be in
+        /// flight for different reasons at different times, and sharing one
+        /// would make a stale report for either count toward the other.
+        /// </remarks>
+        private readonly LoadBarrier combatEntry = new LoadBarrier();
         private readonly Dictionary<int, List<OrderPayload>> submitted = new Dictionary<int, List<OrderPayload>>();
 
         // Per-peer outcome of the batch currently being committed. Populated by
@@ -312,6 +323,14 @@ namespace PBAndJ.Core.Net
                     HandleLocalUnready(effects);
                     break;
 
+                case LocalBasePositionEvent basePosition:
+                    HandleLocalBasePosition(basePosition, effects);
+                    break;
+
+                case LocalCombatReadyEvent combatReady:
+                    HandleLocalCombatReady(combatReady, effects);
+                    break;
+
                 case LocalLobbySelectEvent select:
                     HandleLocalLobbySelect(select, effects);
                     break;
@@ -401,6 +420,10 @@ namespace PBAndJ.Core.Net
 
                 case LobbyLoadedMessage lobbyLoaded:
                     HandleLobbyLoaded(peerId, lobbyLoaded, effects);
+                    break;
+
+                case CombatEnteredMessage combatEntered:
+                    HandleCombatEnteredReport(peerId, combatEntered, effects);
                     break;
 
                 case LobbyUnreadyMessage lobbyUnready:
@@ -916,6 +939,27 @@ namespace PBAndJ.Core.Net
         /// clearing is the safe direction — the cost is a re-click, the
         /// alternative is loading a save somebody never confirmed.
         /// </remarks>
+        /// <summary>
+        /// Tells everyone where the base is. M12a — the host drives it, so this
+        /// is the one direction the position ever travels.
+        /// </summary>
+        /// <remarks>
+        /// Unconditional, and that is deliberate on three counts. It does not
+        /// check for peers, because <see cref="BroadcastEffect"/> to an empty
+        /// registry is already nothing and a count check here would be a branch
+        /// nothing can distinguish. It does not check state, because the base
+        /// has a position in the lobby, in the overworld and during a fight, and
+        /// a client that stopped hearing about it while the host was busy would
+        /// simply be wrong later. And it does not compare against the last value
+        /// sent: the glue decides cadence, and a session quietly dropping
+        /// updates it judged redundant is how a heartbeat stops being a
+        /// heartbeat.
+        /// </remarks>
+        private void HandleLocalBasePosition(LocalBasePositionEvent basePosition, List<PbjEffect> effects)
+        {
+            effects.Add(new BroadcastEffect(new BasePositionMessage(basePosition.X, basePosition.Z)));
+        }
+
         private void HandleLocalLobbySelect(LocalLobbySelectEvent select, List<PbjEffect> effects)
         {
             if (State != HostSessionState.Lobby)
@@ -1291,6 +1335,27 @@ namespace PBAndJ.Core.Net
             }
         }
 
+        /// <summary>
+        /// The host is in a fight. Nobody else is yet. M12b.
+        /// </summary>
+        /// <remarks>
+        /// <b>This deliberately no longer broadcasts CombatStart</b>, and the
+        /// reason is a deadlock rather than a preference. CombatStart sets
+        /// <c>HostIsFighting</c> on every client, and
+        /// <c>ClientSession.HandleScenarioOffer</c> refuses every offer while
+        /// that is true — a guard built on purpose, since pulling a save
+        /// mid-fight is normally nonsense. Announcing the fight before shipping
+        /// it therefore guarantees nobody can fetch it: the host offers, every
+        /// client silently declines, and two people watch a spinner.
+        /// <para>
+        /// So the announcement waits. The glue writes the fight to the scenario
+        /// slot and says so (<see cref="LocalCombatReadyEvent"/>), the fight is
+        /// offered, everyone loads it and reports in, and only then does
+        /// CombatStart go out — where it keeps its existing meaning of "the
+        /// fight has begun, plan your turn", which is what M11's turn barrier
+        /// already assumes.
+        /// </para>
+        /// </remarks>
         private void HandleCombatEntered(List<PbjEffect> effects)
         {
             State = HostSessionState.Planning;
@@ -1298,6 +1363,83 @@ namespace PBAndJ.Core.Net
             submitted.Clear();
             ClearPendingResults();
 
+            effects.Add(new LogEffect(NetLog.CombatShipping(barrier.Turn, registry.Count)));
+        }
+
+        /// <summary>
+        /// The fight is on disk. Offer it, and wait for everyone to arrive.
+        /// </summary>
+        private void HandleLocalCombatReady(LocalCombatReadyEvent ready, List<PbjEffect> effects)
+        {
+            if (string.IsNullOrEmpty(ready.SaveName) || string.IsNullOrEmpty(ready.Digest))
+            {
+                // The glue could not write the fight. Reachable: CanSave has
+                // several refusals the poll cannot outwait. Starting alone is
+                // wrong for the session but right for the human at this machine,
+                // who is already in a battle and cannot be left staring at it.
+                effects.Add(new LogEffect(NetLog.CombatShipFailed()));
+                StartCombatForEveryone(effects);
+                return;
+            }
+
+            var peers = new List<int>();
+            foreach (var peer in registry.Peers)
+            {
+                peers.Add(peer.PeerId);
+            }
+
+            if (peers.Count == 0)
+            {
+                // Nobody to wait for. Said out loud rather than silently skipped,
+                // because "the fight was never offered" and "everyone arrived
+                // instantly" look identical in a log otherwise.
+                effects.Add(new LogEffect(NetLog.CombatNobodyToWaitFor()));
+                StartCombatForEveryone(effects);
+                return;
+            }
+
+            combatEntry.Start(barrier.Turn, peers);
+            combatEntry.Seed(nowSeconds);
+
+            effects.Add(new LogEffect(NetLog.CombatOffered(ready.SaveName, ready.Digest, peers.Count)));
+            effects.Add(new BroadcastEffect(
+                new CombatOfferMessage(ready.SaveName, ready.Digest, barrier.Turn)));
+        }
+
+        /// <summary>A client reporting whether it got into the fight.</summary>
+        private void HandleCombatEnteredReport(int peerId, CombatEnteredMessage report, List<PbjEffect> effects)
+        {
+            if (!combatEntry.Report(peerId, report.Turn, report.Outcome))
+            {
+                return;
+            }
+
+            effects.Add(new LogEffect(NetLog.CombatEntryReported(peerId, NameOf(peerId), report.Outcome)));
+            CompleteCombatEntryIfDone(effects);
+        }
+
+        private void CompleteCombatEntryIfDone(List<PbjEffect> effects)
+        {
+            if (!combatEntry.IsComplete)
+            {
+                return;
+            }
+
+            combatEntry.Finish();
+            StartCombatForEveryone(effects);
+        }
+
+        /// <summary>
+        /// Announces the fight to everyone still here and hands out units.
+        /// </summary>
+        /// <remarks>
+        /// What <see cref="HandleCombatEntered"/> used to do inline. A peer that
+        /// never made it is simply not in the registry's answer by now — either
+        /// it reported a failure and was dropped, or it timed out — so the
+        /// assignments cover exactly the machines that are actually in the fight.
+        /// </remarks>
+        private void StartCombatForEveryone(List<PbjEffect> effects)
+        {
             effects.Add(new LogEffect(NetLog.CombatStarted(barrier.Turn, registry.Count)));
             effects.Add(new BroadcastEffect(new CombatStartMessage(barrier.Turn)));
 
@@ -1378,6 +1520,7 @@ namespace PBAndJ.Core.Net
             nowSeconds = tick.NowSeconds;
             ticked = true;
             ExpireLoads(effects);
+            ExpireCombatEntry(effects);
             ExpireReconnectHolds(effects);
             ExpireSilentHandshakes(effects);
 
@@ -1429,6 +1572,38 @@ namespace PBAndJ.Core.Net
         /// simply drop: the others are already in a campaign it is not in.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// Starts the fight without anyone who never said they got in. M12b.
+        /// </summary>
+        /// <remarks>
+        /// The same seed-don't-judge shape as <see cref="ExpireLoads"/>, and for
+        /// the same reason: the combat offer goes out from a message handler, and
+        /// a deadline judged against process uptime would expire on the first
+        /// tick.
+        /// <para>
+        /// Unlike the lobby load, the host is never a participant here — it is
+        /// already in the fight, which is what started all this — so every
+        /// expiry is simply a peer to carry on without.
+        /// </para>
+        /// </remarks>
+        private void ExpireCombatEntry(List<PbjEffect> effects)
+        {
+            if (!combatEntry.InFlight)
+            {
+                return;
+            }
+
+            combatEntry.Seed(nowSeconds);
+            var expired = combatEntry.Expired(nowSeconds, PbjProtocol.LoadTimeoutSeconds);
+            for (var i = 0; i < expired.Count; i++)
+            {
+                effects.Add(new LogEffect(NetLog.CombatEntryTimedOut(expired[i])));
+                combatEntry.Drop(expired[i]);
+            }
+
+            CompleteCombatEntryIfDone(effects);
+        }
+
         private void ExpireLoads(List<PbjEffect> effects)
         {
             if (!load.InFlight)

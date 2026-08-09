@@ -35,6 +35,59 @@ namespace PBAndJ.Core.Tests.Net
         private static IEnumerable<T> All<T>(IEnumerable<PbjEffect> effects) where T : PbjEffect =>
             effects.OfType<T>();
 
+        // --- the base mirror (M12a) ---
+
+        [Fact]
+        public void LocalBasePosition_IsBroadcastToEveryone()
+        {
+            var host = WithPeer();
+
+            var effects = host.Handle(new LocalBasePositionEvent(1024.5f, -37.25f));
+
+            var message = Assert.IsType<BasePositionMessage>(Single<BroadcastEffect>(effects).Message);
+            Assert.Equal(1024.5f, message.X);
+            Assert.Equal(-37.25f, message.Z);
+        }
+
+        [Fact]
+        public void LocalBasePosition_WithNobodyListening_StillBroadcasts()
+        {
+            // A broadcast to an empty registry is already nothing, so guarding on
+            // the peer count here would be a branch with no observable difference
+            // -- and the 100% gate turns an indistinguishable branch into a build
+            // failure rather than dead code.
+            var effects = Host().Handle(new LocalBasePositionEvent(1f, 2f));
+
+            Assert.Single(All<BroadcastEffect>(effects));
+        }
+
+        [Fact]
+        public void LocalBasePosition_RepeatedWithTheSameValue_IsSentEveryTime()
+        {
+            // The heartbeat's whole purpose is to repeat itself while nothing
+            // moves. A session that suppressed identical updates would be
+            // deciding cadence on the glue's behalf, and would silently turn the
+            // heartbeat back into movement-only updates.
+            var host = WithPeer();
+
+            host.Handle(new LocalBasePositionEvent(5f, 5f));
+            var second = host.Handle(new LocalBasePositionEvent(5f, 5f));
+
+            Assert.Single(All<BroadcastEffect>(second));
+        }
+
+        [Fact]
+        public void LocalBasePosition_DuringCombat_IsStillBroadcast()
+        {
+            // The base has a position in every state, and a client that stopped
+            // hearing about it while the host was busy would simply be wrong
+            // afterwards.
+            var host = WithPeer();
+            host.Handle(new CombatEnteredEvent());
+
+            Assert.Single(All<BroadcastEffect>(host.Handle(new LocalBasePositionEvent(3f, 4f))));
+        }
+
         // --- construction ---
 
         [Fact]
@@ -1473,21 +1526,143 @@ namespace PBAndJ.Core.Tests.Net
         // --- combat edges ---
 
         [Fact]
-        public void CombatEntered_BroadcastsCombatStartThenAssignments()
+        public void CombatEntered_AnnouncesNothingYet()
         {
+            // M12b re-sequenced this, and the reason is a deadlock rather than a
+            // preference. CombatStart sets HostIsFighting on every client, and
+            // HandleScenarioOffer refuses every offer while that is true -- so
+            // announcing the fight before shipping it guarantees nobody can fetch
+            // it. The announcement waits for the entry barrier.
             bridge.InCombat = false;
             var host = WithPeer();
             bridge.InCombat = true;
             bridge.CurrentTurn = 0;
 
             var effects = host.Handle(new CombatEnteredEvent()).ToList();
+
+            Assert.Empty(All<BroadcastEffect>(effects));
+        }
+
+        [Fact]
+        public void CombatReady_OffersTheFightRatherThanStartingIt()
+        {
+            var host = InCombatWithPeer();
+
+            var effects = host.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1")).ToList();
+
+            var offer = Assert.IsType<CombatOfferMessage>(Single<BroadcastEffect>(effects).Message);
+            Assert.Equal("pbj_combat_test", offer.SaveName);
+            Assert.Equal("d1", offer.Digest);
+            Assert.DoesNotContain(All<BroadcastEffect>(effects), b => b.Message is CombatStartMessage);
+        }
+
+        [Fact]
+        public void CombatEntry_OnceEveryoneIsIn_BroadcastsCombatStartThenAssignments()
+        {
+            var host = InCombatWithPeer();
+            host.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1"));
+
+            var effects = host.HandleMessage(1, new CombatEnteredMessage(0, LoadOutcome.Loaded)).ToList();
             var broadcasts = All<BroadcastEffect>(effects).ToList();
             var startAt = broadcasts.FindIndex(b => b.Message is CombatStartMessage);
             var assignAt = broadcasts.FindIndex(b => b.Message is AssignmentsMessage);
 
-            Assert.True(startAt >= 0, "combat entry must announce itself");
+            Assert.True(startAt >= 0, "the fight must be announced once everyone is in");
             Assert.True(assignAt > startAt, "Assignments must follow CombatStart immediately");
             Assert.Equal(0, ((CombatStartMessage)broadcasts[startAt].Message).Turn);
+        }
+
+        [Fact]
+        public void CombatReady_WithNobodyConnected_StartsAtOnce()
+        {
+            bridge.InCombat = false;
+            var host = Host();
+            bridge.InCombat = true;
+            bridge.CurrentTurn = 0;
+            host.Handle(new CombatEnteredEvent());
+
+            var effects = host.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1")).ToList();
+
+            Assert.Contains(All<BroadcastEffect>(effects), b => b.Message is CombatStartMessage);
+        }
+
+        [Fact]
+        public void CombatReady_WhenTheFightCouldNotBeWritten_StartsAloneRatherThanHanging()
+        {
+            // Reachable: CanSave has refusals the glue's poll cannot outwait. The
+            // session is lost either way, but the human at this machine is
+            // already in a battle and cannot be left staring at it.
+            var host = InCombatWithPeer();
+
+            var effects = host.Handle(new LocalCombatReadyEvent(null, null)).ToList();
+
+            Assert.Contains(All<BroadcastEffect>(effects), b => b.Message is CombatStartMessage);
+        }
+
+        [Fact]
+        public void CombatEntry_WhenAPeerNeverReports_StartsWithoutItAfterTheTimeout()
+        {
+            var host = InCombatWithPeer();
+            host.Handle(new TickEvent(1000));
+            host.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1"));
+
+            var effects = host.Handle(new TickEvent(1000 + PbjProtocol.LoadTimeoutSeconds + 1)).ToList();
+
+            Assert.Contains(All<BroadcastEffect>(effects), b => b.Message is CombatStartMessage);
+        }
+
+        [Fact]
+        public void CombatReady_WithANameButNoDigest_IsTreatedAsAFailedWrite()
+        {
+            // Half an answer is not an answer: without a digest a client cannot
+            // tell this fight from the last one written to the same slot.
+            var host = InCombatWithPeer();
+
+            var effects = host.Handle(new LocalCombatReadyEvent("pbj_combat_test", null)).ToList();
+
+            Assert.Contains(All<BroadcastEffect>(effects), b => b.Message is CombatStartMessage);
+        }
+
+        [Fact]
+        public void CombatEntry_WithTwoPeers_WaitsForBoth()
+        {
+            bridge.InCombat = false;
+            var host = WithPeer(maxPeers: 3);
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            host.HandleMessage(2, GoodHello("ally2"));
+            bridge.InCombat = true;
+            bridge.CurrentTurn = 0;
+            host.Handle(new CombatEnteredEvent());
+            host.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1"));
+
+            var first = host.HandleMessage(1, new CombatEnteredMessage(0, LoadOutcome.Loaded)).ToList();
+
+            Assert.DoesNotContain(All<BroadcastEffect>(first), b => b.Message is CombatStartMessage);
+        }
+
+        [Fact]
+        public void CombatEntry_AReportForAnAbandonedFight_IsIgnored()
+        {
+            // Same staleness rule every other barrier in this protocol has: a
+            // report about a turn that is no longer the one being entered must
+            // not count toward the current fight.
+            var host = InCombatWithPeer();
+            host.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1"));
+
+            var effects = host.HandleMessage(1, new CombatEnteredMessage(99, LoadOutcome.Loaded)).ToList();
+
+            Assert.Empty(effects);
+        }
+
+        /// <summary>A host in combat with one handshaken peer, ready to ship a fight.</summary>
+        private HostSession InCombatWithPeer()
+        {
+            bridge.InCombat = false;
+            var host = WithPeer();
+            bridge.InCombat = true;
+            bridge.CurrentTurn = 0;
+            host.Handle(new CombatEnteredEvent());
+            return host;
         }
 
         [Fact]

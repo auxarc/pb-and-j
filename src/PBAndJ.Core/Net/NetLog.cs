@@ -717,6 +717,43 @@ namespace PBAndJ.Core.Net
 
         // --- combat lifecycle ---
 
+        /// <summary>The host is in a fight and has not shipped it yet. M12b.</summary>
+        public static string CombatShipping(int turn, int peerCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "in combat on turn {0} — writing the fight for {1} peer{2}",
+                turn, peerCount, Plural(peerCount));
+        }
+
+        public static string CombatShipFailed() =>
+            Prefix + "could not write the fight to share — starting alone";
+
+        public static string CombatNobodyToWaitFor() =>
+            Prefix + "nobody else is here — starting combat without offering it";
+
+        public static string CombatOffered(string? saveName, string? digest, int peerCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "offering the fight '{0}' ({1}) to {2} peer{3}",
+                saveName ?? "?", digest ?? "?", peerCount, Plural(peerCount));
+        }
+
+        public static string CombatEntryReported(int peerId, string? name, LoadOutcome outcome) =>
+            Prefix + ("into the fight " + Describe(outcome) + " from #" + peerId + " '" + (name ?? "?") + "'");
+
+        public static string CombatEntryTimedOut(int peerId) =>
+            Prefix + ("no word from #" + peerId + " about the fight after "
+                + PbjProtocol.LoadTimeoutSeconds + "s — starting without it");
+
+        /// <summary>A client was offered the fight it is already holding.</summary>
+        public static string CombatAlreadyHeld(string? saveName) =>
+            Prefix + ("already holding the fight '" + (saveName ?? "?") + "' — loading it");
+
+        public static string CombatFetching(string? saveName) =>
+            Prefix + ("fetching the fight '" + (saveName ?? "?") + "' from the host");
+
         public static string CombatStarted(int turn, int peerCount)
         {
             return Prefix + string.Format(

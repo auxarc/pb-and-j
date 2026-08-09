@@ -29,6 +29,9 @@ namespace PBAndJ.Core.Net
         LocalLobbyReady = 106,
         LocalLobbyUnready = 107,
         LoadFinished = 108,
+        LocalBasePosition = 109,
+        LocalCombatReady = 110,
+        CombatLoadFinished = 111,
     }
 
     /// <summary>
@@ -279,6 +282,86 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Null is normal — this machine may not have hashed it.</summary>
         public string? SaveDigest { get; }
+    }
+
+    /// <summary>
+    /// This machine's mobile base is here. Posted by the host's glue.
+    /// </summary>
+    /// <remarks>
+    /// <b>When to post is a glue decision, and the recon settled it.</b> The
+    /// overworld clock is not continuous — it advances only while the base
+    /// travels or a time skip runs — so the host has nothing new to say while
+    /// idle, and the honest cadence is "on movement, plus a slow heartbeat".
+    /// The heartbeat is not there to track motion; it is there so a client that
+    /// missed an update while the base was moving does not sit wrong
+    /// indefinitely once everything goes still.
+    /// <para>
+    /// Core deliberately does not throttle. A session that silently dropped
+    /// updates it judged too frequent would be second-guessing the glue about a
+    /// cadence only the glue can see.
+    /// </para>
+    /// </remarks>
+    public sealed class LocalBasePositionEvent : PbjInboundEvent
+    {
+        public LocalBasePositionEvent(float x, float z)
+        {
+            X = x;
+            Z = z;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalBasePosition;
+
+        public float X { get; }
+
+        public float Z { get; }
+    }
+
+    /// <summary>
+    /// The host's glue has written the fight to the scenario slot. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Posted from glue rather than derived in Core, because the moment is a
+    /// property of the game rather than of the protocol: <c>CanSave(false)</c>
+    /// refuses while <c>combat.isScenarioIntroInProgress</c>, and that flag is
+    /// set in the same tick that makes <c>InCombat</c> true. The glue polls until
+    /// the write is permitted and then says so once. A Core guard for the same
+    /// thing would be a branch nothing could reach, which the coverage gate turns
+    /// into a build failure.
+    /// </remarks>
+    public sealed class LocalCombatReadyEvent : PbjInboundEvent
+    {
+        public LocalCombatReadyEvent(string? saveName, string? digest)
+        {
+            SaveName = saveName;
+            Digest = digest;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalCombatReady;
+
+        public string? SaveName { get; }
+
+        public string? Digest { get; }
+    }
+
+    /// <summary>
+    /// This machine finished trying to load the host's fight. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="LoadFinishedEvent"/>, which answers the lobby's
+    /// campaign load. Sharing one event would mean a client in a fight and a
+    /// client in the lobby reporting through the same channel, and the session
+    /// would have to guess which question was being answered.
+    /// </remarks>
+    public sealed class CombatLoadFinishedEvent : PbjInboundEvent
+    {
+        public CombatLoadFinishedEvent(LoadOutcome outcome)
+        {
+            Outcome = outcome;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.CombatLoadFinished;
+
+        public LoadOutcome Outcome { get; }
     }
 
     /// <summary>The local player agreed to load the selected save.</summary>

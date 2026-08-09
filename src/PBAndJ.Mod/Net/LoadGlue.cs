@@ -28,9 +28,55 @@ namespace PBAndJ.Mod.Net
     internal static class LoadGlue
     {
         /// <summary>
+        /// What a load is for. The steps differ in two places, and both
+        /// differences are load-bearing rather than tidy-ups.
+        /// </summary>
+        private enum Purpose
+        {
+            /// <summary>The lobby's campaign save. M11d.</summary>
+            Campaign,
+
+            /// <summary>The host's loaded fight, from the scenario slot. M12b.</summary>
+            Combat,
+        }
+
+        /// <summary>
         /// Starts the load. Null if it began, or the outcome if it could not.
         /// </summary>
-        internal static LoadOutcome? Begin(string? saveKey, int selectionVersion, string? expectedDigest)
+        internal static LoadOutcome? Begin(string? saveKey, int selectionVersion, string? expectedDigest) =>
+            Start(saveKey, selectionVersion, expectedDigest, Purpose.Campaign);
+
+        /// <summary>
+        /// Loads the fight the host just shipped us. M12b.
+        /// </summary>
+        /// <remarks>
+        /// A separate entry point rather than a flag on <see cref="Begin"/>,
+        /// because the catalogue check below <em>must</em> be skipped here and
+        /// widening the catalogue instead would be the wrong fix:
+        /// <c>LobbyCatalogue.IsOffered</c> excludes the scenario slot on purpose,
+        /// and that exclusion is what stops a save being rewritten every mission
+        /// from also being offered as a campaign somebody could pick — the M11b
+        /// trap, which cost a build once already.
+        /// <para>
+        /// Everything else is kept, and the digest check especially: same name
+        /// with different contents is the whole failure this guards, and it
+        /// matters more here than for a campaign, since the slot is rewritten on
+        /// every mission start and a client may be holding the previous fight.
+        /// </para>
+        /// </remarks>
+        internal static LoadOutcome? BeginCombat(string? saveName, string? expectedDigest) =>
+            Start(saveName, CombatVersion, expectedDigest, Purpose.Combat);
+
+        /// <summary>
+        /// The version reported for a combat load. The entry barrier is keyed by
+        /// the fight rather than by a lobby selection, so there is no selection
+        /// version to quote back and inventing one would imply an agreement that
+        /// was never made.
+        /// </summary>
+        private const int CombatVersion = -1;
+
+        private static LoadOutcome? Start(
+            string? saveKey, int selectionVersion, string? expectedDigest, Purpose purpose)
         {
             if (string.IsNullOrEmpty(saveKey))
             {
@@ -44,8 +90,13 @@ namespace PBAndJ.Mod.Net
                 //    reaches a callback, so without this check "I do not have it"
                 //    is indistinguishable from "I died" — and Unavailable, the
                 //    outcome M11e exists to act on, would be unreachable.
-                var catalogue = SaveCatalogueGlue.List();
-                if (!LobbyCatalogue.Contains(catalogue, saveKey))
+                //
+                //    The catalogue is the campaign catalogue, and it deliberately
+                //    does not contain the scenario slot, so a combat load asks
+                //    the question a different way: the digest read below fails
+                //    just as loudly when the directory is not there.
+                if (purpose == Purpose.Campaign
+                    && !LobbyCatalogue.Contains(SaveCatalogueGlue.List(), saveKey))
                 {
                     Debug.LogWarning("[pb-and-j] no multiplayer save named '" + saveKey + "' here");
                     return LoadOutcome.Unavailable;
@@ -85,6 +136,7 @@ namespace PBAndJ.Mod.Net
 
                 pending = saveKey;
                 pendingVersion = selectionVersion;
+                pendingPurpose = purpose;
                 DataHelperLoading.TryLoading(saveKey, SaveLocation.Normal, OnLoaded);
                 return null;
             }
@@ -101,6 +153,7 @@ namespace PBAndJ.Mod.Net
         /// </summary>
         private static string? pending;
         private static int pendingVersion = -1;
+        private static Purpose pendingPurpose = Purpose.Campaign;
 
         /// <summary>
         /// The game says we are in.
@@ -115,8 +168,10 @@ namespace PBAndJ.Mod.Net
         {
             var key = pending;
             var version = pendingVersion;
+            var purpose = pendingPurpose;
             pending = null;
             pendingVersion = -1;
+            pendingPurpose = Purpose.Campaign;
             if (key == null)
             {
                 // A callback for a load we did not start. It cannot normally
@@ -127,6 +182,18 @@ namespace PBAndJ.Mod.Net
             }
 
             Debug.Log("[pb-and-j] loaded '" + key + "'");
+
+            if (purpose == Purpose.Combat)
+            {
+                // Deliberately NOT MultiplayerCampaign.Enter: the scenario slot
+                // is a fight, not the campaign. Entering it would rename the
+                // co-op campaign to the slot, and the save-namespace redirect
+                // would then write every autosave under a name that is rewritten
+                // at the start of the next mission.
+                NetGlue.PostCombatLoadFinished(LoadOutcome.Loaded);
+                return;
+            }
+
             MultiplayerCampaign.Enter(key);
             NetGlue.PostLoadFinished(version, LoadOutcome.Loaded);
         }

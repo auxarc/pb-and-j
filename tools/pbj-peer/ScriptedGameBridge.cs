@@ -218,6 +218,39 @@ namespace PBAndJ.Peer
         }
 
         /// <summary>
+        /// Remembered and nothing else. The harness has no overworld to move a
+        /// base around, and the selftest's interest is that the message crossed
+        /// and was decoded, not that anything was rendered.
+        /// </summary>
+        public (float X, float Z)? MirroredBase { get; private set; }
+
+        public void MirrorBase(float x, float z)
+        {
+            MirroredBase = (x, z);
+        }
+
+        /// <summary>
+        /// The fight the harness was told to load, and what it answered.
+        /// </summary>
+        /// <remarks>
+        /// The harness has no game to load into, so it reports success without
+        /// doing anything: the selftest's interest is that the offer crossed, the
+        /// bytes were fetched and the report came back, which is the whole
+        /// handshake Core owns. Set <see cref="CombatLoadRefusal"/> to drive the
+        /// failure arm instead.
+        /// </remarks>
+        public (string? SaveName, string? Digest)? CombatLoadRequested { get; private set; }
+
+        /// <summary>What to answer, or null to report that the load started.</summary>
+        public LoadOutcome? CombatLoadRefusal { get; set; }
+
+        public LoadOutcome? BeginCombatLoad(string? saveName, string? digest)
+        {
+            CombatLoadRequested = (saveName, digest);
+            return CombatLoadRefusal ?? LoadOutcome.Loaded;
+        }
+
+        /// <summary>
         /// The combat save this peer "holds". In-memory rather than on disk: the
         /// harness must be runnable anywhere, and the protocol does not care
         /// where the bytes came from.

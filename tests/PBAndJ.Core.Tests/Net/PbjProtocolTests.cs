@@ -172,11 +172,12 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void ModVersion_MatchesTheShippedModMetadata()
         {
-            // 0.9.0 for M11e: a transfer may now carry content split into numbered
-            // parts, and a 0.8.0 peer would refuse content.zip.0 as a disallowed
-            // name. A real compatibility break, not the documented false positive
-            // the wire-surface guard raises on edits that move no bytes.
-            Assert.Equal("0.9.0", PbjProtocol.ModVersion);
+            // 0.11.0 for M12b: CombatOffer and CombatEntered are new types, and
+            // the meaning of an existing one moved — CombatStart now arrives only
+            // once everyone is in the fight. A 0.10.0 peer would both fault on the
+            // offer and hold a different idea of what CombatStart promises, which
+            // is the more dangerous half: a fault is loud, a changed meaning is not.
+            Assert.Equal("0.11.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

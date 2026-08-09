@@ -282,6 +282,27 @@ namespace PBAndJ.Peer
 
                 hostBridge.InCombat = true;
                 hostBridge.CurrentTurn = 0;
+
+                // M12b: entering combat no longer announces itself. The host
+                // writes the fight first and says so, then the offer goes out,
+                // the client fetches and loads it, reports in, and only then does
+                // CombatStart travel. Standing in for the glue's write here is
+                // the whole point of the harness -- it has no game, but it does
+                // have the same Core flow the game runs.
+                hostBridge.Scenario = new ScenarioPayload(LobbySaveNames.ScenarioSlot, new[]
+                {
+                    new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 1, 2, 3, 4 }),
+                    new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 5 }),
+                });
+                host.Post(new LocalCombatReadyEvent(
+                    LobbySaveNames.ScenarioSlot, hostBridge.Scenario.Digest));
+
+                if (!WaitFor("client fetched and loaded the host's fight",
+                        () => clientBridge.CombatLoadRequested != null))
+                {
+                    return 1;
+                }
+
                 if (!WaitFor("client followed the host back into combat",
                         () => clientSession.State == ClientSessionState.Planning
                               && clientSession.Turn == 0

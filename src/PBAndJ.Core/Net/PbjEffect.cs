@@ -19,8 +19,77 @@ namespace PBAndJ.Core.Net
         StopKeyframes = 11,
         WriteScenario = 12,
         BeginLoad = 13,
+        MirrorBase = 14,
+        BeginCombatLoad = 15,
 
-        // 14+ unallocated.
+        // 16+ unallocated.
+    }
+
+    /// <summary>
+    /// Load the fight the host shipped us. Clients only. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="BeginLoadEffect"/> because the glue behind it
+    /// must skip the lobby catalogue check — <c>LobbyCatalogue.IsOffered</c>
+    /// excludes the scenario slot on purpose, so routing a fight through the
+    /// campaign path returns <c>Unavailable</c> every time, silently, and reads
+    /// as a save problem rather than a wiring one.
+    /// <para>
+    /// It also must not mark the campaign as entered: the slot is a fight, not
+    /// the campaign, and claiming it would point the save-namespace redirect at
+    /// a directory that is rewritten at the start of the next mission.
+    /// </para>
+    /// </remarks>
+    public sealed class BeginCombatLoadEffect : PbjEffect
+    {
+        public BeginCombatLoadEffect(string? saveName, string? digest)
+        {
+            SaveName = saveName;
+            Digest = digest;
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.BeginCombatLoad;
+
+        public string? SaveName { get; }
+
+        /// <summary>
+        /// What the host says the fight hashes to. Checked before loading,
+        /// because the slot is rewritten every mission and this machine may be
+        /// holding the previous one under the same name.
+        /// </summary>
+        public string? Digest { get; }
+    }
+
+    /// <summary>
+    /// Put the mobile base where the host's is. Clients only.
+    /// </summary>
+    /// <remarks>
+    /// Carries X and Z and no height, because the receiving machine snaps to its
+    /// own ground — see <see cref="BasePositionMessage"/>, which explains why at
+    /// length.
+    /// <para>
+    /// The glue that applies this must use the game's own teleport recipe rather
+    /// than writing Position alone: <c>StopMovement</c> first or the client's own
+    /// path fights the write, then Position <em>and</em> PositionTarget, because
+    /// <c>OverworldMovementSystem</c> drags position back toward a stale target
+    /// whenever the clock runs. Then <c>isPositionUnchecked</c> for the ground
+    /// snap, and a same-value <c>ReplaceSimulationTime</c> to wake the reactive
+    /// collectors while paused.
+    /// </para>
+    /// </remarks>
+    public sealed class MirrorBaseEffect : PbjEffect
+    {
+        public MirrorBaseEffect(float x, float z)
+        {
+            X = x;
+            Z = z;
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.MirrorBase;
+
+        public float X { get; }
+
+        public float Z { get; }
     }
 
     /// <summary>

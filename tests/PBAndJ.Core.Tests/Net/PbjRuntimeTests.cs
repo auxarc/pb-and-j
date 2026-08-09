@@ -332,8 +332,11 @@ namespace PBAndJ.Core.Tests.Net
         // --- combat edges ---
 
         [Fact]
-        public void Pump_WhenCombatStarts_AnnouncesItToPeers()
+        public void Pump_WhenCombatStarts_SaysNothingUntilTheFightIsShipped()
         {
+            // M12b: CombatStart is what makes a client refuse scenario offers, so
+            // sending it at the edge would stop anyone fetching the fight it is
+            // announcing. The edge is now silent; the offer comes first.
             bridge.InCombat = false;
             var runtime = WithHandshakenPeer();
 
@@ -341,7 +344,22 @@ namespace PBAndJ.Core.Tests.Net
             bridge.CurrentTurn = 0;
             runtime.Pump(0);
 
-            Assert.Contains(transport.MessagesTo(1), m => m is CombatStartMessage);
+            Assert.DoesNotContain(transport.MessagesTo(1), m => m is CombatStartMessage);
+        }
+
+        [Fact]
+        public void Pump_WhenTheFightIsShipped_OffersItToPeers()
+        {
+            bridge.InCombat = false;
+            var runtime = WithHandshakenPeer();
+            bridge.InCombat = true;
+            bridge.CurrentTurn = 0;
+            runtime.Pump(0);
+
+            runtime.Post(new LocalCombatReadyEvent("pbj_combat_test", "d1"));
+            runtime.Pump(1);
+
+            Assert.Contains(transport.MessagesTo(1), m => m is CombatOfferMessage);
         }
 
         [Fact]
@@ -480,6 +498,65 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Single(bridge.AppliedSnapshots);
             Assert.Single(bridge.Played);
             Assert.Contains(log.Lines, l => l.Contains("corrected") && l.Contains("OK"));
+        }
+
+        [Fact]
+        public void Pump_ACombatLoadThatStarts_ReportsNothingYet()
+        {
+            // The answer comes later, through the glue's completion callback.
+            var runtime = ClientRuntime(out _);
+            bridge.CombatLoadRefusal = null;
+            bridge.Scenario = new ScenarioPayload(LobbySaveNames.ScenarioSlot, new[]
+            {
+                new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 1, 2, 3, 4 }),
+                new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 5 }),
+            });
+
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId,
+                Frame(new CombatOfferMessage(LobbySaveNames.ScenarioSlot, bridge.Scenario.Digest, 4))));
+            runtime.Pump(1);
+
+            Assert.Single(bridge.CombatLoads);
+            Assert.DoesNotContain(transport.MessagesTo(ClientSession.HostConnectionId),
+                m => m is CombatEnteredMessage);
+        }
+
+        [Fact]
+        public void Pump_ACombatLoadThatCannotStart_ReportsAtOnceRatherThanGoingQuiet()
+        {
+            // The host would otherwise wait out its whole timeout for an answer
+            // this machine already has.
+            var runtime = ClientRuntime(out _);
+            bridge.CombatLoadRefusal = LoadOutcome.Unavailable;
+            // Already holding these bytes, so the client loads rather than
+            // fetching -- which is the path with a refusal to report.
+            bridge.Scenario = new ScenarioPayload(LobbySaveNames.ScenarioSlot, new[]
+            {
+                new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 1, 2, 3, 4 }),
+                new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 5 }),
+            });
+
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId,
+                Frame(new CombatOfferMessage(LobbySaveNames.ScenarioSlot, bridge.Scenario.Digest, 4))));
+            runtime.Pump(1);
+
+            var report = transport.MessagesTo(ClientSession.HostConnectionId)
+                .OfType<CombatEnteredMessage>().Single();
+            Assert.Equal(LoadOutcome.Unavailable, report.Outcome);
+        }
+
+        [Fact]
+        public void Pump_ReceivingABasePosition_HandsItToTheBridgeToPlace()
+        {
+            var runtime = ClientRuntime(out _);
+
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId,
+                Frame(new BasePositionMessage(1024.5f, -37.25f))));
+            runtime.Pump(1);
+
+            var (x, z) = Assert.Single(bridge.Mirrored);
+            Assert.Equal(1024.5f, x);
+            Assert.Equal(-37.25f, z);
         }
 
         [Fact]

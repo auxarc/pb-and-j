@@ -29,6 +29,9 @@ namespace PBAndJ.Mod
             UpdateGlue.RegisterConsoleCommand();
             // THROWAWAY (M12 recon) — goes when docs/notes/overworld-recon.md is written.
             Net.OverworldProbeGlue.RegisterConsoleCommands();
+            // THROWAWAY (M12 review follow-up) — answers the two questions gating
+            // M12d. Goes once both answers are in the design doc.
+            Net.ManagementProbeGlue.RegisterConsoleCommands();
         }
     }
 
@@ -45,6 +48,7 @@ namespace PBAndJ.Mod
             Debug.Log(LoadBanner.PatchFired("Heartbeat.Start"));
             UpdateGlue.SetCoroutineHost(__instance);
             Net.OverworldProbeGlue.SetCoroutineHost(__instance);
+            Net.BaseMirrorGlue.SetCoroutineHost(__instance);
         }
     }
 }

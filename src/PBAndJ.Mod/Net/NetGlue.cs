@@ -491,6 +491,19 @@ namespace PBAndJ.Mod.Net
         internal static bool HasSession => runtime != null && !killed;
 
         /// <summary>
+        /// Whether this machine is hosting. Meaningless without
+        /// <see cref="HasSession"/>, and false when there is no session at all.
+        /// </summary>
+        /// <remarks>
+        /// Asked by <see cref="PassengerGlue"/> to decide who may drive the
+        /// overworld. Reads the session's own type rather than remembering what
+        /// was clicked: the connect screen can start either kind, the console
+        /// can start either kind, and a remembered flag would be a second source
+        /// of truth for something the runtime already knows.
+        /// </remarks>
+        internal static bool IsHost => HasSession && runtime!.Session is HostSession;
+
+        /// <summary>
         /// What the lobby screen should draw, or null when there is no session.
         /// </summary>
         /// <remarks>
@@ -523,6 +536,18 @@ namespace PBAndJ.Mod.Net
         /// <summary>Reports a finished load back into the session. M11d.</summary>
         internal static void PostLoadFinished(int selectionVersion, LoadOutcome outcome) =>
             runtime?.Post(new LoadFinishedEvent(selectionVersion, outcome));
+
+        /// <summary>The fight is written and can be offered. Host only. M12b.</summary>
+        internal static void PostLocalCombatReady(string? saveName, string? digest) =>
+            runtime?.Post(new LocalCombatReadyEvent(saveName, digest));
+
+        /// <summary>Reports how joining the host's fight went. Client only. M12b.</summary>
+        internal static void PostCombatLoadFinished(LoadOutcome outcome) =>
+            runtime?.Post(new CombatLoadFinishedEvent(outcome));
+
+        /// <summary>Tells the session where our base is, for M12a's mirror.</summary>
+        internal static void PostLocalBasePosition(float x, float z) =>
+            runtime?.Post(new LocalBasePositionEvent(x, z));
 
         internal static void PostLocalLobbyReady() => runtime?.Post(new LocalLobbyReadyEvent());
 
