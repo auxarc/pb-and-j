@@ -155,6 +155,75 @@ so identity survives the machine boundary; the component set to replicate is `Co
 output. **Considered and rejected:** syncing an RNG seed and letting both machines roll — it makes
 every future divergence a silent one, and the project's own rule is that a refusal must be visible.
 
+## M12b·1 — into combat together (planned 2026-08-08, reviewed, nothing built)
+
+The last gap before two households can playtest a campaign end to end. **Ship the fight, do not
+reproduce it:** contracts diverge, so a client told "start mission X" would build a different battle.
+The host writes the loaded combat to `LobbySaveNames.ScenarioSlot`, offers it, and everyone loads the
+same bytes — reusing M9's transfer (proven between two real games) and M11d's `TryLoading` callback.
+
+**⚠️ The adversarial pass found a deadlock in the obvious version of this, and it would have cost a
+playtest.** Verified by hand:
+
+1. The host's combat edge fires and `HandleCombatEntered` broadcasts `CombatStart` **immediately**
+   (`HostSession.cs`).
+2. Every client sets `HostIsFighting = true` (`ClientSession.cs:445`).
+3. The host then writes the fight and offers it.
+4. `HandleScenarioOffer` opens with `if (HostIsFighting) return;` — **every client silently
+   declines.** No bytes move, nobody loads, two people watch a spinner.
+
+That guard is right in general: a client should not pull saves mid-fight. This is the one flow where
+pulling *is* the point.
+
+**The agreed shape (user's call, 2026-08-08): defer `CombatStart`, and use a separate offer.**
+
+- The host's combat edge no longer broadcasts `CombatStart`. It writes the fight — **from glue, at a
+  permitted moment**, because `CanSave(false)` refuses while `combat.isScenarioIntroInProgress`
+  (`DataManagerSave.cs:136`), which is set in the same tick that makes `InCombat` true. Polling
+  belongs in glue; a Core guard for it would be a branch nothing can reach, and the 100% gate turns
+  that into a build failure.
+- A **new** offer message carries the fight, so M9's `HostIsFighting` guard is untouched. The byte
+  path itself needs nothing: `HandleScenario` has no such guard.
+- Clients transfer if needed, load, and report in. `CombatStart` fires only when the entry barrier
+  fills — so it keeps meaning "everyone is in the fight, plan your turn", which is what M11's turn
+  barrier already assumes.
+
+**⚠️ `LoadGlue` cannot load this save as written.** It requires `LobbyCatalogue.Contains`, and
+`IsOffered` deliberately excludes `ScenarioSlot` (`LobbySaves.cs:352-355`), so every combat-entry
+load would return `Unavailable` — silently, and it would read as a save problem. **Add a separate
+entry point that keeps the digest check and skips the catalogue check.** Do not widen `IsOffered`:
+that reopens the M11b trap where a save being rewritten underneath is simultaneously offered as a
+campaign.
+
+**Corrections to the first draft, all verified:**
+
+- **`CombatEnteredEvent` already has a producer** — `PbjRuntime.ObserveCombatEdge:117-128` turns every
+  `bridge.InCombat` flip into one, the mod pumps it every frame, and the selftest covers it.
+  `HandleCombatEntered` is live production code. The draft claimed no producer existed; the grep had
+  been scoped to `src/PBAndJ.Mod` and `tools/` and never looked in Core — the recorded grep trap,
+  paid again.
+- **`OnLoadingInitiate` has a fourth caller**, `CIViewCombatEnd.cs:298`, and of the three briefing
+  sites only `:2052` is the campaign path; the other two are `standaloneMode`.
+- **`autosave_before_combat` is conditional**, gated on `saveBeforeCombat && CanSave()` and skipped
+  entirely on the `loadImmediately` path — so it is not the free complete save the draft assumed.
+- **A new route out needs its own patch.** A pbj screen open when the load fires is closed by
+  nothing; see [[no-view-stack-in-pb-ui]]. The draft did not mention it.
+
+**Probe before the two humans sit down** — one host restart covers the first three:
+
+1. Log `CanSave(false)` per pump from the combat edge until true, to measure the intro window.
+2. Write the combat save at the first permitted pump and inspect it: turn 0? units present?
+3. `TryLoading` that entry-moment save with the session live. M3a round-tripped a *mid*-combat save;
+   an entry-moment one has never been tried.
+4. Fix the `LoadGlue` catalogue refusal **first**, or probe 3 reports `Unavailable` and masquerades
+   as a save problem.
+
+**Named, not solved:** a load that dies *after* teardown leaves that player at the main menu,
+campaignless but still connected — the completion callback is success-only, so nothing reports it and
+recovery needs a reconnect. Decide what that player is told before the playtest, not during it.
+
+---
+
 **Also unbuilt and belonging here:** what a client experiences when the host starts a mission.
 ⚠️ **REVIEW: `ScenarioSetupUtility.EnterCombat` is the wrong hook.** It is the *briefing-open*, not
 the commit:
