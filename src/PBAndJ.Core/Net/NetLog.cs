@@ -743,6 +743,27 @@ namespace PBAndJ.Core.Net
         public static string CombatEntryReported(int peerId, string? name, LoadOutcome outcome) =>
             Prefix + ("into the fight " + Describe(outcome) + " from #" + peerId + " '" + (name ?? "?") + "'");
 
+        /// <summary>The fight was abandoned while people were still loading it.</summary>
+        public static string CombatEntryAbandoned(int waiting) =>
+            Prefix + ("left the fight before " + waiting + " machine" + Plural(waiting)
+                + " got into it — the entry is off");
+
+        /// <summary>A fight was written after the host had already left it.</summary>
+        public static string CombatShipTooLate() =>
+            Prefix + "a fight was written, but we are no longer in it — not offering it";
+
+        /// <summary>
+        /// A fight was written on a machine that is not hosting one. M12b.
+        /// </summary>
+        /// <remarks>
+        /// The glue is armed by an effect and answers frames later, which is long
+        /// enough for the player to have stopped hosting. Logged rather than
+        /// swallowed: the write really happened, and a file appearing with no
+        /// explanation is worse than a line saying why it went nowhere.
+        /// </remarks>
+        public static string CombatShipNotOurs() =>
+            Prefix + "a fight was written here, but this machine is not hosting one — ignoring it";
+
         public static string CombatEntryTimedOut(int peerId) =>
             Prefix + ("no word from #" + peerId + " about the fight after "
                 + PbjProtocol.LoadTimeoutSeconds + "s — starting without it");

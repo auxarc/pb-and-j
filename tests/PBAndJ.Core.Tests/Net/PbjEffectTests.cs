@@ -189,6 +189,16 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void ShipCombat_CarriesNothing()
+        {
+            // Deliberately empty. Which save, and when it is permitted to write
+            // it, are properties of the game rather than of the protocol — the
+            // glue reads both for itself and answers with LocalCombatReadyEvent.
+            var effect = new ShipCombatEffect();
+            Assert.Equal(PbjEffectKind.ShipCombat, effect.Kind);
+        }
+
+        [Fact]
         public void MirrorBase_CarriesTwoCoordinatesAndNoHeight()
         {
             // The absent Y is the design, not an omission: the receiving machine

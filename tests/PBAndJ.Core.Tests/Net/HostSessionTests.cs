@@ -1654,6 +1654,131 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Empty(effects);
         }
 
+        [Fact]
+        public void CombatEntered_AsksTheGlueToShipTheFight()
+        {
+            bridge.InCombat = false;
+            var host = WithPeer();
+            bridge.InCombat = true;
+            bridge.CurrentTurn = 0;
+
+            var effects = host.Handle(new CombatEnteredEvent()).ToList();
+
+            Assert.Single(All<ShipCombatEffect>(effects));
+        }
+
+        [Fact]
+        public void CombatEntered_WithNobodyConnected_StillShipsTheFight()
+        {
+            // No peer-count shortcut, and the reason is the scenario slot rather
+            // than the fight: OfferScenario hands that slot to every newcomer, so
+            // a write skipped because nobody was listening would be offered to the
+            // next peer to arrive -- last mission's fight, under this mission's
+            // name. One synchronous save is the cheaper of the two.
+            bridge.InCombat = false;
+            var host = Host();
+            bridge.InCombat = true;
+            bridge.CurrentTurn = 0;
+
+            var effects = host.Handle(new CombatEnteredEvent()).ToList();
+
+            Assert.Single(All<ShipCombatEffect>(effects));
+        }
+
+        [Fact]
+        public void CombatEntry_APeerThatCouldNotGetIn_IsDroppedRatherThanLeftInTheFight()
+        {
+            // The wedge this closes: the entry barrier stopped waiting for such a
+            // peer, but the registry kept it -- so it was still dealt units and
+            // the TURN barrier waited for it forever. Nobody could execute again.
+            var host = InCombatWithPeer();
+            host.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1"));
+
+            var effects = host.HandleMessage(1, new CombatEnteredMessage(0, LoadOutcome.Unavailable)).ToList();
+
+            Assert.Contains(All<DisconnectEffect>(effects), d => d.PeerId == 1);
+            Assert.Empty(host.Peers);
+            Assert.Equal(1, host.ParticipantCount);
+            Assert.Contains(All<BroadcastEffect>(effects), b => b.Message is CombatStartMessage);
+        }
+
+        [Fact]
+        public void CombatEntry_APeerThatNeverReports_IsDroppedAtTheTimeout()
+        {
+            var host = InCombatWithPeer();
+            host.Handle(new TickEvent(1000));
+            host.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1"));
+
+            var effects = host.Handle(new TickEvent(1000 + PbjProtocol.LoadTimeoutSeconds + 1)).ToList();
+
+            Assert.Contains(All<DisconnectEffect>(effects), d => d.PeerId == 1);
+            Assert.Empty(host.Peers);
+            Assert.Equal(1, host.ParticipantCount);
+        }
+
+        [Fact]
+        public void CombatEntry_WhenTheFightCouldNotBeWritten_DropsEveryoneRatherThanWedgingTheBarrier()
+        {
+            // Starting alone is right for the human already standing in a battle.
+            // Keeping the peers connected while starting without them is not: they
+            // were never offered a fight they could join, and every one of them
+            // would hold the turn barrier shut.
+            var host = InCombatWithPeer();
+
+            var effects = host.Handle(new LocalCombatReadyEvent(null, null)).ToList();
+
+            Assert.Contains(All<DisconnectEffect>(effects), d => d.PeerId == 1);
+            Assert.Empty(host.Peers);
+            Assert.Equal(1, host.ParticipantCount);
+        }
+
+        [Fact]
+        public void CombatEntry_APeerThatDisconnectsMidEntry_DoesNotHoldTheFightUp()
+        {
+            // RemovePeer cleared every other barrier and not this one, so a peer
+            // that dropped while loading the fight left the entry barrier waiting
+            // on a closed socket for the full two minutes -- and the host stood in
+            // the battle the whole time.
+            var host = InCombatWithPeer();
+            host.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1"));
+
+            var effects = host.Handle(new PeerDisconnectedEvent(1, "gone")).ToList();
+
+            Assert.Contains(All<BroadcastEffect>(effects), b => b.Message is CombatStartMessage);
+        }
+
+        [Fact]
+        public void CombatReady_AfterTheHostLeftTheFight_IsDropped()
+        {
+            // The glue disarms itself on the combat edge, so this should not
+            // arrive -- and "should not" is exactly what the entry barrier
+            // believed about late reports. Acting on it would announce a fight at
+            // turn -1 from a host sitting in its lobby.
+            var host = InCombatWithPeer();
+            bridge.InCombat = false;
+            host.Handle(new CombatExitedEvent());
+
+            var effects = host.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1")).ToList();
+
+            Assert.Empty(All<BroadcastEffect>(effects));
+        }
+
+        [Fact]
+        public void CombatExited_MidEntry_CancelsIt()
+        {
+            // Otherwise a report arriving after the host abandoned the fight
+            // completes the barrier and broadcasts CombatStart -- at turn -1, from
+            // a host sitting in its lobby.
+            var host = InCombatWithPeer();
+            host.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1"));
+            bridge.InCombat = false;
+            host.Handle(new CombatExitedEvent());
+
+            var effects = host.HandleMessage(1, new CombatEnteredMessage(0, LoadOutcome.Loaded)).ToList();
+
+            Assert.DoesNotContain(All<BroadcastEffect>(effects), b => b.Message is CombatStartMessage);
+        }
+
         /// <summary>A host in combat with one handshaken peer, ready to ship a fight.</summary>
         private HostSession InCombatWithPeer()
         {

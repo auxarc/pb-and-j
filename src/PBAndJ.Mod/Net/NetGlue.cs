@@ -738,6 +738,8 @@ namespace PBAndJ.Mod.Net
                 new Type[0], "pbj.connect-forget");
             AddFrom(typeof(LobbyScreenGlue), nameof(LobbyScreenGlue.Lobby),
                 new Type[0], "pbj.lobby");
+            AddFrom(typeof(CombatShipGlue), nameof(CombatShipGlue.ShipFight),
+                new Type[0], "pbj.ship-fight");
         }
 
         private static void AddFrom(Type owner, string methodName, Type[] parameters, string command)
@@ -767,6 +769,12 @@ namespace PBAndJ.Mod.Net
         {
             NetGlue.Pump();
 
+            // Immediately after the pump, and that ordering is the point: the
+            // pump runs its effects synchronously, so a ShipCombatEffect raised
+            // by this frame's combat edge has already armed the glue by now. The
+            // poll can never run ahead of the session that asked for it.
+            CombatShipGlue.Tick();
+
             // Outside the pump's session guard on purpose: pbj.replay-last has to
             // work on a host with no session, and playback must keep running for
             // its full window even if the session faults halfway through.
@@ -778,6 +786,20 @@ namespace PBAndJ.Mod.Net
             // to start a session, so it must run when there is none.
             ConnectScreenGlue.Tick();
             LobbyScreenGlue.Tick();
+
+            // Step 0 of the drive rig, and it runs from here rather than from a
+            // console command on purpose: the question is whether Quantum
+            // Console works when nobody has opened it, and asking through a
+            // console command would answer a different one. Self-disarming after
+            // a single run.
+#if PBJ_DRIVE
+            DriveProbeGlue.Tick();
+
+            // One queued drive command per frame. Last, so a driven command
+            // observes the state this frame's pump and glue have already
+            // settled, rather than a half-updated one.
+            DriveGlue.Tick();
+#endif
         }
     }
 
@@ -788,6 +810,9 @@ namespace PBAndJ.Mod.Net
         private static void Postfix()
         {
             NetGlue.Shutdown();
+#if PBJ_DRIVE
+            DriveGlue.Stop();
+#endif
         }
     }
 }

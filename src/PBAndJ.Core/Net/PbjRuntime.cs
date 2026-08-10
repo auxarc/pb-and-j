@@ -302,6 +302,15 @@ namespace PBAndJ.Core.Net
                         : session.Handle(new CombatLoadFinishedEvent(refusal.Value));
                 }
 
+                case ShipCombatEffect:
+                    // Nothing comes back here either, and for a sharper reason
+                    // than the mirror's: the answer is frames away. The glue
+                    // polls for a moment the game will permit a save at, and says
+                    // so with a LocalCombatReadyEvent when it has one — or when
+                    // it has given up.
+                    bridge.ShipCombat();
+                    break;
+
                 case MirrorBaseEffect mirror:
                     // Nothing comes back, for the same reason keyframes report
                     // nothing: the mirror is presentation and makes no

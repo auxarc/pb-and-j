@@ -186,10 +186,17 @@ namespace PBAndJ.Mod.Net
             if (purpose == Purpose.Combat)
             {
                 // Deliberately NOT MultiplayerCampaign.Enter: the scenario slot
-                // is a fight, not the campaign. Entering it would rename the
-                // co-op campaign to the slot, and the save-namespace redirect
-                // would then write every autosave under a name that is rewritten
-                // at the start of the next mission.
+                // is a fight, not the campaign.
+                //
+                // ⚠️ This abstention is not the whole defence, and an earlier
+                // version of this comment implied it was.
+                // SaveNamespacePatches.CampaignBitFromLoad postfixes LoadingEnd2
+                // and calls Enter(DataManagerSave.saveName) regardless — which on
+                // this path IS the slot. What makes that survivable is that the
+                // redirect reads MultiplayerCampaign.Active and never SaveKey, so
+                // the recorded name is carried by two log lines and nothing else.
+                // Anything that ever reads SaveKey for a decision must reckon
+                // with this first.
                 NetGlue.PostCombatLoadFinished(LoadOutcome.Loaded);
                 return;
             }

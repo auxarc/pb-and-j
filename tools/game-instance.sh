@@ -33,19 +33,36 @@
 # — which the handshake would refuse — is structurally impossible.
 #
 # Usage:
-#   tools/second-instance.sh            # set up if needed, then launch
-#   tools/second-instance.sh --setup    # set up and stop
+#   tools/game-instance.sh 2            # set up if needed, then launch instance 2
+#   tools/game-instance.sh 3 --setup    # set up instance 3 and stop
 #
-# Deploy the mod with BOTH games closed: `make deploy` rm -rf's a mod folder
+# Instance N gets prefix 553540-pbjN and drive port 27700+N, and is offset on
+# screen so two windows do not land on top of each other.
+#
+# TWO INSTANCES AT ONCE IS THE CEILING, enforced below. The machine will not
+# comfortably carry more, and the Steam-launched instance is not driveable by
+# the mod's control channel — so the pair is two script-launched instances with
+# Steam's own game closed. The Steam CLIENT must still be running: SteamAPI.Init
+# failing is a hard quit, not a degraded mode.
+#
+# Deploy the mod with ALL games closed: `make deploy` rm -rf's a mod folder
 # whose DLL a running instance holds open.
 
 set -euo pipefail
+
+INSTANCE="${1:-2}"
+if ! [[ "$INSTANCE" =~ ^[0-9]+$ ]]; then
+  echo "game-instance: first argument must be an instance number, e.g. 'tools/game-instance.sh 2'" >&2
+  exit 1
+fi
+shift || true
 
 STEAM="${STEAM_ROOT:-$HOME/.local/share/Steam}"
 GAME_DIR="$STEAM/steamapps/common/Phantom Brigade"
 PROTON="$STEAM/steamapps/common/Proton - Experimental/proton"
 SOURCE_PREFIX="$STEAM/steamapps/compatdata/553540"
-PREFIX="${PBJ_SECOND_PREFIX:-$STEAM/steamapps/compatdata/553540-pbj2}"
+PREFIX="${PBJ_SECOND_PREFIX:-$STEAM/steamapps/compatdata/553540-pbj$INSTANCE}"
+DRIVE_PORT="${PBJ_DRIVE_PORT:-$((27700 + INSTANCE))}"
 
 MODS_REL="pfx/drive_c/users/steamuser/AppData/Local/PhantomBrigade/Mods"
 FIRST_MODS="$SOURCE_PREFIX/$MODS_REL"
@@ -110,11 +127,39 @@ if [ ! -f "$GAME_DIR/steam_appid.txt" ]; then
 fi
 
 if [ "${1:-}" = "--setup" ]; then
-  echo "second-instance: setup complete — prefix $PREFIX"
+  echo "game-instance: setup complete — prefix $PREFIX"
   exit 0
 fi
 
 # --- launch ---
+
+# The user's ceiling, enforced by the tool rather than by memory.
+#
+# Counting instances is fiddlier than it looks, and two obvious ways are both
+# wrong:
+#
+#   * `pgrep -x PhantomBrigade.exe` NEVER MATCHES. Process names come from
+#     /proc/PID/comm, which the kernel truncates to 15 characters;
+#     "PhantomBrigade.exe" is 18. pgrep says so on stderr and returns nothing,
+#     so a guard written that way silently never fires. (Found the hard way,
+#     2026-08-09.)
+#   * `pgrep -f -c` OVERCOUNTS. Proton's wrapper processes carry the exe path
+#     in their own command lines, so one instance reports as several and the
+#     ceiling would refuse at one.
+#
+# So count what actually distinguishes instances: the Proton prefix each one is
+# running against. One prefix, one game. The bracketing keeps this script's own
+# command line from matching itself.
+RUNNING=$(
+  for p in $(pgrep -f "[P]hantomBrigade.exe" 2>/dev/null); do
+    tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null \
+      | sed -n 's/^STEAM_COMPAT_DATA_PATH=//p'
+  done | sort -u | grep -c . || true
+)
+if [ "${RUNNING:-0}" -ge 2 ]; then
+  echo "game-instance: $RUNNING instances already running — two is the ceiling, close one first" >&2
+  exit 1
+fi
 
 cd "$GAME_DIR"
 
@@ -123,13 +168,21 @@ export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM"
 export SteamAppId=553540
 export SteamGameId=553540
 
-echo "second-instance: launching | prefix $PREFIX"
-echo "second-instance: if it dies within seconds, look for '[Steamworks.NET] SteamAPI_Init() failed' in"
+# Belt and braces. Nothing in the mod had ever read an environment variable from
+# Mono under Proton before this, so the port is also passed on the command line
+# and the mod logs which of the two answered. Unity ignores arguments it does
+# not recognise.
+export PBJ_DRIVE_PORT="$DRIVE_PORT"
+
+echo "game-instance: launching instance $INSTANCE | prefix $PREFIX | drive port $DRIVE_PORT"
+echo "game-instance: if it dies within seconds, look for '[Steamworks.NET] SteamAPI_Init() failed' in"
 echo "  $PREFIX/pfx/drive_c/users/steamuser/AppData/LocalLow/Brace Yourself Games/Phantom Brigade/Player.log"
-echo "second-instance: NOTE the mod still loads before Application.Quit takes effect at end of frame,"
+echo "game-instance: NOTE the mod still loads before Application.Quit takes effect at end of frame,"
 echo "  so a log line saying pb-and-j loaded is NOT evidence the instance survived."
 
-# Windowed and smaller, so the second instance does not fight the first for the
-# display. Unity's own arguments, passed through to the game.
+# Windowed and smaller, so two instances do not fight over the display. Unity's
+# own arguments, passed through to the game; --pbj-drive-port is ours and Unity
+# ignores it.
 exec "$PROTON" run "$GAME_DIR/PhantomBrigade.exe" \
-  -screen-fullscreen 0 -screen-width 1600 -screen-height 900
+  -screen-fullscreen 0 -screen-width 1280 -screen-height 720 \
+  "--pbj-drive-port=$DRIVE_PORT"

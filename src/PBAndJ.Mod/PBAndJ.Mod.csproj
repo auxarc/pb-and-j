@@ -4,6 +4,22 @@
     <RootNamespace>PBAndJ.Mod</RootNamespace>
     <VendorDir>$(MSBuildThisFileDirectory)../../vendor/Managed</VendorDir>
   </PropertyGroup>
+  <!--
+    The drive channel is a loopback command socket that can run any console
+    command, and Quantum Console's Extras assembly already registers `exec`
+    (compile and run arbitrary C#), file read/write and HTTP. That is remote code
+    execution, and no runtime flag is a strong enough guarantee against it
+    reaching a published build — an environment variable is one launch option
+    away from being set by anyone.
+
+    So the rig is a COMPILE-TIME opt-in. Without -p:PbjDrive=true the socket, its
+    pump and its console commands are not in the assembly at all, and
+    `make check-no-drive-channel` proves it against the built DLL before anything
+    ships. `make deploy` sets it; `make package` refuses to run with it set.
+  -->
+  <PropertyGroup Condition="'$(PbjDrive)' == 'true'">
+    <DefineConstants>$(DefineConstants);PBJ_DRIVE</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
     <ProjectReference Include="../PBAndJ.Core/PBAndJ.Core.csproj" />

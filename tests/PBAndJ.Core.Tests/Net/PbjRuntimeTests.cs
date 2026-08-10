@@ -501,6 +501,26 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void Pump_TheHostEnteringCombat_AsksTheBridgeToShipTheFight()
+        {
+            // The whole point of routing this through an effect rather than
+            // letting the glue watch InCombat for itself: the ask lands inside
+            // the pump that observed the edge, so the glue can never start
+            // polling before the session knows a fight is on.
+            // Out of combat FIRST: the fake bridge starts in combat, so a runtime
+            // built without this observes the edge during the handshake pump and
+            // the ask has already happened before the test does anything.
+            bridge.InCombat = false;
+            var runtime = WithHandshakenPeer();
+            bridge.InCombat = true;
+            bridge.CurrentTurn = 0;
+
+            runtime.Pump(1);
+
+            Assert.Equal(1, bridge.ShipCombatCalls);
+        }
+
+        [Fact]
         public void Pump_ACombatLoadThatStarts_ReportsNothingYet()
         {
             // The answer comes later, through the glue's completion callback.

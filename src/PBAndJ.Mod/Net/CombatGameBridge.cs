@@ -483,6 +483,21 @@ namespace PBAndJ.Mod.Net
             return LoadGlue.BeginCombat(saveName, digest);
         }
 
+        /// <summary>
+        /// Writes the fight we have just entered, so it can be offered. M12b.
+        /// </summary>
+        /// <remarks>
+        /// Only arms the write. The game refuses to save while the scenario intro
+        /// runs, and raises that flag in the same tick that makes
+        /// <see cref="InCombat"/> true, so <see cref="CombatShipGlue"/> polls from
+        /// the next frame on and answers with <c>LocalCombatReadyEvent</c> when it
+        /// has a save — or when it has given up on getting one.
+        /// </remarks>
+        public void ShipCombat()
+        {
+            CombatShipGlue.Arm();
+        }
+
         public void ClearLocalOrders()
         {
             if (!InCombat)

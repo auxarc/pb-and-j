@@ -120,6 +120,34 @@ was measured with nobody acting; M12a's whole premise is that the host acts. Fir
 the host's target expires or a site is destroyed and the client still displays it. M12a is the
 passenger seat, not world sync — name the gap rather than discovering it in play.
 
+### The suppression set is four unverified gates (added 2026-08-09, after M12a shipped)
+
+`PassengerGlue` is now the largest concentration of `return false` prefixes in the mod — four of the
+eight, against `ExecutionPatches`' one. See [The patch surface](networking.md#the-patch-surface) for
+why that matters: a suppression prefix *is* the extension point, so there is no version of it that
+cannot be lost, and a patch pass that aborts partway leaves an arbitrary subset of these live.
+
+Two things follow specifically for M12a:
+
+- **Only one of the four has a backstop, and it is a partial one.** The base mirror overwrites a
+  client that moved itself, so a dead `OrderMovementToPosition` prefix self-corrects on the next
+  mirror write. Nothing corrects a client camp, a client retreat, or a client-side `EnterCombat` —
+  and a camp click *re-rolls every contract M12b synchronised*. Those three are exactly where the
+  "verify the effect, not the gate" rule needs an instance: the host should notice a client whose
+  clock advanced or whose contract set changed, rather than the client being trusted to have
+  refused.
+- **The greyed button and the prefix are independent mechanisms.** The greying is the
+  visible-before-the-fact affordance the milestone principle demands; the prefix is the boundary.
+  Neither implies the other is alive, which is the same shape as the standing rule that client-side
+  enforcement is UX and the real check lives elsewhere — except that here there is no elsewhere,
+  which is the whole argument for detection.
+
+**The patch-surface assertion is owed now, and its number is not stable yet.** M12a took the mod to
+35 patch classes over 31 distinct target methods; deleting the throwaway `OverworldProbeGlue` — due
+since M12a landed, see [The rig](#the-rig-for-whoever-picks-this-up) — drops that to 32 over 30,
+because two of its three targets are also `PassengerGlue`'s. So record the expected count *after*
+the probe goes, not before, and expect M12b's combat-entry work to move it again.
+
 ---
 
 ## M12b — mission-generation authority
@@ -221,6 +249,67 @@ campaign.
 **Named, not solved:** a load that dies *after* teardown leaves that player at the main menu,
 campaignless but still connected — the completion callback is success-only, so nothing reports it and
 recovery needs a reconnect. Decide what that player is told before the playtest, not during it.
+
+## M12b·2 — the write itself, and four wedges the review found (built 2026-08-09)
+
+The host glue that was missing. `HandleCombatEntered` now emits a **`ShipCombatEffect`**, dispatched
+to `IPbjGameBridge.ShipCombat()` and landing in `CombatShipGlue.Arm()`; `CombatShipGlue.Tick()` runs
+from the `Heartbeat.Update` postfix **immediately after `NetGlue.Pump()`**, polls `CanSave(false)`,
+writes `LobbySaveNames.ScenarioSlot` and posts `LocalCombatReadyEvent`.
+
+**Why an effect rather than the glue watching `InCombat` itself.** The pump executes its effects
+synchronously, so an ask raised by this frame's combat edge has already armed the glue by the time
+`Tick` runs. Ordering by construction rather than by frame timing — the glue cannot report a fight
+the session does not yet know about.
+
+**The probe list above is now built in rather than thrown away.** The glue names, once a second,
+which of `CanSave`'s refusals is live; that *is* probe 1, permanently. `pbj.ship-fight` forces the
+write by hand with no session, which is probes 2 and 3 on one machine. A hand-driven write never
+posts to a session — see wedge D.
+
+**The timeout counts machine-paced refusals only.** `CanSave` also refuses while a cutscene, a
+tutorial or the debriefing is open (`DataManagerSave.cs:136,144`), and all three are paced by a
+human. A first co-op fight is exactly where a combat tutorial appears, so counting reading time
+against the 30s clock would fire the ship-failure path — which drops every peer — on the most likely
+session there is.
+
+### ⚠️ Four wedges in the merged M12b Core half, all confirmed by hand
+
+Found reviewing the glue plan, not the glue. Each left the turn barrier or the entry barrier
+unfillable, which in play looks like "Execute does nothing, for ever".
+
+- **`RemovePeer` cleared every barrier except `combatEntry`.** A peer that dropped while loading the
+  fight was awaited for the full 120s — with the host standing in the battle. Fixed beside the
+  existing `load.Drop`.
+- **Dropping from the entry barrier is not dropping from the fight.** A peer that reported a failed
+  entry, or timed out, stayed in the registry: still dealt units by `ParticipantIds`, still awaited
+  by the *turn* barrier every turn. `StartCombatForEveryone`'s own comment claimed this was handled;
+  it was not. Now `DropFromTheFight` disconnects them with a reason at all three sites — failed
+  report, timeout, and the ship-failure arm, where "starting alone" now means alone.
+- **`HandleCombatExited` never cancelled `combatEntry`.** A report arriving after the host abandoned
+  the fight completed the barrier and broadcast `CombatStart(-1)` from a host in `Lobby`. Cancelled
+  now, and `HandleLocalCombatReady` additionally refuses to act outside `Planning`.
+- **`ClientSession.Handle`'s default arm throws, and `NetGlue.Pump` turns a throw into "networking
+  stopped" for the rest of the process.** So a `LocalCombatReadyEvent` reaching a client — a stray
+  `pbj.ship-fight`, or a host that stopped hosting mid-write — cost the session. There is an ignore
+  arm now, and the glue posts only while hosting.
+
+### Two things named rather than fixed
+
+- **The combat-retry interregnum.** Host retry leaves combat first, so clients get `CombatEnd` and an
+  unlocked Execute that does nothing while they are still standing in the loaded fight, until the
+  host re-enters and re-ships. It re-converges without code, but the human sees something
+  unexplained. Worth a line on screen before the playtest.
+- **A >256 KiB fight re-transfers every time.** Above `MaxPartBytes` the host's `ReadScenario` splits
+  the content, and the digest mixes each part's *name* (`ScenarioPayload.cs:543-551`), so the split
+  digest never equals the unsplit `SaveCatalogueGlue.Digest` the client checks "am I already holding
+  this" against. `LoadGlue` compares unsplit-to-unsplit and still loads, so this costs bandwidth
+  rather than correctness. Fights measure ~119 KB today.
+
+**Residual, accepted:** `SaveFromECS` can return without writing while `DoSave` proceeds to
+`SaveData` anyway, so "no throw" is a weaker success signal than it looks. `CanSave(false)` pre-covers
+every guard reachable from here, so no failing case was constructed — but this is why inspecting the
+written save for turn and units stays a mandatory probe rather than an optional one.
 
 ---
 
@@ -557,7 +646,11 @@ inherited from parts rather than stored.
 
 ## The rig, for whoever picks this up
 
-`tools/second-instance.sh` — setup is already done; run with no arguments to launch the client.
+`tools/game-instance.sh <N>` (was `second-instance.sh`) — prefixes `553540-pbj2` and `-pbj3` are both
+set up. **Two instances is the ceiling and the script enforces it**, and the Steam-launched instance
+is not one of the pair: it cannot be driven by the control channel. The Steam *client* must still be
+running, because `SteamAPI.Init` failing is a hard quit. Drive either with
+`tools/drive.sh <N> "<command>"`.
 Steam's Play button becomes **Stop** once a manual instance registers, and it then controls that
 instance, so start the Steam host first. Both instances share one `Mods` directory by symlink, so one
 `make deploy` serves both; deploy with both closed. A second concurrent `SteamAPI.Init()` on the same

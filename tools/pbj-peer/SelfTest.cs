@@ -42,6 +42,7 @@ namespace PBAndJ.Peer
                 ("remote guards", RunRemoteGuards),
                 ("scenario transfer", RunScenarioTransfer),
                 ("lobby barrier", RunLobbyBarrier),
+                ("combat entry", RunCombatEntry),
             };
 
             foreach (var scenario in scenarios)
@@ -283,12 +284,21 @@ namespace PBAndJ.Peer
                 hostBridge.InCombat = true;
                 hostBridge.CurrentTurn = 0;
 
-                // M12b: entering combat no longer announces itself. The host
-                // writes the fight first and says so, then the offer goes out,
-                // the client fetches and loads it, reports in, and only then does
-                // CombatStart travel. Standing in for the glue's write here is
-                // the whole point of the harness -- it has no game, but it does
-                // have the same Core flow the game runs.
+                // M12b: entering combat no longer announces itself. The host is
+                // ASKED to write the fight, says so once it has, then the offer
+                // goes out, the client fetches and loads it, reports in, and only
+                // then does CombatStart travel.
+                //
+                // Waiting for the ask rather than posting the answer cold is the
+                // point: the harness has no game and no disk, so it cannot prove
+                // the write -- but it can prove the ORDERING, which is the half
+                // that cannot be checked without two people and a mission.
+                if (!WaitFor("host was asked to write the fight",
+                        () => hostBridge.ShipCombatRequested))
+                {
+                    return 1;
+                }
+
                 hostBridge.Scenario = new ScenarioPayload(LobbySaveNames.ScenarioSlot, new[]
                 {
                     new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 1, 2, 3, 4 }),
@@ -1573,6 +1583,136 @@ namespace PBAndJ.Peer
                 {
                     return 1;
                 }
+
+                Console.WriteLine("[selftest] PASS");
+                return 0;
+            }
+            finally
+            {
+                client.Stop();
+                host.Stop();
+            }
+        }
+
+        /// <summary>
+        /// M12b: a peer that cannot get into the fight is dropped, and the fight
+        /// starts without it.
+        /// </summary>
+        /// <remarks>
+        /// The wedge this pins down cost nothing to write and would have cost an
+        /// evening to find. Until M12b·2 a peer that reported a failed entry was
+        /// dropped from the <em>entry</em> barrier and left in the registry — so
+        /// it was still dealt units, and the <em>turn</em> barrier still waited on
+        /// a ready it could never send, for every turn of a battle it was never
+        /// in. Nobody could execute again, and the host had no way to tell why.
+        /// <para>
+        /// Over real sockets rather than in a unit test because the ordering is
+        /// half the claim: the ask must arrive before anything is offered, and
+        /// nothing may be announced until the entry barrier settles. The
+        /// disconnect-mid-entry and exit-mid-entry cases live in
+        /// <c>HostSessionTests</c> — killing a socket here would race the
+        /// assertions, exactly as the lobby scenario notes.
+        /// </para>
+        /// </remarks>
+        private static int RunCombatEntry()
+        {
+            var hostBridge = new ScriptedGameBridge { CurrentTurn = -1, InCombat = false };
+            var hostMailbox = new PbjMailbox(4096);
+            var hostTransport = new TcpHostTransport(hostMailbox, IPAddress.Loopback, 0);
+            hostTransport.Start();
+            var hostSession = new HostSession("host", "selftest", 3, hostBridge, "secret", SessionRequirements.None);
+            var hostLog = new PrefixedLog("host");
+            var host = new PbjRuntime(hostTransport, hostBridge, hostLog, hostMailbox, hostSession);
+
+            var clientBridge = new ScriptedGameBridge { CurrentTurn = -1, InCombat = false };
+            var clientMailbox = new PbjMailbox(4096);
+            var clientTransport = new TcpClientTransport(clientMailbox);
+            var clientSession = new ClientSession("ally", "0.2.0", clientBridge);
+            var client = new PbjRuntime(
+                clientTransport, clientBridge, new PrefixedLog("ally"), clientMailbox, clientSession);
+
+            var clock = Stopwatch.StartNew();
+            double Now() => clock.Elapsed.TotalSeconds;
+
+            bool WaitFor(string what, Func<bool> condition)
+            {
+                var deadline = Now() + TimeoutSeconds;
+                while (Now() < deadline)
+                {
+                    host.Pump(Now());
+                    client.Pump(Now());
+                    if (condition())
+                    {
+                        Console.WriteLine($"[selftest] OK   {what}");
+                        return true;
+                    }
+                    Thread.Sleep(5);
+                }
+                Console.WriteLine($"[selftest] FAIL {what}");
+                return false;
+            }
+
+            try
+            {
+                clientTransport.Connect("127.0.0.1", hostTransport.Port);
+                if (!WaitFor("client handshaken", () => hostSession.Peers.Count == 1))
+                {
+                    return 1;
+                }
+
+                // The fight the host is about to enter, held by both sides, so
+                // the client takes the load path rather than the fetch path --
+                // the path with a refusal to report.
+                var fight = new ScenarioPayload(LobbySaveNames.ScenarioSlot, new[]
+                {
+                    new ScenarioFile(ScenarioPayload.ContentFileName, new byte[] { 9, 8, 7 }),
+                    new ScenarioFile(ScenarioPayload.MetadataFileName, new byte[] { 6 }),
+                });
+                hostBridge.Scenario = fight;
+                clientBridge.Scenario = fight;
+                clientBridge.CombatLoadRefusal = LoadOutcome.Unavailable;
+
+                hostBridge.InCombat = true;
+                hostBridge.CurrentTurn = 0;
+
+                if (!WaitFor("host was asked to write the fight",
+                        () => hostBridge.ShipCombatRequested))
+                {
+                    return 1;
+                }
+
+                if (clientSession.State == ClientSessionState.Planning)
+                {
+                    Console.WriteLine("[selftest] FAIL the fight was announced before it was shipped");
+                    return 1;
+                }
+                Console.WriteLine("[selftest] OK   nothing announced before the fight was written");
+
+                host.Post(new LocalCombatReadyEvent(LobbySaveNames.ScenarioSlot, fight.Digest));
+
+                if (!WaitFor("the peer that could not get in was dropped",
+                        () => hostSession.Peers.Count == 0))
+                {
+                    return 1;
+                }
+
+                // The real assertion. A peer dropped from the entry barrier alone
+                // would leave this at 2 for ever, and the next Execute would never
+                // come.
+                if (hostSession.ParticipantCount != 1)
+                {
+                    Console.WriteLine("[selftest] FAIL the turn barrier still waits for "
+                        + hostSession.ParticipantCount + " machines");
+                    return 1;
+                }
+                Console.WriteLine("[selftest] OK   the turn barrier waits only for the host");
+
+                if (!hostLog.Saw("combat started"))
+                {
+                    Console.WriteLine("[selftest] FAIL the fight never started");
+                    return 1;
+                }
+                Console.WriteLine("[selftest] OK   the fight started without it");
 
                 Console.WriteLine("[selftest] PASS");
                 return 0;

@@ -340,6 +340,17 @@ namespace PBAndJ.Core.Net
                     HandleSnapshotApplied(applied, effects);
                     break;
 
+                case LocalCombatReadyEvent:
+                    // Only a host ships a fight — but the glue that writes one is
+                    // armed by an effect and answers frames later, long enough
+                    // for the player to have stopped hosting and joined someone
+                    // else. Without this arm the default below throws, and
+                    // NetGlue.Pump turns a throw into "networking stopped" for
+                    // the rest of the process: a stray save would cost the
+                    // session.
+                    effects.Add(new LogEffect(NetLog.CombatShipNotOurs()));
+                    break;
+
                 case CombatEnteredEvent:
                 case CombatExitedEvent:
                     // A client's own combat state is not authoritative — it

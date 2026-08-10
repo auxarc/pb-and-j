@@ -251,6 +251,23 @@ namespace PBAndJ.Peer
         }
 
         /// <summary>
+        /// Whether the session has asked for the fight to be written. M12b.
+        /// </summary>
+        /// <remarks>
+        /// The harness has no game and no disk to write to, so it records the ask
+        /// and the self-test stands in for the write. That is still worth having:
+        /// what it proves is the <em>ordering</em> — that the ask arrives before
+        /// anything is offered — which is the half of this the game cannot be
+        /// asked about without two people and a mission.
+        /// </remarks>
+        public bool ShipCombatRequested { get; private set; }
+
+        public void ShipCombat()
+        {
+            ShipCombatRequested = true;
+        }
+
+        /// <summary>
         /// The combat save this peer "holds". In-memory rather than on disk: the
         /// harness must be runnable anywhere, and the protocol does not care
         /// where the bytes came from.

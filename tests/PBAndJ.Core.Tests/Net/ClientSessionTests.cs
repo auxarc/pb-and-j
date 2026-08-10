@@ -706,6 +706,22 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void LocalCombatReady_IsLoggedRatherThanThrownOn()
+        {
+            // Only a host ships a fight, but the glue that writes one is armed by
+            // an effect and answers frames later — long enough for the player to
+            // have stopped hosting and joined someone else. Without this arm the
+            // default case throws, and NetGlue.Pump turns a throw into
+            // "networking stopped" for the rest of the process.
+            var client = Welcomed();
+
+            var effects = client.Handle(new LocalCombatReadyEvent("pbj_combat_test", "d1"));
+
+            Assert.Single(All<LogEffect>(effects));
+            Assert.DoesNotContain(effects, e => !(e is LogEffect));
+        }
+
+        [Fact]
         public void OrderApplied_IsIgnored()
         {
             // Clients never apply remote orders; the arm exists so the event,

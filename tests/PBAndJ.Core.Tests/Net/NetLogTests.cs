@@ -946,6 +946,25 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void CombatEntryAbandoned_SaysHowManyWereStillComingIn()
+        {
+            Assert.Contains("2 machines", NetLog.CombatEntryAbandoned(2));
+            Assert.Contains("1 machine ", NetLog.CombatEntryAbandoned(1));
+        }
+
+        [Fact]
+        public void CombatShipTooLate_SaysTheFightIsOver()
+        {
+            Assert.Contains("no longer in it", NetLog.CombatShipTooLate());
+        }
+
+        [Fact]
+        public void CombatShipNotOurs_ExplainsAFileThatAppearedForNoReason()
+        {
+            Assert.Contains("not hosting", NetLog.CombatShipNotOurs());
+        }
+
+        [Fact]
         public void CombatAlreadyHeld_AndFetching_NameTheFight()
         {
             Assert.Contains("pbj_combat_test", NetLog.CombatAlreadyHeld("pbj_combat_test"));
