@@ -16,6 +16,10 @@ namespace PBAndJ.Mod
         public override void OnLoadStart()
         {
             Debug.Log(LoadBanner.Compose(modID, metadata.ver));
+            // The game owns this string — it is what it passed to `new Harmony(id)`
+            // — so it is captured rather than copied, and pbj.drive-state can
+            // report how many methods we actually patched.
+            Net.ActuatorGlue.RememberHarmonyId(modID);
         }
 
         public override void OnLoadEnd()
@@ -26,7 +30,17 @@ namespace PBAndJ.Mod
             SaveLoadGlue.EnableCombatSaves();
             InjectGlue.RegisterConsoleCommand();
             Net.NetGlue.RegisterConsoleCommands();
+            Net.ActuatorGlue.RegisterConsoleCommands();
             UpdateGlue.RegisterConsoleCommand();
+#if PBJ_DRIVE
+            // Started from here rather than from a patch, and the coupling is
+            // deliberate: OnLoadEnd runs only if PatchAll succeeded, and the
+            // channel's pump is a Harmony postfix. Starting it anywhere earlier
+            // could leave a socket accepting commands that nothing would ever
+            // execute. No port set means no listener.
+            Net.DriveProbeGlue.RegisterConsoleCommand();
+            Net.DriveGlue.Start();
+#endif
             // THROWAWAY (M12 recon) — goes when docs/notes/overworld-recon.md is written.
             Net.OverworldProbeGlue.RegisterConsoleCommands();
             // THROWAWAY (M12 review follow-up) — answers the two questions gating

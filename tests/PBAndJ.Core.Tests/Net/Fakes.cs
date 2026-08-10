@@ -98,6 +98,11 @@ namespace PBAndJ.Core.Tests.Net
 
         public void MirrorBase(float x, float z) => Mirrored.Add((x, z));
 
+        /// <summary>How many times the glue was asked to write the fight.</summary>
+        public int ShipCombatCalls { get; private set; }
+
+        public void ShipCombat() => ShipCombatCalls++;
+
         /// <summary>What a combat load should answer, or null to "it started".</summary>
         public LoadOutcome? CombatLoadRefusal { get; set; }
 

@@ -39,7 +39,7 @@ WIRE_FILES  := $(addprefix src/PBAndJ.Core/Net/, \
                  PbjWriter.cs PbjReader.cs FloatBits.cs FrameEncoder.cs FrameDecoder.cs \
                  PbjProtocol.cs Seams.cs)
 
-.PHONY: test build dist deploy check-game-hash check-mod-version check-wire-surface record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
+.PHONY: test build dist deploy check-no-drive-channel check-game-hash check-mod-version check-wire-surface record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
 
 # metadata.yaml is the one place PbjProtocol.ModVersion cannot reach, and a
 # disagreement between them is invisible until a peer is refused by a host —
@@ -108,8 +108,13 @@ test:
 		/p:CollectCoverage=true /p:Include="[PBAndJ.Core]*" \
 		/p:Threshold=100 /p:ThresholdType=line%2cbranch%2cmethod /p:ThresholdStat=total'
 
+# PBJ_DRIVE=true compiles the dev drive channel in. Default OFF, and `deploy`
+# turns it on for its own dependency chain only (GNU Make passes target-specific
+# variables down to prerequisites). `package` refuses to run with it set.
+PBJ_DRIVE ?= false
+
 build: test
-	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet build src/PBAndJ.Mod -c Release'
+	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet build src/PBAndJ.Mod -c Release -p:PbjDrive=$(PBJ_DRIVE)'
 
 dist: build check-mod-version check-wire-surface
 	rm -rf dist/$(MOD_ID)
@@ -118,6 +123,46 @@ dist: build check-mod-version check-wire-surface
 	cp src/PBAndJ.Mod/bin/Release/net472/PBAndJ.Mod.dll dist/$(MOD_ID)/Libraries/
 	cp src/PBAndJ.Mod/bin/Release/net472/PBAndJ.Core.dll dist/$(MOD_ID)/Libraries/
 	cp src/PBAndJ.Mod/bin/Release/net472/PBAndJ.Net.dll dist/$(MOD_ID)/Libraries/
+
+# The drive channel is a loopback socket that runs ANY console command, and
+# Quantum Console's Extras assembly already registers `exec` (compile and run
+# arbitrary C#), file read/write and HTTP. Shipping it would hand every player a
+# remote code execution surface in their game.
+#
+# The mod is a compile-time opt-in (PBJ_DRIVE, see PBAndJ.Mod.csproj), so a
+# shipped build genuinely does not contain the code. This proves that against
+# the built artifact rather than trusting the build to have been invoked right —
+# the same reasoning as check-wire-surface. Type and literal names live in the
+# assembly's metadata strings, so a plain grep of the DLL finds them.
+#
+# ⭐ This is an invariant, not a nicety: the mod is intended for the Steam
+# Workshop eventually, and a dev channel reaching a published build is the one
+# mistake that cannot be walked back once people have installed it.
+#
+# TYPE NAMES ONLY, and that is not laziness. Type and member names live in the
+# metadata #Strings heap as UTF-8, so a plain grep finds them; string LITERALS
+# live in the #US heap as UTF-16, where "PBJ_DRIVE_PORT" is stored with a null
+# byte between every character and an ASCII grep silently never matches. A check
+# listing literals would look stricter while testing nothing — verified by
+# building with the channel in and watching the literal not match. The type names
+# are the load-bearing evidence anyway: no type, no code.
+DRIVE_SYMBOLS := DriveGlue DriveProbeGlue
+
+check-no-drive-channel:
+	@if [ "$(PBJ_DRIVE)" = "true" ]; then \
+		echo "FATAL: refusing to package a build with the drive channel compiled in."; \
+		echo "  Run 'make package' without PBJ_DRIVE=true."; \
+		exit 1; \
+	fi
+	@test -f dist/$(MOD_ID)/Libraries/PBAndJ.Mod.dll || { echo "FATAL: no built assembly to check"; exit 1; }
+	@for sym in $(DRIVE_SYMBOLS); do \
+		if grep -qa "$$sym" dist/$(MOD_ID)/Libraries/PBAndJ.Mod.dll; then \
+			echo "FATAL: '$$sym' is present in the assembly about to ship."; \
+			echo "  The drive channel must never reach a published build."; \
+			exit 1; \
+		fi; \
+	done
+	@echo "no drive channel in the shipped assembly"
 
 check-game-hash:
 	@test -n "$(PINNED_SHA)" || { echo "FATAL: no pinned SHA found in GAME_BUILD.md"; exit 1; }
@@ -151,6 +196,7 @@ peer-listen: peer
 	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet run --project tools/pbj-peer -c Release --no-build -- \
 		listen --bind $(HOST) --port $(PORT) --name $(NAME)'
 
+deploy: PBJ_DRIVE := true
 deploy: dist check-game-hash peer-selftest
 	mkdir -p "$(MODS_DIR)"
 	rm -rf "$(MODS_DIR)/$(MOD_ID)"
@@ -160,7 +206,7 @@ deploy: dist check-game-hash peer-selftest
 # What gets sent to someone on another machine. Gated on the same things deploy
 # is, because a package that fails the gate is worse than no package: the person
 # receiving it cannot tell a protocol bug from their own setup.
-package: dist check-game-hash peer-selftest
+package: dist check-game-hash peer-selftest check-no-drive-channel
 	rm -rf $(PKG_DIR)
 	mkdir -p $(PKG_DIR)
 	cd dist && zip -qr ../$(PKG_DIR)/$(MOD_ID)-mod-v$(MOD_VER).zip $(MOD_ID)

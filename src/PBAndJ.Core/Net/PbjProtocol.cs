@@ -125,7 +125,7 @@ namespace PBAndJ.Core.Net
         /// mod/metadata.yaml; the Makefile refuses to build a distributable when
         /// they disagree, since that is the one file this constant cannot reach.
         /// </remarks>
-        public const string ModVersion = "0.11.0";
+        public const string ModVersion = "0.12.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.

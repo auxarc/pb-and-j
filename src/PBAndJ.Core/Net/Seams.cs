@@ -232,6 +232,26 @@ namespace PBAndJ.Core.Net
         LoadOutcome? BeginCombatLoad(string? saveName, string? digest);
 
         /// <summary>
+        /// Write the fight now loading to the scenario slot. Hosts only. M12b.
+        /// </summary>
+        /// <remarks>
+        /// Returns nothing on purpose: the answer is frames away. The game
+        /// refuses to save while the scenario intro is running, and that flag is
+        /// raised in the same tick that makes <see cref="InCombat"/> true, so an
+        /// implementation must poll for its own moment. It reports by posting a
+        /// <see cref="LocalCombatReadyEvent"/> — with the slot name and digest
+        /// when the write lands, and with <c>null</c> for both when it never
+        /// will, because a host that cannot share the fight must still be allowed
+        /// to fight it.
+        /// <para>
+        /// A no-op is a legitimate implementation for anything with no game
+        /// behind it, provided something else posts the event; the harness stands
+        /// in for the write exactly that way.
+        /// </para>
+        /// </remarks>
+        void ShipCombat();
+
+        /// <summary>
         /// The save this machine holds under <paramref name="saveKey"/>, or
         /// <see cref="ScenarioPayload.None"/> if there is none.
         /// </summary>

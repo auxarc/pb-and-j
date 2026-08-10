@@ -21,8 +21,34 @@ namespace PBAndJ.Core.Net
         BeginLoad = 13,
         MirrorBase = 14,
         BeginCombatLoad = 15,
+        ShipCombat = 16,
 
-        // 16+ unallocated.
+        // 17+ unallocated.
+    }
+
+    /// <summary>
+    /// Write the fight now loading to the scenario slot, so it can be offered.
+    /// Hosts only. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Carries nothing, and that is the design. <em>Which</em> save is a
+    /// constant both sides already know (<see cref="LobbySaveNames.ScenarioSlot"/>),
+    /// and <em>when</em> the write is permitted is a property of the game rather
+    /// than of the protocol: <c>CanSave(false)</c> refuses while the scenario
+    /// intro runs, and that flag is set in the same tick that makes
+    /// <c>InCombat</c> true. So the glue polls for its own moment and answers
+    /// with <see cref="LocalCombatReadyEvent"/> — the same effect-out,
+    /// event-back shape as <see cref="BeginCombatLoadEffect"/>.
+    /// <para>
+    /// It exists at all so that the ask lands <em>inside</em> the pump that
+    /// observed the combat edge. A glue watching <c>InCombat</c> for itself would
+    /// work by frame timing rather than by construction, and could in principle
+    /// report a fight written before the session knew there was one.
+    /// </para>
+    /// </remarks>
+    public sealed class ShipCombatEffect : PbjEffect
+    {
+        public override PbjEffectKind Kind => PbjEffectKind.ShipCombat;
     }
 
     /// <summary>
