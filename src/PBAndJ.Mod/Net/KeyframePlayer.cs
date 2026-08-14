@@ -105,8 +105,54 @@ namespace PBAndJ.Mod.Net
             public GameObject? PuppetBehaviour { get; set; }
         }
 
+        /// <summary>
+        /// One unit whose visibility changed during the window, and everything
+        /// needed to move it without re-reading the ECS.
+        /// </summary>
+        /// <remarks>
+        /// The views and the id are cached at install for the same reason
+        /// <see cref="Sleeper"/> caches its handles: the transition fires
+        /// mid-window, on entities the snapshot may have just killed and that
+        /// combat teardown races. Every handle is Unity-null-checked at use.
+        /// <para>
+        /// <b>Three views, not one.</b> The game's own scrubber touches only
+        /// <c>combatView</c>, but it can afford to because
+        /// <c>PrepareUnitForReplay</c> has already parked the projection and
+        /// puppet views for every unit. We have no such sandbox — these are live
+        /// views — so we do what the game's ECS path does instead
+        /// (<c>VisibilityLinkSystem</c>) and what its unwind does
+        /// (<c>RestoreUnitForExecution</c>): all three.
+        /// </para>
+        /// </remarks>
+        private sealed class VisibilityWatch
+        {
+            public VisibilityWatch(int id, bool endHidden, float reveal, float hide)
+            {
+                Id = id;
+                EndHidden = endHidden;
+                Reveal = reveal;
+                Hide = hide;
+            }
+
+            public int Id { get; }
+            public bool EndHidden { get; }
+            public float Reveal { get; }
+            public float Hide { get; }
+
+            public CombatView? View { get; set; }
+            public ProjectedCombatView? Projected { get; set; }
+            public CombatPuppetView? Puppet { get; set; }
+
+            /// <summary>Null while this unit plays transform-only.</summary>
+            public Target? Target { get; set; }
+
+            /// <summary>What we last told the engine, or null before the first frame.</summary>
+            public bool? Applied { get; set; }
+        }
+
         private static readonly List<Target> targets = new List<Target>();
         private static readonly List<Sleeper> sleepers = new List<Sleeper>();
+        private static readonly List<VisibilityWatch> watches = new List<VisibilityWatch>();
         private static float windowStart;
         private static float windowEnd;
         private static float cursor;
@@ -128,6 +174,12 @@ namespace PBAndJ.Mod.Net
             {
                 return;
             }
+
+            // Set before the resolve loop, not after it: Watch reads the window
+            // to decide whether a unit's arrival time falls inside it, and a
+            // stale bound from the previous turn would answer for the wrong one.
+            windowStart = capture.WindowStart;
+            windowEnd = capture.WindowEnd;
 
             // Resolve once, not per frame. Unity's null check covers an entity
             // destroyed mid-playback, so a stale Transform simply stops moving.
@@ -160,13 +212,26 @@ namespace PBAndJ.Mod.Net
                 {
                     continue;
                 }
-                if (!byName.TryGetValue(persistent.nameInternal.s, out var track))
+                byName.TryGetValue(persistent.nameInternal.s, out var track);
+
+                // A unit with no track still matters, and is in fact the case
+                // this exists for: the recorder never opened an entry for a unit
+                // that was hidden when the turn began, so a freshly revealed
+                // ambusher arrives with visibility to honour and nothing to
+                // animate.
+                Watch(unit, track);
+
+                if (track == null)
                 {
                     continue;
                 }
 
                 var target = new Target(track, unit.combatView.view.transform);
                 targets.Add(target);
+                if (watches.Count > 0 && watches[watches.Count - 1].Id == unit.id.id)
+                {
+                    watches[watches.Count - 1].Target = target;
+                }
 
                 if (posesByName.TryGetValue(persistent.nameInternal.s, out var pose))
                 {
@@ -176,14 +241,77 @@ namespace PBAndJ.Mod.Net
 
             if (targets.Count == 0)
             {
+                // Nothing to play, so nothing to defer within. Discard the
+                // watches rather than leaving units hidden with no window to
+                // reveal them in — the one failure this ordering exists to
+                // prevent.
+                watches.Clear();
                 return;
             }
 
-            windowStart = capture.WindowStart;
-            windowEnd = capture.WindowEnd;
             cursor = capture.WindowStart;
             Turn = turn;
             playing = true;
+
+            // Applied only now, past both early returns: a unit hidden before
+            // playback was committed would stay hidden with nothing left to
+            // reveal it.
+            ApplyVisibility();
+        }
+
+        /// <summary>
+        /// Notes a unit whose visibility moved during the window, if it did.
+        /// </summary>
+        /// <remarks>
+        /// The stamps come from two places because only one of them can carry
+        /// each case. A tracked unit's reveal and hide are the recorder's own,
+        /// clipped to the window by the host — exact, and absent for a unit
+        /// activated during the planning phase, which is right: the recorder
+        /// held that unit from the window's first frame, so the host drew it
+        /// throughout.
+        /// <para>
+        /// A unit with <i>no</i> track has no recorder entry to have stamped
+        /// anything, so its reveal comes from the snapshot's <c>ArrivalTime</c>,
+        /// read off the ECS. That read is safe only because the snapshot is
+        /// applied before playback starts — the host sends it first from a
+        /// single site and effects run in order — and it is the only carrier
+        /// that case has. There is no matching hide: the game has no hide-time
+        /// component, and a unit hidden all window has no track to stamp.
+        /// </para>
+        /// </remarks>
+        private static void Watch(CombatEntity unit, UnitTrack? track)
+        {
+            var reveal = track != null ? track.RevealTime : ArrivalOf(unit);
+            var hide = track != null ? track.HideTime : ReplayVisibility.None;
+
+            // Nothing moved, which is almost every unit of almost every turn.
+            if (float.IsNegativeInfinity(reveal) && float.IsNegativeInfinity(hide))
+            {
+                return;
+            }
+
+            var watch = new VisibilityWatch(unit.id.id, unit.isHidden, reveal, hide)
+            {
+                View = unit.hasCombatView ? unit.combatView.view : null,
+                Projected = unit.hasProjectionView ? unit.projectionView.view : null,
+                Puppet = unit.hasPuppetView ? unit.puppetView.view : null,
+            };
+            watches.Add(watch);
+        }
+
+        // Only meaningful as a reveal instant when it falls inside the window.
+        // A client manufactures an arrival time for every deployed unit on load,
+        // so an unfiltered read would treat the whole player squad as pending.
+        private static float ArrivalOf(CombatEntity unit)
+        {
+            if (!unit.hasArrivalTime)
+            {
+                return ReplayVisibility.None;
+            }
+            var arrival = unit.arrivalTime.f;
+            return arrival > windowStart && arrival <= windowEnd
+                ? arrival
+                : ReplayVisibility.None;
         }
 
         /// <summary>
@@ -287,8 +415,128 @@ namespace PBAndJ.Mod.Net
             return names;
         }
 
+        /// <summary>
+        /// Puts every watched unit where the cursor says the host had it.
+        /// </summary>
+        /// <remarks>
+        /// Runs every frame rather than only on a change, and the reason is a
+        /// race rather than laziness. A unit hidden all combat has no world
+        /// marker to suppress at install — <c>OnUnitVisibilityChanged</c> is a
+        /// filter over the existing marker list and a no-op on an empty one —
+        /// and one is then <i>created, visible</i> by
+        /// <c>CombatUILinkInWorldMarkers</c>, which collects on Position and
+        /// skips only units flagged <c>isHidden</c>. Deferral deliberately never
+        /// touches that flag, and the snapshot's own position write is what
+        /// fires the collector. So the marker appears after our install call,
+        /// floating at the unit's end-of-turn position.
+        /// <para>
+        /// Re-asserting each frame bounds that leak to a single frame. It does
+        /// not eliminate it: whether this pass runs before or after the Entitas
+        /// reactive tick within a frame is not pinned down. The call is a
+        /// <c>SetActive</c> over a cached list, so the cost of being sure is
+        /// negligible and the deferred set is small by construction.
+        /// </para>
+        /// </remarks>
+        private static void ApplyVisibility()
+        {
+            for (var i = 0; i < watches.Count; i++)
+            {
+                var watch = watches[i];
+                var visible = ReplayVisibility.IsVisibleAt(
+                    watch.EndHidden, watch.Hide, watch.Reveal, cursor);
+                Show(watch, visible);
+            }
+        }
+
+        /// <summary>
+        /// Applies one unit's visibility, waking it first if it is going away.
+        /// </summary>
+        /// <remarks>
+        /// The wake-before-hide order is load-bearing and is the one sequencing
+        /// rule here that no amount of testing on a host would surface.
+        /// <c>CombatPuppetView.OnVisibility</c> is a <c>SetActive</c> on the
+        /// puppet view's own root, and the puppet master and behaviour objects
+        /// that <see cref="Dress"/> deactivates are children of it. Hide first
+        /// and the later unwind sets those children active <i>under an inactive
+        /// root</i>, so no <c>OnEnable</c> ever fires, the puppet never
+        /// re-initialises, and the cascade goes off later in a state no vanilla
+        /// path produces.
+        /// <para>
+        /// So a unit being hidden is unwound first — while its root is still
+        /// active and the wake runs in the orderly direction — and only then
+        /// hidden. Its remaining keys are no loss: it is invisible for the rest
+        /// of the window by definition.
+        /// </para>
+        /// </remarks>
+        private static void Show(VisibilityWatch watch, bool visible)
+        {
+            var changed = watch.Applied != visible;
+            watch.Applied = visible;
+
+            if (changed && !visible)
+            {
+                WakeOne(watch);
+            }
+
+            if (changed)
+            {
+                if (watch.View != null)
+                {
+                    watch.View.OnVisibility(visible);
+                }
+                if (watch.Projected != null)
+                {
+                    watch.Projected.OnVisibility(visible);
+                }
+                if (watch.Puppet != null)
+                {
+                    watch.Puppet.OnVisibility(visible);
+                }
+                CIHelperOverlays.OnUnitVisibilityChanged(watch.Id, visible);
+            }
+
+            // Unconditional, unlike the rest: this is the half that loses a race
+            // to a marker created after our install call. Cheap and idempotent.
+            if (!visible || changed)
+            {
+                PhantomBrigade.Combat.CIHelperWorldMarkers.OnUnitVisibilityChanged(watch.Id, visible);
+            }
+        }
+
+        /// <summary>
+        /// Unwinds one unit's sleep ahead of the rest, and stops posing it.
+        /// </summary>
+        private static void WakeOne(VisibilityWatch watch)
+        {
+            var target = watch.Target;
+            if (target == null)
+            {
+                return;
+            }
+
+            // Bones stop being written the moment the unit is invisible, so the
+            // pose driver has nothing left to do for it.
+            target.Poses = null;
+            target.Bones = null;
+
+            for (var i = sleepers.Count - 1; i >= 0; i--)
+            {
+                var sleeper = sleepers[i];
+                if (sleeper.View != null && target.MechView != null
+                    && ReferenceEquals(sleeper.View, target.MechView))
+                {
+                    WakeSleeper(sleeper);
+                    sleepers.RemoveAt(i);
+                }
+            }
+        }
+
         internal static void Stop()
         {
+            // Visibility first, and Wake second. The same ordering argument as
+            // Show's: a puppet root left inactive would swallow the sleep
+            // unwind's SetActive calls on its own children.
+            RestoreVisibility();
             Wake();
             targets.Clear();
             PosedUnits = 0;
@@ -309,29 +557,74 @@ namespace PBAndJ.Mod.Net
         {
             for (var i = 0; i < sleepers.Count; i++)
             {
-                var sleeper = sleepers[i];
-                if (sleeper.View != null)
-                {
-                    sleeper.View.pauseUpdates = false;
-                }
-                if (sleeper.PuppetBehaviour != null)
-                {
-                    sleeper.PuppetBehaviour.SetActive(true);
-                }
-                if (sleeper.PuppetMaster != null)
-                {
-                    sleeper.PuppetMaster.SetActive(true);
-                }
-                if (sleeper.FullBodyIk != null)
-                {
-                    sleeper.FullBodyIk.SetActive(true);
-                }
-                if (sleeper.View != null && sleeper.View.animator != null)
-                {
-                    sleeper.View.animator.enabled = true;
-                }
+                WakeSleeper(sleepers[i]);
             }
             sleepers.Clear();
+        }
+
+        private static void WakeSleeper(Sleeper sleeper)
+        {
+            if (sleeper.View != null)
+            {
+                sleeper.View.pauseUpdates = false;
+            }
+            if (sleeper.PuppetBehaviour != null)
+            {
+                sleeper.PuppetBehaviour.SetActive(true);
+            }
+            if (sleeper.PuppetMaster != null)
+            {
+                sleeper.PuppetMaster.SetActive(true);
+            }
+            if (sleeper.FullBodyIk != null)
+            {
+                sleeper.FullBodyIk.SetActive(true);
+            }
+            if (sleeper.View != null && sleeper.View.animator != null)
+            {
+                sleeper.View.animator.enabled = true;
+            }
+        }
+
+        /// <summary>
+        /// Hands every watched unit back to the snapshot's own answer.
+        /// </summary>
+        /// <remarks>
+        /// Read live off the entity rather than from anything captured at
+        /// install. A new turn's keyframes arrive <i>after</i> that turn's
+        /// snapshot has already been applied, and <see cref="Play"/> opens by
+        /// stopping the previous window — so restoring a remembered value would
+        /// overwrite fresher truth with staler. The entity is the truth; we were
+        /// only ever borrowing it for the length of a window.
+        /// </remarks>
+        private static void RestoreVisibility()
+        {
+            for (var i = 0; i < watches.Count; i++)
+            {
+                var watch = watches[i];
+                var unit = IDUtility.GetCombatEntity(watch.Id);
+                var visible = unit == null || !unit.isHidden;
+                if (watch.Applied == visible)
+                {
+                    continue;
+                }
+                watch.Applied = null;
+                if (watch.View != null)
+                {
+                    watch.View.OnVisibility(visible);
+                }
+                if (watch.Projected != null)
+                {
+                    watch.Projected.OnVisibility(visible);
+                }
+                if (watch.Puppet != null)
+                {
+                    watch.Puppet.OnVisibility(visible);
+                }
+                PhantomBrigade.Combat.CIHelperWorldMarkers.OnUnitVisibilityChanged(watch.Id, visible);
+                CIHelperOverlays.OnUnitVisibilityChanged(watch.Id, visible);
+            }
+            watches.Clear();
         }
 
         /// <summary>Pumped from the same Heartbeat postfix the runtime is.</summary>
@@ -399,6 +692,11 @@ namespace PBAndJ.Mod.Net
 
                 ApplyPose(target);
             }
+
+            // After the transform and pose writes, so a unit revealed this frame
+            // is shown where the window says it is rather than where it was left
+            // standing a frame earlier.
+            ApplyVisibility();
 
             if (finished)
             {

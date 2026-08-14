@@ -55,10 +55,16 @@ namespace PBAndJ.Core.Net
     {
         private static readonly TransformKey[] NoKeys = new TransformKey[0];
 
-        public UnitTrack(string? name, IReadOnlyList<TransformKey>? transforms)
+        public UnitTrack(
+            string? name,
+            IReadOnlyList<TransformKey>? transforms,
+            float revealTime = ReplayVisibility.None,
+            float hideTime = ReplayVisibility.None)
         {
             Name = name;
             Transforms = transforms ?? NoKeys;
+            RevealTime = revealTime;
+            HideTime = hideTime;
         }
 
         /// <summary>The persistent entity's internal name — the join key.</summary>
@@ -66,6 +72,46 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Ascending by <see cref="TransformKey.Time"/>.</summary>
         public IReadOnlyList<TransformKey> Transforms { get; }
+
+        /// <summary>
+        /// When the host revealed this unit during the window, or
+        /// <see cref="ReplayVisibility.None"/>.
+        /// </summary>
+        /// <remarks>
+        /// The recorder's own <c>keyframeReveal</c> (<c>CombatReplayHelper.cs:1937</c>),
+        /// clipped to the window at capture. Clipping is not tidiness: the field
+        /// is a single slot that <c>experimentalMode</c> never clears between
+        /// turns, so an unclipped read would replay a reveal from three turns ago
+        /// on every turn since.
+        /// <para>
+        /// Absence is meaningful and is the common case. A unit activated during
+        /// the <i>planning</i> phase has no reveal stamp at all — recording is off
+        /// outside execution — while the recorder does hold it from the window's
+        /// first frame, so the host drew it throughout and so must a client. An
+        /// earlier revision of this design used the unit's <c>ArrivalTime</c> here
+        /// instead and hid every such unit for up to a quarter-second.
+        /// </para>
+        /// <para>
+        /// Travels here rather than on <see cref="UnitSnapshot"/> because this is
+        /// the message the player receives. The snapshot's <c>ArrivalTime</c>
+        /// covers the units that have no track at all, which is the only case it
+        /// can cover — and the game has no hide-time component at all, so the
+        /// hide direction could never have gone that way.
+        /// </para>
+        /// </remarks>
+        public float RevealTime { get; }
+
+        /// <summary>
+        /// When the host hid this unit during the window, or
+        /// <see cref="ReplayVisibility.None"/>.
+        /// </summary>
+        /// <remarks>
+        /// The recorder's <c>keyframeHidden</c> (<c>CombatReplayHelper.cs:1930</c>),
+        /// clipped the same way. Retreat is what writes it — an ordinary player
+        /// action, not an exotic one — so without this a retreating unit vanishes
+        /// at the start of the window instead of walking off.
+        /// </remarks>
+        public float HideTime { get; }
     }
 
     /// <summary>

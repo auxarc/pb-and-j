@@ -195,7 +195,17 @@ namespace PBAndJ.Mod.Net
                     // the scenario save said on the turn it loaded.
                     unit.isHidden,
                     unit.isHiddenDetectable,
-                    persistent.isUnitDeployed));
+                    persistent.isUnitDeployed,
+                    // Presence travels beside the value because the two really
+                    // do disagree across the wire. A host's player squad is
+                    // deployed with no arrival time at all
+                    // (CombatScenarioSetupSystem), while the same units on a
+                    // client read has=true, value=-1 — the save writer stamps -1
+                    // for an absent component and the loader adds it back to
+                    // everything deployed. Sending only a float would leave
+                    // those units uncorrectable.
+                    unit.hasArrivalTime,
+                    unit.hasArrivalTime ? unit.arrivalTime.f : 0f));
 
                 if (units.Count == PbjMessageCodec.MaxUnitsPerSnapshot)
                 {
@@ -324,6 +334,8 @@ namespace PBAndJ.Mod.Net
             // would show a mesh with no marker, overlay or unit-bar entry.
             persistent.isUnitDeployed = state.IsDeployed;
             unit.isHiddenDetectable = state.IsHiddenDetectable;
+            ApplyArrivalTime(unit, state);
+            DropLandingData(unit);
 
             if (unit.isHidden == state.IsHidden)
             {
@@ -359,6 +371,100 @@ namespace PBAndJ.Mod.Net
             return true;
         }
 
+        /// <summary>
+        /// Puts one unit's arrival time where the host's is, presence included.
+        /// </summary>
+        /// <remarks>
+        /// Written outside the visibility early-return above, because the value
+        /// moves in cases where the flag does not: a unit revealed and then
+        /// revealed again by a later wave keeps <c>isHidden == false</c>
+        /// throughout while its arrival time is rewritten.
+        /// <para>
+        /// The removal arm is not an edge case and will fire on the first
+        /// snapshot of every fight, for every player unit. A client manufactures
+        /// the component for itself on load — <c>DataManagerSave.cs:3047</c> adds
+        /// one to everything deployed, taking the <c>-1</c> the save writer
+        /// stamps for an absent component — while the host's own player squad
+        /// never has it. Correcting that is the point rather than a side effect:
+        /// <c>ScenarioUtility.cs:3652</c> branches on presence alone.
+        /// </para>
+        /// <para>
+        /// Guarded on both sides so the steady state costs a comparison rather
+        /// than a component write, which matters because this runs for every
+        /// unit of every snapshot.
+        /// </para>
+        /// </remarks>
+        /// <summary>
+        /// Takes the landing animation away from a unit on a client, which can
+        /// never finish playing it.
+        /// </summary>
+        /// <remarks>
+        /// Measured, not reasoned — and it is the one fact this whole change
+        /// rested on, argued twice from the decompile and got wrong both times.
+        /// A probe on a real client (<c>pbj.vis-probe</c>) reported
+        /// <c>landing=True</c> for a hidden scenario unit on <b>both</b>
+        /// machines, so the reassuring answer was simply false.
+        /// <para>
+        /// Why it has to go. <c>CombatLandingSystem</c> is a reactive system on
+        /// <c>SimulationTime</c>, and a client's clock is frozen at zero — but
+        /// Entitas collectors fire on <i>Replace</i>, not on advancement, and
+        /// <c>UnitUtilities.cs:1063</c> replaces the value with itself, so the
+        /// system does run here. Its elapsed time is
+        /// <c>0 - arrivalTime</c>, i.e. negative, so it takes the
+        /// <c>continue</c> and never reaches the branch that completes a landing
+        /// and removes the component. A host sheds <c>LandingData</c> seconds
+        /// after the unit arrives; a client would hold it for the rest of the
+        /// fight.
+        /// </para>
+        /// <para>
+        /// That difference is not cosmetic once the arrival time is replicated.
+        /// <c>CIHelperOverlays.OnTimeChange</c> raises the landing countdown on
+        /// exactly <c>hasArrivalTime &amp;&amp; hasLandingData</c>, so the client
+        /// would pin a "▼ 13.1s" countdown over a unit that landed long ago and
+        /// never clear it. The null-clip arm of the landing system is worse: it
+        /// <c>ForceUnitTransform</c>s the unit to the landing spot, overriding
+        /// the snapshot we just applied.
+        /// </para>
+        /// <para>
+        /// Nothing is lost by dropping it. The landing is presentation, a client
+        /// never simulates one, and the host's own replay does not show it
+        /// either — the recorder keeps no entry for a unit that was hidden when
+        /// the turn began.
+        /// </para>
+        /// </remarks>
+        private static void DropLandingData(CombatEntity unit)
+        {
+            if (unit.hasLandingData)
+            {
+                unit.RemoveLandingData();
+            }
+            if (unit.hasLandingDataCustom)
+            {
+                unit.RemoveLandingDataCustom();
+            }
+        }
+
+        private static void ApplyArrivalTime(CombatEntity unit, UnitSnapshot state)
+        {
+            if (!state.HasArrivalTime)
+            {
+                if (unit.hasArrivalTime)
+                {
+                    unit.RemoveArrivalTime();
+                }
+                return;
+            }
+
+            if (!unit.hasArrivalTime)
+            {
+                unit.AddArrivalTime(state.ArrivalTime);
+            }
+            else if (unit.arrivalTime.f != state.ArrivalTime)
+            {
+                unit.ReplaceArrivalTime(state.ArrivalTime);
+            }
+        }
+
         // Walks the game's own replay recorder and re-keys it for the wire.
         //
         // Three things here are not obvious and were each verified against the
@@ -372,12 +478,17 @@ namespace PBAndJ.Mod.Net
         //    the same Simulating.Removed() collector. Gating on it would return
         //    empty every single turn.
         //
-        // 2. The tracks are NOT cleared between turns. experimentalMode is true
-        //    by default and OnExecutionStart only clears `units` when it is
-        //    false, so a track accumulates for the whole combat. We slice from
-        //    the key OnExecutionStart wrote, BY INDEX — not by comparing against
-        //    turnStartTime, which is Mathf.RoundToInt'd and so can be *later*
-        //    than the previous turn's final key, dragging it into our window.
+        // 2. The tracks MAY NOT be cleared between turns, so never assume either
+        //    way. OnExecutionStart clears `units` only when experimentalMode is
+        //    false, and while the field defaults to true in code it is a player
+        //    SETTING (Experimental_ReplayExtended) — a probe on a real game read
+        //    it as FALSE, so both states ship. With it on, a track accumulates
+        //    for the whole combat. We slice from the key OnExecutionStart wrote,
+        //    BY INDEX — not by comparing against turnStartTime, which is
+        //    Mathf.RoundToInt'd and so can be *later* than the previous turn's
+        //    final key, dragging it into our window. That slice is correct
+        //    whichever way the setting sits, which is why it is written this way
+        //    rather than branching on the flag.
         //
         // 3. The recorder's last key is not the unit's final position.
         //    OnExecutionEnd samples position before CombatExecutionEndLateSystem
@@ -437,7 +548,11 @@ namespace PBAndJ.Mod.Net
                     keys = Decimate(keys, PbjMessageCodec.MaxKeysPerTrack);
                 }
 
-                tracks.Add(new UnitTrack(persistent.nameInternal.s, keys));
+                tracks.Add(new UnitTrack(
+                    persistent.nameInternal.s,
+                    keys,
+                    Windowed(entry.Value.keyframeReveal, windowStart, windowEnd),
+                    Windowed(entry.Value.keyframeHidden, windowStart, windowEnd)));
 
                 // M8. Beside the transform track, never inside it: a turn whose
                 // poses cannot travel still plays as M6 always did.
@@ -469,6 +584,33 @@ namespace PBAndJ.Mod.Net
             }
             ReportUncaptured(bonelessUnits, strandedKeys);
             return new KeyframeCapture(windowStart, windowEnd, tracks, poses);
+        }
+
+        /// <summary>
+        /// A recorded visibility stamp, if it belongs to this turn.
+        /// </summary>
+        /// <remarks>
+        /// <c>ReplayUnit.keyframeReveal</c> and <c>keyframeHidden</c> are single
+        /// slots, not lists, and nothing clears them between turns while
+        /// <c>experimentalMode</c> is on — the same accumulation the transform
+        /// and pose slices already work around. Sent unclipped, a unit that was
+        /// revealed once on turn 2 would be re-revealed on every turn after it,
+        /// which on a client looks like the unit blinking out at the start of
+        /// every window for the rest of the fight.
+        /// <para>
+        /// Inclusive at both ends. A stamp exactly at the window start is this
+        /// turn's — <c>OnExecutionStart</c> and the reveal it triggers share a
+        /// frame — and one exactly at the end is the moment the snapshot was
+        /// taken.
+        /// </para>
+        /// </remarks>
+        private static float Windowed(ReplayKeyframe? stamp, float windowStart, float windowEnd)
+        {
+            if (stamp == null || stamp.time < windowStart || stamp.time > windowEnd)
+            {
+                return ReplayVisibility.None;
+            }
+            return stamp.time;
         }
 
         private static void ReportUncaptured(int bonelessUnits, int strandedKeys)

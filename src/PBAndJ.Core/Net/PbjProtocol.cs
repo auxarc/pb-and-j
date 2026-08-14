@@ -119,8 +119,25 @@ namespace PBAndJ.Core.Net
         /// as the next unit's name length. <see cref="ModVersion"/> moved to
         /// 0.14.0 in the same commit, per the rule above.
         /// </para>
+        /// <para>
+        /// <b>And M8's leftovers are the second</b>, for the same reason and in
+        /// the same place: an arrival-time flag and float appended to every unit
+        /// record inside <c>Snapshot</c>. Five bytes a unit, so a v4 peer would
+        /// read one unit's arrival time as the next unit's name length — the
+        /// identical failure, which is what makes it the identical case.
+        /// <see cref="ModVersion"/> moved to 0.15.0 in the same commit.
+        /// </para>
+        /// <para>
+        /// Worth stating once, because it is easy to read this constant as
+        /// belt-and-braces behind the mod-version gate: for the <b>harness</b>
+        /// it is the only guard there is. <c>pbj-peer</c> announces no mod
+        /// version and no game build, and <see cref="Differs"/> treats an absent
+        /// value as "cannot say" rather than as a mismatch — so a stale
+        /// <c>pbj-peer</c> is refused by this constant or by nothing. It gates
+        /// <c>make deploy</c>, which makes that the load-bearing case.
+        /// </para>
         /// </remarks>
-        public const int Version = 4;
+        public const int Version = 5;
 
         /// <summary>
         /// This build of the mod, as peers announce it to each other.
@@ -134,7 +151,7 @@ namespace PBAndJ.Core.Net
         /// mod/metadata.yaml; the Makefile refuses to build a distributable when
         /// they disagree, since that is the one file this constant cannot reach.
         /// </remarks>
-        public const string ModVersion = "0.14.0";
+        public const string ModVersion = "0.15.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.
