@@ -612,8 +612,16 @@ namespace PBAndJ.Core.Net
             writer.WriteSingle(unit.Integrity);
             writer.WriteBool(unit.IsDead);
             writer.WriteSingle(unit.DeathTime);
+            writer.WriteBool(unit.IsHidden);
+            writer.WriteBool(unit.IsHiddenDetectable);
+            writer.WriteBool(unit.IsDeployed);
         }
 
+        // Every field is read into its own local rather than into the argument
+        // list. C# does evaluate arguments left to right, so the older nested
+        // form was correct — but "correct because of an evaluation-order rule"
+        // is not what a wire decoder should rest on, and this record now has
+        // ten fields rather than seven.
         private static UnitSnapshot ReadUnitSnapshot(PbjReader reader)
         {
             var name = reader.ReadString();
@@ -621,9 +629,15 @@ namespace PBAndJ.Core.Net
             var rotation = new Vec4(
                 reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
             var facing = ReadVec3(reader);
+            var integrity = reader.ReadSingle();
+            var isDead = reader.ReadBool();
+            var deathTime = reader.ReadSingle();
+            var isHidden = reader.ReadBool();
+            var isHiddenDetectable = reader.ReadBool();
+            var isDeployed = reader.ReadBool();
             return new UnitSnapshot(
-                name, position, rotation, facing,
-                reader.ReadSingle(), reader.ReadBool(), reader.ReadSingle());
+                name, position, rotation, facing, integrity, isDead, deathTime,
+                isHidden, isHiddenDetectable, isDeployed);
         }
 
         /// <summary>

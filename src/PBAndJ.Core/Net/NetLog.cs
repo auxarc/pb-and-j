@@ -434,6 +434,26 @@ namespace PBAndJ.Core.Net
                 captured, cap, thinned);
         }
 
+        /// <summary>
+        /// The correction changed which units this machine is drawing.
+        /// </summary>
+        /// <remarks>
+        /// Logged only on the edge, never every turn, because the steady state
+        /// is "nothing changed" and a line per turn would bury the one that
+        /// matters. The counts are what make it a diagnosis rather than a
+        /// notice: a client that quietly diverges on visibility shows a
+        /// different battlefield from the host while every digest still reports
+        /// OK, which is precisely how this went unnoticed until somebody looked
+        /// at two screens at once.
+        /// </remarks>
+        public static string VisibilityCorrected(int revealed, int hidden)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "visibility corrected | {0} unit{1} revealed, {2} hidden",
+                revealed, Plural(revealed), hidden);
+        }
+
         // --- poses (M8) ---
 
         public static string PosesSent(int turn, int partCount, int peerCount)
@@ -471,6 +491,29 @@ namespace PBAndJ.Core.Net
                 CultureInfo.InvariantCulture,
                 "turn {0} poses incomplete — {1} of {2} arrived | units will slide, not walk",
                 turn, held, expected);
+        }
+
+        /// <summary>
+        /// The recorder held pose data the host could not turn into tracks.
+        /// </summary>
+        /// <remarks>
+        /// Two losses that look identical from the outside and have different
+        /// causes, so both are named. A unit with no recorded bones is not
+        /// posed by the host's own replay either, and a key whose joint array
+        /// no longer matches the current skeleton belongs to a rebuild that
+        /// happened mid-turn. Neither is fatal and neither is visible in the
+        /// track counts alone, which is exactly why they are said out loud —
+        /// a unit that slides while its neighbours walk is otherwise a symptom
+        /// with no explanation anywhere in the log.
+        /// </remarks>
+        public static string PosesNotCaptured(int unitsWithoutBones, int keysDropped)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "poses partly uncaptured: {0} unit{1} without recorded bones, "
+                    + "{2} key{3} whose skeleton no longer matches",
+                unitsWithoutBones, Plural(unitsWithoutBones),
+                keysDropped, Plural(keysDropped));
         }
 
         /// <summary>

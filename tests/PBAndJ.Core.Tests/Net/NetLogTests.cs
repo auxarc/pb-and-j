@@ -531,6 +531,40 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void VisibilityCorrected_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] visibility corrected | 3 units revealed, 1 hidden",
+                NetLog.VisibilityCorrected(3, 1));
+        }
+
+        [Fact]
+        public void VisibilityCorrected_SpeaksOfOneRevealedUnitInTheSingular()
+        {
+            Assert.Equal(
+                "[pb-and-j] visibility corrected | 1 unit revealed, 0 hidden",
+                NetLog.VisibilityCorrected(1, 0));
+        }
+
+        [Fact]
+        public void PosesNotCaptured_NamesBothLossesSeparately()
+        {
+            Assert.Equal(
+                "[pb-and-j] poses partly uncaptured: 2 units without recorded bones, "
+                    + "7 keys whose skeleton no longer matches",
+                NetLog.PosesNotCaptured(2, 7));
+        }
+
+        [Fact]
+        public void PosesNotCaptured_SpeaksOfOneOfEachInTheSingular()
+        {
+            Assert.Equal(
+                "[pb-and-j] poses partly uncaptured: 1 unit without recorded bones, "
+                    + "1 key whose skeleton no longer matches",
+                NetLog.PosesNotCaptured(1, 1));
+        }
+
+        [Fact]
         public void PosesUnsendable_NamesTheFaultAndTheUnitThatCausedIt()
         {
             Assert.Equal(

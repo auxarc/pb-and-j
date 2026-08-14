@@ -62,6 +62,13 @@
       <HintPath>$(VendorDir)/UnityEngine.PhysicsModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- M8's playback driver. Silencing a unit's idle animation before writing
+         its recorded bones means touching Animator.enabled, and Animator lives
+         here rather than in CoreModule. -->
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>$(VendorDir)/UnityEngine.AnimationModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Entitas">
       <HintPath>$(VendorDir)/Entitas.dll</HintPath>
       <Private>false</Private>
