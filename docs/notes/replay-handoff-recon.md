@@ -676,12 +676,17 @@ picture alone.
 
 ---
 
-## ⚡ THE THREE THINGS LEFT UNDONE — deliberately, and written down rather than quietly widened
+## ⚡ THE THREE THINGS LEFT UNDONE — 1 AND 2 ARE NOW DONE (2026-08-14, later session)
 
 Every one of these was found while verifying something else, and each was left out because doing it
 would have grown a change that was already verified. None of them blocks M8 or M13.
 
-### 1. `ArrivalTime` does not travel
+> **✅ Items 1 and 2 are built and verified on two real games.** Mod 0.15.0, wire v5. Plan:
+> `~/.claude/plans/m8-leftovers.md` revision 4. **Item 2's mechanism as described below is WRONG** —
+> see the correction under it and the measured section at the end of this file. Item 3 is still open
+> and is still its own milestone.
+
+### 1. `ArrivalTime` does not travel — ✅ DONE
 
 A revealed unit reads `arrivalTime = -1` on a client against the host's real value (measured: `-1.00`
 vs `10.13`). The host's reveal path sets it in the same breath as the visibility flags
@@ -696,7 +701,18 @@ restores the component whenever `deployed` is set), so only the *value* differs.
 `PbjProtocol.Version` bump, which is the only reason it was not folded into M13 — the visibility fix
 was already verified and reopening the wire would have meant re-verifying it.
 
-### 2. Reveal timing is lost, so a mid-turn reveal plays back wrong
+**As built it is a flag *and* a float** (`HasArrivalTime` / `ArrivalTime`), because presence and
+value disagree across the wire in a way one field cannot express: `DataManagerSave.cs:3047` adds an
+arrival time to **every deployed unit** on load, taking the `-1` the save writer stamps for an absent
+component (`DataHelperSaveSerialization.cs:571`), while a host's player squad never has the component
+at all (`CombatScenarioSetupSystem.cs:390`). So the removal arm fires for the whole player squad on
+the first snapshot of every fight. **Verified matching across two machines: 10.07, then 10.14.**
+
+⚠️ **And carrying it uncovered a defect of its own — see "the landing countdown" at the end of this
+file.** Replicating an arrival time onto a client is only safe once `LandingData` is taken away from
+it, which is the opposite of what two careful readings of the decompile predicted.
+
+### 2. Reveal timing is lost, so a mid-turn reveal plays back wrong — ✅ DONE, and the mechanism below is WRONG
 
 The recorder skips hidden units at turn start (`:283`), so a unit hidden at `turnStartTime` and
 revealed mid-turn has **no key at the window start** — its first key is at reveal time.
@@ -709,8 +725,155 @@ game solves this with `ReplayUnit.keyframeReveal` / `keyframeHidden` (`:1922-194
 `:1118-1126`); our wire carries no such time. **Fix is a reveal timestamp per pose track**, or accept
 it in writing — which is what this paragraph is.
 
+#### ⚠️ CORRECTION — the paragraph above is wrong twice over, and the fix went elsewhere
+
+**"Its first key is at reveal time" is only true of a unit with a PRIOR track.**
+`CombatReplayHelper.units[...]` is assigned at exactly one place — `:294`, inside `OnExecutionStart`,
+guarded by `!isHidden` (`:283`) — and every other writer resolves the entry first and gives up
+without one: `OnUnitSnapshot` at `:1782`, `TryGetUnitTrack` at `:2043`, and `OnExecutionEnd` iterates
+`units`. So a unit hidden since combat start gets **no keys at all** that turn, and no
+`keyframeReveal` either, since that also goes through `TryGetUnitTrack`.
+
+**Measured, not argued:** `pbj.vis-probe` on the host reported `entry=NONE recorderUnits=8` for a
+hidden scenario unit — the recorder simply has no entry for it.
+
+The other class is real too, which is why this took four review passes to pin down:
+`ActionRecordingSystem`'s group is `NoneOf(Destroyed, Hidden)` (`:21`), so sampling stops while a
+unit is hidden and resumes on reveal. A unit with a **prior** entry that is hidden at window start
+and revealed mid-window really does get a track whose first key is at reveal time. Both classes
+exist; the paragraph above generalised one of them.
+
+**And a pose track was the wrong carrier anyway.** The reveal time now travels on `UnitTrack` for
+tracked units (`RevealTime` / `HideTime`, windowed at capture, sentinel `float.NegativeInfinity`) and
+on the snapshot's `ArrivalTime` for units with no track at all — which is the only carrier that case
+has. `UnitTrack` is what the player actually receives: `PlayKeyframesEffect` carries only
+`(Turn, KeyframeCapture)`.
+
+**The hide direction shipped with it** — retreat sets `isHidden` (`CombatActionEvent.cs:86`) during
+execution, so `keyframeHidden` (`:1930`) really is written and a retreating unit now walks off
+instead of vanishing at the window start.
+
+⚠️ **Both stamps must be windowed at capture.** They are single slots that nothing clears between
+turns while `experimentalMode` is on, so an unwindowed read replays an old reveal every turn after
+it.
+
+⚠️ **The game models TWO transitions per window, not one.** `:1118-1126` is two independent slots
+with a hide-priority `else if`. `ReplayVisibility.IsVisibleAt` transcribes it literally, including
+the case the game gets wrong (a reveal followed by a later hide never consults the reveal) — because
+the host's own replay is the reference for what the turn looked like.
+
 ### 3. No projectiles, beams or VFX on a client
 
 Covered in full above under "NO BULLETS ON A CLIENT". Repeated here so the three open items sit
 together: it is a scope line, not a defect, and carrying it is its own milestone. §8 enumerates the
 live references that cannot cross a process boundary.
+
+---
+
+## Measured on two real games, 2026-08-14 (later session) — `pbj.vis-probe`
+
+Four adversarial passes reviewed the leftovers plan and every one of them was non-empty; three
+overturned the design's mechanism rather than its wording. **They still all missed the defect
+below**, which one probe line found in minutes. The lesson is not that the reviews were poor — they
+killed a rule that would have shipped a unit hidden where the host drew it, and caught a wire field
+nothing could have read. It is that a review is still a reading, and **a reading loses to a
+measurement every time one is available.**
+
+### 🐛 THE LANDING COUNTDOWN — a client-only defect our own fix introduced
+
+**`hasLandingData` is TRUE on a client**, for exactly the units this work writes arrival times onto
+(`cm_state_ext_*`, the scenario-state-activated ones). Two separate arguments from the decompile said
+it must be false — one from `widgetLanding` having been measured off, one from landing data being
+shed on completion — and **both were wrong**.
+
+Reproduced live, three turns after the reveal:
+
+| | `hasLandingData` | landing widget | `arrival` |
+|---|---|---|---|
+| host | `False` | off | 10.07 |
+| client | `True` | **ON — `▼ …`** | 10.07 |
+
+**Mechanism.** `CombatLandingSystem` is reactive on `SimulationTime`, and a client's clock is frozen
+at zero — but Entitas collectors fire on **Replace**, not on advancement, and `UnitUtilities.cs:1063`
+replaces the value with itself, so the system does run on a client. Its elapsed time is
+`0 - arrivalTime`, i.e. negative, so it takes the `continue` and **never reaches the branch that
+completes the landing and removes the component** (`CombatLandingSystem.cs:155-162`). A host sheds
+`LandingData` seconds after arrival; a client holds it for the rest of the fight. That leaves the
+client permanently matching `hasArrivalTime && hasLandingData`, which is exactly the
+`CIHelperOverlays.OnTimeChange` gate (`:1051`). The null-clip arm is worse: it `ForceUnitTransform`s
+the unit to the landing spot, overriding the snapshot.
+
+**Fixed** by `CombatGameBridge.DropLandingData` on the client's snapshot-apply path. Nothing is lost:
+a client never simulates a landing, and the host's own replay does not show one either, because the
+recorder keeps no entry for a unit that was hidden when the turn began. **Re-verified after deploy —
+host and client both `landing=False`, widget off, `arrival=10.14` on both.**
+
+This is the M13 shape exactly: a silent, plausible, client-only divergence that the digest cannot
+see, no test can reach, and only two screens side by side will show.
+
+### ⚠️ `experimentalMode` was FALSE on a real game
+
+The decompile declares `public static bool experimentalMode = true` (`:26`), and this file and the
+mod's own comments leaned on it. The probe read **False**. It is the `Experimental_ReplayExtended`
+**player setting** (`SettingImplementations.cs:246-249`), so **both states ship and no code may
+assume either**. With it false, `units.Clear()` runs every turn and tracks do not accumulate; with it
+true they do. The transform and pose slices are written to be correct either way, which is why they
+compare by index and by the last descent rather than branching on the flag.
+
+### Smaller measurements from the same run
+
+- A client's `recorderUnits` is **0**, always. It never records — as designed, and now observed.
+- A host player unit reads `arrival=-`: the player squad genuinely has no arrival component, so the
+  snapshot's removal arm is the common case rather than an edge.
+- `previewLimit=5.00`, `turnStart=0.00`, `xform=47[0.00..5.00]`, `poses=47[0.00..5.00]` for a tracked
+  unit — 47 keys over a 5 s turn, matching the ~49 the earlier volume work predicted.
+
+### ✅ VFX VOLUME MEASURED AT LAST — §8's open number, from a real firefight
+
+`pbj.vfx-probe` on the host, `generic_elimination`, ten units, five consecutive turns. §8 said "volume
+has never been measured"; it has now.
+
+| turn | projectiles | proj keys | trails | standalone | particleKeys | weaponLights | estimate |
+|---|---|---|---|---|---|---|---|
+| 1 (no contact) | 0 | 0 | 0 | 51 | 720 | 0 | 26.5 KB |
+| 2 | 6 | 22 | 0 | 67 | 732 | 6 | 28.8 KB |
+| 3 | 112 | 237 | 0 | 267 | 883 | 66 | 55.9 KB |
+| 4 | 364 | 938 | 0 | 652 | 863 | 123 | 107.2 KB |
+| 5 | 277 | 846 | 0 | 727 | 853 | 87 | 109.9 KB |
+
+**A client reads zero on every one of these**, which is §8's `recordingAllowed` claim confirmed
+rather than assumed.
+
+What it means for the milestone:
+
+- **~110 KB at peak for a ten-unit fight** — the same order as M8's pose tracks (253 KB for twelve
+  units), comfortably under `MaxFrameLength`. **Chunking is not needed; per-turn slicing is.**
+- **The heaviest shape never appeared.** `withTrail=0` and `trailPoints=0` across every turn —
+  `ReplayKeyframeTrailPoint` is 10 fields and would have dominated the estimate, and no weapon in
+  this fight recorded one. Do not design around it sight unseen, but do not assume it is absent
+  either; it is per-weapon.
+- **Both hazards §8 names read zero in practice.** `presimulated=0` everywhere, so the null-holder
+  NRE never arises here; and `withFiringTransform=0` for all 123 weapon lights, so the live
+  `Transform` §8 calls unsendable was **null on every sample**. Neither is proof for other weapons,
+  but both are smaller obstacles than the read suggested.
+- ⚠️ **These collections accumulate, and the prune is gated on `!experimentalMode`** (`:241-253`).
+  With the setting **on** — the code default, though this machine read it off — *nothing* is pruned
+  and every asset spawned in the fight is still in the collection at turn 20. Even with it off, the
+  growth above (51 → 727 standalone) is real: assets survive while their `timeEnd` has not passed, so
+  a turn's collection is not a turn's worth of data. **Slice by the window at capture, exactly as the
+  unit tracks do, and never send a whole collection.**
+
+### Rig traps re-paid, worth not paying a third time
+
+- **`tools/playtest-m8.sh down` left both instances RUNNING**, and `make deploy` then `rm -rf`'d the
+  mod folder underneath them. Count instances after `down` — via `/proc/PID/comm`, never `pgrep -f`
+  — and kill by PID.
+- **Trap #1 bit again**: driving straight after `up` loaded the campaign *under* the pending intro,
+  which then dropped the title menu on top — `state=basecrawler` with `menu=True`, which no `state=`
+  assertion can see. **Poll for `menu=True` on both instances before driving.** Re-issuing the load
+  clears it.
+- The `fight` stage auto-picks `pbj_edit2`, **which cannot deploy** ("squad not ready"). Pass
+  `pbj_fromsp`. And it needs `PBJ_SCENARIO`, or it expects a briefing already open —
+  `generic_elimination` carries `hidden: true` units and is the right choice for visibility work.
+- A `timeout … | tail` pipeline reports **tail's** exit code, so a failed playtest looked like a
+  clean exit 0.
