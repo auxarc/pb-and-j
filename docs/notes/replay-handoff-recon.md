@@ -464,6 +464,76 @@ frozen statue.
 Corroborating detail worth keeping: a mech that barely moved that turn barely changed pose, while one
 that crossed the field animated heavily. An idle loop would have bobbed both identically.
 
+### ✅ AND ON TWO REAL GAMES, 2026-08-14 — the wire half
+
+`up → session → lobby → fight → turn → again`, fully scripted, no human keypress:
+
+```
+host    turn 0 poses | 14 unit tracks | broadcast to 1 peer
+client  turn 0 DIVERGED | host 301af20c | local 1a220e29
+        turn 0 corrected | 17 units | digest 301af20c OK
+        turn 0 keyframes received | 14 tracks, 700 keys | 5.00s of motion
+        turn 0 poses complete | 14 unit tracks | playing the battle
+        turn 1 corrected | 17 units | digest 5d8a5ad1 OK
+        turn 1 poses complete | 14 unit tracks | playing the battle
+```
+
+Two consecutive posed turns, complete sets both times, both windows unwound, no driver exception, no
+malformed frame, no dropped peer. **The second turn is the one that matters** — a first can look
+flawless and still leave every unit asleep, because the symptom only appears when something else
+tries to animate them.
+
+### ❌ NO BULLETS ON A CLIENT, AND THAT IS BY DESIGN — not a defect
+
+M6 carries transforms, M8 adds bone poses. **Projectiles, beams, muzzle flashes and impact VFX are
+none of it.** Asked during the first two-instance playtest and worth writing down, because "the
+mechs walk but nothing shoots" reads like a half-broken feature rather than a scope line.
+
+Every recording path for them is gated on `recordingAllowed` — `OnProjectileEnd` (`:1610`),
+`OnBeamTransform` (`:1656`), and the rest — which is only true during the **host's** simulation. So
+`assetsProjectiles`, `assetsBeams` and `assetsStandalone` are as empty on a client as `units` is.
+
+**This cost the driver choice nothing.** Driving the game's `ApplyTime` would have iterated those
+same empty collections (`:975-1001`) exactly as it would have iterated an empty `units` — no bullets
+either way without new wire work.
+
+What that work is, if it is ever wanted, is already enumerated in §8 above: the tracks are almost all
+plain data, and the live references that cannot cross a process boundary are
+`ReplayKeyframeUnitLight.firingTransform`, `ReplayEntityAssetStandalone.parent` (send
+`parentPresent = false` and it falls back to world space) and the `ReplayAdvancedParticleBlock`
+holders (re-resolvable by integer index; **`presimulated == true` with a null holder NREs**). Volume
+has never been measured. Treat it as its own milestone, not a Stage 5.
+
+### 🐛 A REAL DEFECT THE PLAYTEST FOUND, AND IT IS NOT M8's — visibility never crosses the wire
+
+Reported by eye during the two-instance run: *an enemy mech is on the host and not on the client.*
+The logs place it precisely, and it is an M5/M7-era gap that M8 merely made visible.
+
+| turn | host snapshot | host pose tracks | client corrected |
+|---|---|---|---|
+| 0 | 17 units | **14** | 17 units, digest OK |
+| 1 | 17 units | **14** | 17 units, digest OK |
+| 2 | 17 units | **17** | 17 units, digest OK |
+| 3 | 17 units | **17** | 17 units, digest OK |
+
+The recorder skips hidden units — `!combatEntity.isDestroyed && !combatEntity.isHidden` (`:283`) —
+and nothing was destroyed, since the snapshot held at 17 throughout. So **three units were hidden on
+the host at turns 0–1 and became visible by turn 2.**
+
+`UnitSnapshot` carries name, position, rotation, integrity, `IsDead` and `DeathTime`. **It has no
+visibility flag**, so `isHidden` is never replicated. A client's copy is whatever the scenario save
+froze at turn 0 and nothing ever updates it: the flag is written by the host's vision systems, and a
+client does not simulate. An enemy the host has spotted therefore stays invisible on the client for
+the rest of the fight.
+
+**The digest still matches**, which is what makes this so quiet — `StateDigest` hashes name, position
+and integrity, none of which visibility touches, so correction reports `OK` every turn while the two
+machines show different battlefields. Note also that **M8 is doing its part correctly**: the pose
+tracks for those units do arrive (14 → 17), the client simply will not draw the units.
+
+Fix, when it is wanted: a visibility bit on `UnitSnapshot` and an apply on the client. That moves a
+wire layout, so it owes a `ModVersion` bump. Its own piece of work, not a Stage 5.
+
 ### ⚡ THE COMBAT HUD IS NOT ENTERED UNTIL A UNIT IS SELECTED
 
 `docs/design/networking.md`, the M8 plan and the drive-rig notes have all carried
