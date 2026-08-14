@@ -59,7 +59,9 @@ namespace PBAndJ.Core.Net
             float deathTime,
             bool isHidden = false,
             bool isHiddenDetectable = false,
-            bool isDeployed = true)
+            bool isDeployed = true,
+            bool hasArrivalTime = false,
+            float arrivalTime = 0f)
         {
             Name = name;
             Position = position;
@@ -71,6 +73,8 @@ namespace PBAndJ.Core.Net
             IsHidden = isHidden;
             IsHiddenDetectable = isHiddenDetectable;
             IsDeployed = isDeployed;
+            HasArrivalTime = hasArrivalTime;
+            ArrivalTime = arrivalTime;
         }
 
         /// <summary>The persistent entity's internal name — the join key.</summary>
@@ -141,6 +145,53 @@ namespace PBAndJ.Core.Net
         /// </para>
         /// </remarks>
         public bool IsDeployed { get; }
+
+        /// <summary>
+        /// Whether the host holds an arrival time for this unit at all.
+        /// </summary>
+        /// <remarks>
+        /// Carried separately from the value because presence is what the game
+        /// branches on in three places — <c>ScenarioUtility.cs:3652</c> exempts
+        /// a hostile from salvage when it is absent, and both
+        /// <c>CIHelperOverlays.cs:1051</c> and <c>PathUtility.cs:95</c> test it
+        /// before reading anything.
+        /// <para>
+        /// A single float could not express it, and the reason is specific
+        /// rather than theoretical: a client manufactures the component for
+        /// itself. <c>DataManagerSave.cs:3047</c> adds an arrival time to
+        /// <i>every</i> deployed unit on load, and the save writer stamps
+        /// <c>-1</c> where the host had no component (<c>hasArrivalTime ? value
+        /// : -1f</c>, <c>DataHelperSaveSerialization.cs:571</c>). So a host's
+        /// player squad — which never receives one at all
+        /// (<c>CombatScenarioSetupSystem.cs:390</c>) — arrives on a client as
+        /// present-with--1. Present-and-negative and absent are therefore both
+        /// real states describing different machines, and a wire that collapsed
+        /// them would make the correction a no-op for exactly the units that
+        /// need it.
+        /// </para>
+        /// </remarks>
+        public bool HasArrivalTime { get; }
+
+        /// <summary>
+        /// When this unit arrived, on the host's simulation clock. Meaningful
+        /// only when <see cref="HasArrivalTime"/>.
+        /// </summary>
+        /// <remarks>
+        /// This is the reveal timestamp, which is why it is worth a wire move
+        /// for what looks like a cosmetic field. Every path in the game that
+        /// clears <c>isHidden</c> during a fight ends by calling
+        /// <c>ScenarioUtility.UpdateArrivalTime</c> (<c>:5603</c>), which writes
+        /// the current simulation time — five sites, and a repo-wide search
+        /// finds no sixth. So a client that knows this value knows when the
+        /// host stopped hiding the unit.
+        /// <para>
+        /// Left un-sent, a revealed unit reads <c>-1</c> on a client against the
+        /// host's real value, and — more visibly — the client has no way to tell
+        /// a unit revealed at the very end of a turn from one that was there all
+        /// along, so it pops the unit into the battlefield a whole window early.
+        /// </para>
+        /// </remarks>
+        public float ArrivalTime { get; }
 
         /// <summary>
         /// Projects onto the narrower type the digest is defined over.

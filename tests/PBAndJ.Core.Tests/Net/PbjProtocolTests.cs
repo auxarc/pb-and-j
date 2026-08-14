@@ -6,7 +6,7 @@ namespace PBAndJ.Core.Tests.Net
     public class PbjProtocolTests
     {
         [Fact]
-        public void Version_IsFour()
+        public void Version_IsFive()
         {
             // Pinned deliberately: bumping the wire format must be an explicit
             // edit here and in Write_MinimalOrder_ProducesExactBytes.
@@ -18,7 +18,9 @@ namespace PBAndJ.Core.Tests.Net
             // added type: the visibility fix appends three bytes to every unit
             // record inside Snapshot. A v3 peer would read one unit's
             // visibility bytes as the next unit's name length.
-            Assert.Equal(4, PbjProtocol.Version);
+            // v5 (M8's leftovers) is the same case a second time and in the same
+            // record: an arrival-time flag and float, five more bytes a unit.
+            Assert.Equal(5, PbjProtocol.Version);
         }
 
         [Fact]
@@ -199,7 +201,10 @@ namespace PBAndJ.Core.Tests.Net
             // as well, which no release before it has done — the snapshot's unit
             // record grew, so an older peer decodes every unit after the first
             // out of step rather than merely meeting an unknown message.
-            Assert.Equal("0.14.0", PbjProtocol.ModVersion);
+            // 0.15.0 for M8's leftovers, which moves the wire version for the
+            // same reason a second time: the arrival time a client needs both to
+            // stop diverging and to know when the host revealed a unit.
+            Assert.Equal("0.15.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

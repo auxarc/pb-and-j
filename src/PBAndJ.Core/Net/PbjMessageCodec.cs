@@ -25,7 +25,7 @@ namespace PBAndJ.Core.Net
         /// <remarks>
         /// Not <see cref="MaxUnitsPerPeer"/>: that is a roster cap for one peer's
         /// share, and a snapshot covers every unit in the combat, hostile ones
-        /// included. At ~85 bytes a unit this caps a snapshot near 11 KB, about
+        /// included. At ~90 bytes a unit this caps a snapshot near 12 KB, about
         /// 1% of <c>PbjRuntime.MaxFrameLength</c>.
         /// </remarks>
         public const int MaxUnitsPerSnapshot = 128;
@@ -235,6 +235,11 @@ namespace PBAndJ.Core.Net
                     {
                         var track = keyframes.Tracks[i];
                         writer.WriteString(track.Name);
+                        // Raw bits, so the negative-infinity sentinel survives
+                        // verbatim rather than becoming a magic finite number
+                        // the far side has to recognise.
+                        writer.WriteSingle(track.RevealTime);
+                        writer.WriteSingle(track.HideTime);
                         writer.WriteInt32(track.Transforms.Count);
                         for (var k = 0; k < track.Transforms.Count; k++)
                         {
@@ -485,13 +490,15 @@ namespace PBAndJ.Core.Net
                     for (var i = 0; i < trackCount; i++)
                     {
                         var name = reader.ReadString();
+                        var revealTime = reader.ReadSingle();
+                        var hideTime = reader.ReadSingle();
                         var keyCount = ReadCount(reader, MaxKeysPerTrack, "transform key");
                         var keys = new TransformKey[keyCount];
                         for (var k = 0; k < keyCount; k++)
                         {
                             keys[k] = ReadTransformKey(reader);
                         }
-                        tracks[i] = new UnitTrack(name, keys);
+                        tracks[i] = new UnitTrack(name, keys, revealTime, hideTime);
                     }
                     return new KeyframesMessage(turn, windowStart, windowEnd, tracks);
                 }
@@ -615,13 +622,15 @@ namespace PBAndJ.Core.Net
             writer.WriteBool(unit.IsHidden);
             writer.WriteBool(unit.IsHiddenDetectable);
             writer.WriteBool(unit.IsDeployed);
+            writer.WriteBool(unit.HasArrivalTime);
+            writer.WriteSingle(unit.ArrivalTime);
         }
 
         // Every field is read into its own local rather than into the argument
         // list. C# does evaluate arguments left to right, so the older nested
         // form was correct — but "correct because of an evaluation-order rule"
         // is not what a wire decoder should rest on, and this record now has
-        // ten fields rather than seven.
+        // twelve fields rather than seven.
         private static UnitSnapshot ReadUnitSnapshot(PbjReader reader)
         {
             var name = reader.ReadString();
@@ -635,9 +644,11 @@ namespace PBAndJ.Core.Net
             var isHidden = reader.ReadBool();
             var isHiddenDetectable = reader.ReadBool();
             var isDeployed = reader.ReadBool();
+            var hasArrivalTime = reader.ReadBool();
+            var arrivalTime = reader.ReadSingle();
             return new UnitSnapshot(
                 name, position, rotation, facing, integrity, isDead, deathTime,
-                isHidden, isHiddenDetectable, isDeployed);
+                isHidden, isHiddenDetectable, isDeployed, hasArrivalTime, arrivalTime);
         }
 
         /// <summary>

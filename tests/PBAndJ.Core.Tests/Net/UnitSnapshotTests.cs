@@ -69,6 +69,66 @@ namespace PBAndJ.Core.Tests.Net
                 StateDigest.Compute(new[] { hidden.ToUnitState() }));
         }
 
+        // Absent, not zero. A host's player squad never gets an arrival time at
+        // all (CombatScenarioSetupSystem deploys it without one), so "no arrival
+        // time" is the majority case and has to be the default.
+        [Fact]
+        public void Constructor_DefaultsToNoArrivalTime()
+        {
+            var unit = Snapshot();
+            Assert.False(unit.HasArrivalTime);
+            Assert.Equal(0f, unit.ArrivalTime);
+        }
+
+        [Fact]
+        public void Constructor_RetainsArrivalTime()
+        {
+            var unit = new UnitSnapshot(
+                "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
+                new Vec3(0f, 0f, -1f), 1f, false, 0f,
+                hasArrivalTime: true, arrivalTime: 10.13f);
+
+            Assert.True(unit.HasArrivalTime);
+            Assert.Equal(10.13f, unit.ArrivalTime);
+        }
+
+        // Present-and-negative is a real state, not a malformed one, and it is
+        // the one a client manufactures for itself. DataManagerSave adds an
+        // arrival time to EVERY deployed unit on load, and the save writer
+        // stamps -1 where the host had no component at all — so a client's whole
+        // player squad reads has=true, value=-1 while the host reads absent.
+        // Carrying presence separately from value is the only way to correct
+        // that, which makes this pair worth pinning.
+        [Fact]
+        public void Constructor_RetainsAPresentNegativeArrivalTime()
+        {
+            var unit = new UnitSnapshot(
+                "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
+                new Vec3(0f, 0f, -1f), 1f, false, 0f,
+                hasArrivalTime: true, arrivalTime: -1f);
+
+            Assert.True(unit.HasArrivalTime);
+            Assert.Equal(-1f, unit.ArrivalTime);
+        }
+
+        // Same argument as visibility above: the arrival time is presentational
+        // and correction cannot repair it, so it must not move the digest.
+        [Fact]
+        public void ToUnitState_IgnoresArrivalTime()
+        {
+            var without = new UnitSnapshot(
+                "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
+                new Vec3(0f, 0f, -1f), 1f, false, 0f);
+            var with = new UnitSnapshot(
+                "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
+                new Vec3(0f, 0f, -1f), 1f, false, 0f,
+                hasArrivalTime: true, arrivalTime: 10.13f);
+
+            Assert.Equal(
+                StateDigest.Compute(new[] { without.ToUnitState() }),
+                StateDigest.Compute(new[] { with.ToUnitState() }));
+        }
+
         [Fact]
         public void Vec4_RetainsAllFourComponents()
         {

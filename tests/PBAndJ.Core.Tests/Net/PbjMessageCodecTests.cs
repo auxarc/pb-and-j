@@ -524,6 +524,37 @@ namespace PBAndJ.Core.Tests.Net
             Assert.True(m.Units[1].IsDeployed);
         }
 
+        // Presence and value travel separately, so the pairs chosen here are the
+        // two a single combined field could not tell apart: absent (which a host
+        // reports for its whole player squad) and present-but-negative (which a
+        // client manufactures for the same units, because the save writer stamps
+        // -1 for an absent component and the loader adds it back to everything
+        // deployed). Collapsing them would make the correction a no-op.
+        [Fact]
+        public void RoundTrip_Snapshot_PreservesArrivalTimePresenceAndValue()
+        {
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f, false, 0f),
+                new UnitSnapshot("pb_mech_02", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f, false, 0f,
+                    hasArrivalTime: true, arrivalTime: -1f),
+                new UnitSnapshot("pb_mech_03", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f, false, 0f,
+                    hasArrivalTime: true, arrivalTime: 10.13f),
+            }));
+
+            Assert.False(m.Units[0].HasArrivalTime);
+            Assert.Equal(0f, m.Units[0].ArrivalTime);
+
+            Assert.True(m.Units[1].HasArrivalTime);
+            Assert.Equal(-1f, m.Units[1].ArrivalTime);
+
+            Assert.True(m.Units[2].HasArrivalTime);
+            Assert.Equal(10.13f, m.Units[2].ArrivalTime);
+        }
+
         [Fact]
         public void RoundTrip_Snapshot_WithNoUnits_PreservesEmpty()
         {
@@ -597,6 +628,8 @@ namespace PBAndJ.Core.Tests.Net
                 0x00, 0x00, 0x00, 0x40,             // windowEnd 2
                 0x01, 0x00, 0x00, 0x00,             // one track
                 0x01, 0x00, 0x00, 0x00, 0x61,       // name "a"
+                0x00, 0x00, 0x80, 0xFF,             // revealTime -inf (none)
+                0x00, 0x00, 0x80, 0xFF,             // hideTime -inf (none)
                 0x01, 0x00, 0x00, 0x00,             // one key
                 0x00, 0x00, 0x00, 0x00,             // time 0
                 0x00, 0x00, 0x80, 0x3F,             // position.x 1
@@ -645,6 +678,35 @@ namespace PBAndJ.Core.Tests.Net
             // "no motion" from "not in this combat".
             Assert.Equal("pb_mech_02", m.Tracks[1].Name);
             Assert.Empty(m.Tracks[1].Transforms);
+        }
+
+        // The sentinel has to survive as a sentinel. WriteSingle emits raw bits,
+        // so negative infinity round-trips exactly — but "exactly" is the whole
+        // claim, and a decoder that clamped or normalised it would turn "this
+        // unit never changed visibility" into "it was revealed a very long time
+        // ago", which reads as correct in every log and is wrong on screen.
+        [Fact]
+        public void RoundTrip_Keyframes_PreservesVisibilityStampsAndTheirAbsence()
+        {
+            var m = RoundTrip(new KeyframesMessage(1, 10f, 15f, new[]
+            {
+                new UnitTrack("never_changed", null),
+                new UnitTrack("revealed", null, revealTime: 12.5f),
+                new UnitTrack("retreated", null, hideTime: 13.25f),
+                new UnitTrack("both", null, revealTime: 11f, hideTime: 14f),
+            }));
+
+            Assert.True(float.IsNegativeInfinity(m.Tracks[0].RevealTime));
+            Assert.True(float.IsNegativeInfinity(m.Tracks[0].HideTime));
+
+            Assert.Equal(12.5f, m.Tracks[1].RevealTime);
+            Assert.True(float.IsNegativeInfinity(m.Tracks[1].HideTime));
+
+            Assert.True(float.IsNegativeInfinity(m.Tracks[2].RevealTime));
+            Assert.Equal(13.25f, m.Tracks[2].HideTime);
+
+            Assert.Equal(11f, m.Tracks[3].RevealTime);
+            Assert.Equal(14f, m.Tracks[3].HideTime);
         }
 
         [Fact]
