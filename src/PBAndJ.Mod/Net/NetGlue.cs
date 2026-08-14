@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using Content.Code.Utility;
@@ -317,8 +318,33 @@ namespace PBAndJ.Mod.Net
                 keys += track.Transforms.Count;
             }
 
-            KeyframePlayer.Play(decoded.Turn,
-                new KeyframeCapture(decoded.WindowStart, decoded.WindowEnd, decoded.Tracks));
+            // The poses go through the codec too, and for two reasons. The
+            // round trip is the same cheap proof the transforms get — a track
+            // the encoder would refuse is better learned here than by having
+            // the receiving peer drop us as malformed. And it makes this
+            // command a genuine one-instance eyeball test of M8: execute a
+            // turn, run it, and watch whether the mechs walk. Without it the
+            // only way to see a pose is to stand up two games.
+            var poses = new List<UnitPoseTrack>();
+            try
+            {
+                foreach (var pose in lastCapture.Poses)
+                {
+                    if (PoseTracks.TryPrepare(pose, out var prepared) != PoseTrackFault.None)
+                    {
+                        continue;
+                    }
+                    var wire = PbjMessageCodec.Encode(new PosesMessage(lastCaptureTurn, 0, 1, prepared));
+                    poses.Add(((PosesMessage)PbjMessageCodec.Decode(wire)).Track!);
+                }
+            }
+            catch (PbjProtocolException e)
+            {
+                return "[pb-and-j] captured poses failed the codec round-trip: " + e.Message;
+            }
+
+            KeyframePlayer.Play(decoded.Turn, new KeyframeCapture(
+                decoded.WindowStart, decoded.WindowEnd, decoded.Tracks, poses));
             if (!KeyframePlayer.IsPlaying)
             {
                 return "[pb-and-j] replay: no recorded unit is present in this combat";
@@ -327,6 +353,9 @@ namespace PBAndJ.Mod.Net
             var line = NetLog.KeyframesReceived(
                 decoded.Turn, decoded.Tracks.Count, keys, decoded.WindowStart, decoded.WindowEnd);
             Debug.Log(line);
+            Debug.Log(KeyframePlayer.PosedUnits > 0
+                ? NetLog.PosesReceived(decoded.Turn, KeyframePlayer.PosedUnits)
+                : NetLog.PosesIncomplete(decoded.Turn, poses.Count, lastCapture.Poses.Count));
             return line;
         }
 

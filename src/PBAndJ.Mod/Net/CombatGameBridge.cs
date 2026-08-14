@@ -303,7 +303,10 @@ namespace PBAndJ.Mod.Net
                 : windowStart;
 
             var tracks = new List<UnitTrack>();
+            var poses = new List<UnitPoseTrack>();
             var clamped = 0;
+            var bonelessUnits = 0;
+            var strandedKeys = 0;
 
             foreach (var entry in CombatReplayHelper.units)
             {
@@ -340,11 +343,26 @@ namespace PBAndJ.Mod.Net
 
                 tracks.Add(new UnitTrack(persistent.nameInternal.s, keys));
 
+                // M8. Beside the transform track, never inside it: a turn whose
+                // poses cannot travel still plays as M6 always did.
+                var pose = CapturePoses(
+                    unit, persistent.nameInternal.s, entry.Value.keyframesPoses, windowStart,
+                    ref strandedKeys);
+                if (pose == null)
+                {
+                    bonelessUnits++;
+                }
+                else
+                {
+                    poses.Add(pose);
+                }
+
                 if (tracks.Count == PbjMessageCodec.MaxTracksPerKeyframes)
                 {
                     Debug.LogWarning(NetLog.KeyframesClamped(
                         CombatReplayHelper.units.Count, PbjMessageCodec.MaxTracksPerKeyframes, clamped));
-                    return new KeyframeCapture(windowStart, windowEnd, tracks);
+                    ReportUncaptured(bonelessUnits, strandedKeys);
+                    return new KeyframeCapture(windowStart, windowEnd, tracks, poses);
                 }
             }
 
@@ -353,21 +371,143 @@ namespace PBAndJ.Mod.Net
                 Debug.LogWarning(NetLog.KeyframesClamped(
                     tracks.Count, PbjMessageCodec.MaxTracksPerKeyframes, clamped));
             }
-            return new KeyframeCapture(windowStart, windowEnd, tracks);
+            ReportUncaptured(bonelessUnits, strandedKeys);
+            return new KeyframeCapture(windowStart, windowEnd, tracks, poses);
         }
 
-        // Slices to the current turn by index. The key OnExecutionStart wrote is
-        // the first one at or after turnStartTime; everything before it belongs
-        // to an earlier turn. Scanning backwards from the end finds the boundary
-        // without walking the whole accumulated combat.
-        private static List<TransformKey> SliceTurn(
-            List<ReplayKeyframeTransform> recorded, float windowStart)
+        private static void ReportUncaptured(int bonelessUnits, int strandedKeys)
         {
-            var first = recorded.Count;
-            while (first > 0 && recorded[first - 1].time >= windowStart)
+            if (bonelessUnits > 0 || strandedKeys > 0)
+            {
+                Debug.LogWarning(NetLog.PosesNotCaptured(bonelessUnits, strandedKeys));
+            }
+        }
+
+        /// <summary>
+        /// One unit's skeletal track for this turn, or null when the host has
+        /// no skeleton to describe.
+        /// </summary>
+        /// <remarks>
+        /// The joint <i>names</i> come from the same <c>GetRecordedBones()</c>
+        /// list the recorder walked to fill every key, so name <c>i</c> and
+        /// value <c>i</c> are the same bone by construction rather than by
+        /// agreement. The client rebuilds each key into its own bone order from
+        /// those names, which is the only reason this travels at all — the
+        /// game's playback loop indexes the joint array to the <i>receiving</i>
+        /// machine's bone count with no length guard whatsoever.
+        /// <para>
+        /// No closing key is appended, unlike the transform track above. The
+        /// recorder's own <c>OnExecutionEnd</c> has already added a pose at the
+        /// window's end by the time this runs — it fires from
+        /// <c>CombatUILinkSimulationEnd</c>, which sits ahead of the system this
+        /// capture hangs off — and unlike a transform, a pose cannot be
+        /// reconstructed from the ECS if it were missing.
+        /// </para>
+        /// </remarks>
+        private static UnitPoseTrack? CapturePoses(
+            CombatEntity unit,
+            string? name,
+            List<ReplayKeyframeUnitPose> recorded,
+            float windowStart,
+            ref int strandedKeys)
+        {
+            // Explicit null comparisons rather than ?., because a Unity object
+            // that has been destroyed is only null through its own operator.
+            var view = unit.hasCombatView ? unit.combatView.view : null;
+            var visualManager = view != null ? view.visualManager : null;
+            var bones = visualManager != null ? visualManager.GetRecordedBones() : null;
+            if (bones == null || bones.Count == 0)
+            {
+                return null;
+            }
+
+            var joints = new string[bones.Count];
+            for (var i = 0; i < bones.Count; i++)
+            {
+                var bone = bones[i];
+                joints[i] = bone != null ? bone.name : string.Empty;
+            }
+
+            // Sliced exactly as the transform track is, and for the same
+            // reason: experimentalMode accumulates across the whole combat, so
+            // an unsliced track grows without bound.
+            var first = TurnStart(recorded.Count, i => recorded[i].time, windowStart);
+
+            var keys = new List<PoseKey>(recorded.Count - first);
+            for (var i = first; i < recorded.Count; i++)
+            {
+                var key = recorded[i];
+
+                // RecordUnitPose leaves joints null when a unit had no visual
+                // manager at that instant, and a shorter or longer array is a
+                // skeleton that was rebuilt part-way through the turn. Either
+                // way the values no longer answer to the names above, so the
+                // key is dropped rather than mismatched into place.
+                if (key.joints == null || key.joints.Length != joints.Length)
+                {
+                    strandedKeys++;
+                    continue;
+                }
+
+                var posed = new JointPose[joints.Length];
+                for (var j = 0; j < joints.Length; j++)
+                {
+                    posed[j] = new JointPose(
+                        ToVec3(key.joints[j].position), ToVec4(key.joints[j].rotation));
+                }
+                keys.Add(new PoseKey(
+                    key.time, key.syncLeftEquipment, key.syncRightEquipment, posed));
+            }
+
+            return new UnitPoseTrack(name, joints, keys);
+        }
+
+        /// <summary>
+        /// Where this turn's keys begin in an accumulated recorder list.
+        /// </summary>
+        /// <remarks>
+        /// Two passes, and the second is not belt-and-braces. The backward scan
+        /// is the obvious one: everything at or after <c>turnStartTime</c>
+        /// belongs to this turn, and walking back from the end finds it without
+        /// touching the whole accumulated combat.
+        /// <para>
+        /// But <c>turnStartTime</c> is the simulation clock <b>rounded to a
+        /// whole second</b>, while the recorder stamps raw simulation time — so
+        /// a turn that overruns the rounded boundary leaves the <i>previous</i>
+        /// turn's closing keys satisfying that test too. Within a turn the
+        /// stamps never decrease, so the last place they do decrease is exactly
+        /// the seam between the two turns. Left unfixed, a track arrives
+        /// non-monotonic in its middle and the unit jumps backwards mid-window.
+        /// </para>
+        /// <para>
+        /// The remaining case is a boundary that rounds <i>up</i>, which would
+        /// put this turn's opening stamp above its own first samples. Not
+        /// observed — every measured turn has landed on an exact second — and
+        /// not guessed at here.
+        /// </para>
+        /// </remarks>
+        private static int TurnStart(int count, Func<int, float> timeAt, float windowStart)
+        {
+            var first = count;
+            while (first > 0 && timeAt(first - 1) >= windowStart)
             {
                 first--;
             }
+
+            for (var i = first + 1; i < count; i++)
+            {
+                if (timeAt(i) < timeAt(i - 1))
+                {
+                    first = i;
+                }
+            }
+            return first;
+        }
+
+        private static List<TransformKey> SliceTurn(
+            List<ReplayKeyframeTransform> recorded, float windowStart)
+        {
+            var first = TurnStart(recorded.Count, i => recorded[i].time, windowStart);
 
             var keys = new List<TransformKey>(recorded.Count - first + 1);
             for (var i = first; i < recorded.Count; i++)

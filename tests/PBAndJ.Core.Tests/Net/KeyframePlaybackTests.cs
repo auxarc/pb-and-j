@@ -234,5 +234,105 @@ namespace PBAndJ.Core.Tests.Net
                 rotation.Z * rotation.Z + rotation.W * rotation.W);
             Assert.Equal(1f, magnitude, 5);
         }
+
+        // --- poses (M8) ---
+
+        private static PoseKey Pose(float time, float x, bool left = false, bool right = false) =>
+            new PoseKey(time, left, right, new[]
+            {
+                new JointPose(new Vec3(x, 0f, 0f), Identity),
+                new JointPose(new Vec3(0f, x, 0f), YawNinety),
+            });
+
+        private static UnitPoseTrack PoseTrack(params PoseKey[] keys) =>
+            new UnitPoseTrack("pb_mech_01", new[] { "joint_a", "joint_b" }, keys);
+
+        [Fact]
+        public void TryBracket_NullTrack_ReportsNothingToBracket()
+        {
+            Assert.False(KeyframePlayback.TryBracket(null, 0f, out _));
+        }
+
+        [Fact]
+        public void TryBracket_EmptyTrack_ReportsNothingToBracket()
+        {
+            Assert.False(KeyframePlayback.TryBracket(PoseTrack(), 0f, out _));
+        }
+
+        // Both ends the same key, so a caller can interpolate unconditionally
+        // and get the endpoint rather than having to ask whether it clamped.
+        [Fact]
+        public void TryBracket_BeforeTheTrack_ClampsToTheFirstKeyOnBothEnds()
+        {
+            var track = PoseTrack(Pose(2f, 1f), Pose(3f, 2f));
+
+            Assert.True(KeyframePlayback.TryBracket(track, 0f, out var span));
+
+            Assert.Equal(2f, span.From.Time);
+            Assert.Equal(2f, span.To.Time);
+            Assert.Equal(0f, span.T);
+        }
+
+        [Fact]
+        public void TryBracket_AfterTheTrack_ClampsToTheLastKeyOnBothEnds()
+        {
+            var track = PoseTrack(Pose(2f, 1f), Pose(3f, 2f));
+
+            Assert.True(KeyframePlayback.TryBracket(track, 99f, out var span));
+
+            Assert.Equal(3f, span.From.Time);
+            Assert.Equal(3f, span.To.Time);
+        }
+
+        [Fact]
+        public void TryBracket_BetweenTwoKeys_ReturnsThemAndTheBlend()
+        {
+            var track = PoseTrack(Pose(0f, 0f), Pose(1f, 10f), Pose(2f, 20f));
+
+            Assert.True(KeyframePlayback.TryBracket(track, 1.25f, out var span));
+
+            Assert.Equal(1f, span.From.Time);
+            Assert.Equal(2f, span.To.Time);
+            Assert.Equal(0.25f, span.T, 5);
+        }
+
+        // The game reads the keyframe it scanned forward TO, not its
+        // predecessor, and disagreeing with the host about whether a weapon is
+        // pinned to the palm is visible in a way a tenth of a second is not.
+        [Fact]
+        public void PoseSpan_TakesItsEquipmentFlagsFromTheUpperKey()
+        {
+            var track = PoseTrack(
+                Pose(0f, 0f, left: true, right: false),
+                Pose(1f, 10f, left: false, right: true));
+
+            Assert.True(KeyframePlayback.TryBracket(track, 0.5f, out var span));
+
+            Assert.False(span.SyncLeftEquipment);
+            Assert.True(span.SyncRightEquipment);
+        }
+
+        [Fact]
+        public void SampleJoint_MidSpan_InterpolatesPositionAndRotation()
+        {
+            var track = PoseTrack(Pose(0f, 0f), Pose(1f, 10f));
+
+            Assert.True(KeyframePlayback.TryBracket(track, 0.5f, out var span));
+            KeyframePlayback.SampleJoint(span, 1, out var position, out var rotation);
+
+            Assert.Equal(5f, position.Y, 5);
+            Assert.Equal(YawNinety.Y, rotation.Y, 5);
+        }
+
+        [Fact]
+        public void SampleJoint_OnAClampedSpan_ReturnsTheEndpointJoint()
+        {
+            var track = PoseTrack(Pose(0f, 0f), Pose(1f, 10f));
+
+            Assert.True(KeyframePlayback.TryBracket(track, 99f, out var span));
+            KeyframePlayback.SampleJoint(span, 0, out var position, out _);
+
+            Assert.Equal(10f, position.X, 5);
+        }
     }
 }

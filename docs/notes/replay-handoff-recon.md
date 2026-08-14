@@ -336,6 +336,193 @@ it does not remove it. Sampling min/max rather than a single reading was deliber
 Also confirmed in the same run: **M6 keyframes reaching a real client through the M12b fight path** —
 8 tracks, 384 keys, 5.00 s of motion, broadcast by the host and received intact.
 
+---
+
+## The Stage 3 adversarial pass, 2026-08-14 — it collapsed the design choice
+
+Seven claims put up for refutation before the driver was written. Two came back refuted, three
+partly. The two headline corrections were re-verified by hand before being acted on.
+
+### The choice between "drive `ApplyTime`" and "write the bones ourselves" was not a choice
+
+`units` is written in exactly one place, `OnExecutionStart` (`:293-294`), whose only caller is
+`CombatUILinkSimulationStart.cs:69` — triggered by the ECS `Simulating` flag a client never gains.
+`OnUnitSnapshot` only appends to entries that already exist (`:1782-1785`). So on a client the
+dictionary is empty and `ApplyTime`'s unit loop (`:1002-1017`) iterates nothing: driving the game's
+scrubber means **fabricating its own `ReplayUnit` graph** into a static §9 already says two systems
+destroy.
+
+And it would not even save the work. **`SleepPuppet` is reachable only through
+`SetReplayActive → PrepareUnitForReplay`** (`:616`, `:762`, `:834`), which is precisely the call §4
+shows a client cannot make. A client driving `ApplyTime` would have its bone writes overwritten by
+its own idle animation exactly as a hand-rolled driver would. **`ApplyTime` is strictly more work for
+the same problem**, so M8 writes the bones itself.
+
+There is a middle path if the vanilla presentation is ever wanted: `ApplyTimeToUnit` is
+`private static` (`:1083`), so it needs one reflected `MethodInfo` and no `ins`, no
+`turnStartTime`/`previewTimeLimit` seeding, no singletons, no clamp and no tint. It still carries the
+ECS write and the unguarded pose loop, and it still needs the sleep set.
+
+### `pauseUpdates` is on `CombatMechAnimationView`, and it is load-bearing again
+
+`public bool pauseUpdates` is declared at `CombatMechAnimationView.cs:16`, **not on `CombatView`** —
+every earlier note in this file writing `view.pauseUpdates` meant `MechAnimationSystem`'s local mech
+view. Getting that wrong does not fail to compile if you reach for the wrong `view`.
+
+More important: the 2026-08-14 measurement downgraded it to insurance on the strength of
+`Time.timeScale` being 0, and that is **too narrow**. `LoadingEnd2` schedules forced
+`animatorUpdateManual` ticks at +0.5 s and +2.5 s after a save load (`DataHelperLoading.cs:427-435`)
+which **bypass the `timeScale` gate** (`MechAnimationSystem.cs:125-129`); `UpdateAnimationsForUnitForced`
+has further callers in `ScenarioUtility` and `AddCombatViewSystem`. All of them funnel through the
+`pauseUpdates` checks at `MechAnimationSystem.cs:164` and `:1254`, and **no game code anywhere ever
+sets `pauseUpdates = true`**, so nothing will flip ours back. Set it, and set it *before* the first
+frame of playback rather than alongside — the window between resolving a unit and silencing it has
+to be zero.
+
+### PuppetMaster maps bones in LateUpdate, with no `timeScale` gate at all
+
+The one bone-writer neither design accounted for. `PuppetMaster.LateUpdate → OnLateUpdate`
+(`RootMotion.Dynamics/PuppetMaster.cs:678-754`) has no fixed-frame or timeScale guard in
+`UpdateMode.Normal` (`:718-723`), and its mapping block (`:726-739`) calls `Muscle.Map`, which writes
+**target bone transforms** (`Muscle.cs:525+`).
+
+A functional mech is safe by accident: `OnUnitGetUp` puts it in `Mode.Kinematic`
+(`UnitUtilities.cs:2651-2652`) with `mappingBlend = 0` (`PuppetMaster.cs:404`), so `MoveToTarget`
+touches rigidbodies only. **A crashed or wrecked unit is `Mode.Active, State.Dead`**
+(`UnitUtilities.cs:2628-2629`) with mapping weight 1 — every bone we write, overwritten, every frame,
+regardless of `timeScale`. Vanilla closes this with exactly the half a hand-rolled driver is tempted
+to skip: `PrepareUnitForReplay` hides the puppet view (`:755-760`) and `SleepPuppet` deactivates the
+`puppetMaster` and `puppetBehaviour` GameObjects unconditionally (`:850-857`).
+
+**Deactivate those two holders; skip only `Disable/EnableRagdollPhysics`.** The GameObject toggles
+store nothing, so nothing can make them unrecoverable — whereas the physics-map halves are where the
+crash of §"the puppet-wake crash" actually lives.
+
+### The puppet-wake crash is latent, not unconditional
+
+`EnableRagdollPhysics` carries the **same** functional/crashing/GetUp early-outs (`:925-934`) as
+`DisableRagdollPhysics` (`:894-907`), so the unguarded `puppetPhysicsMap[...]` index at `:939` is only
+reached when that state **changes between sleep and wake**. Still real on a client — the host's
+snapshot lands mid-window — and still a reason to keep our own bookkeeping rather than the game's.
+
+### `CIViewCombatExecution.ins` is assigned in `Awake`
+
+`:93-97`. So "the view is not entered on a freshly-loaded client" never implied a null singleton, and
+§7's per-frame NRE fear is smaller than it reads. What `ApplyTime` really costs at `:971-974` is
+poking the timeline, execution, strike and scene helpers every frame — side effects, not exceptions.
+
+### `turnStartTime` is rounded, and the turn slice was comparing against it
+
+`turnStartTime = Mathf.RoundToInt(GetSimulationTime())` (`:240`), while the recorder stamps **raw**
+simulation time. So a turn that overruns its rounded boundary leaves the **previous** turn's closing
+keys satisfying `time >= turnStartTime` too, and the slice drags them in — arriving non-monotonic in
+the middle, which is a unit jumping backwards mid-window.
+
+Within a turn the stamps never decrease, so **the last place they do decrease is exactly the seam.**
+Capture now takes the backward scan and then pushes forward to that last descent, for the transform
+track as well as the pose track. This was a latent defect in **shipped M6 code**, not a new one.
+Residual, recorded and not guessed at: a boundary that rounds *up* would put the turn's own opening
+stamp above its first samples. Never observed — every measured turn has landed on an exact second.
+
+### Confirmed, and it is the claim the whole milestone rests on
+
+**A client's `GetRecordedBones()` is populated.** `UnitVisualManager.Awake → CheckInitialization`
+(`UnitVisualManager.cs:341-344`) builds the list from pure prefab wiring (`:558-594`) with no
+dependency on recording, simulating or ECS state, and `GetRecordedBones()` just returns the field
+(`:2249-2251`). Awake fires when `AddCombatViewSystem` instantiates the view, which demonstrably
+happens on a client — M6 playback already moves those views. Had this been false, both designs were
+dead.
+
+Also confirmed: the four weapon/palm Transforms are `public` fields on `CombatMechAnimationView`
+(`:331`, `:333`, `:349`, `:351`) in Assembly-CSharp, so the palm sync needs no reflection; and the
+capture-order claim holds — `CombatUISystems` is registered at `CombatSystems.cs:72` and
+`CombatExecutionEndLateSystem` at `:93`, so `OnExecutionEnd` has already appended the window's final
+pose key by the time our hook runs, and capture must not append another.
+
+---
+
+## Measured on a running game, 2026-08-14 — M8 works, and a standing mystery falls
+
+One instance, `pbj_combat_test`, hosting with no peers, one turn executed and replayed through
+`pbj.replay-last`.
+
+```
+[pb-and-j] turn 0 poses | 8 unit tracks | broadcast to 0 peers
+[pb-and-j] turn 0 keyframes | 8 tracks, 408 keys | 0.00s-5.00s | broadcast to 0 peers
+[pb-and-j] turn 1 poses complete | 8 unit tracks | playing the battle
+replay=turn1/8posed → 300 frames → replay=idle
+```
+
+**8 of 8 units captured and dressed**, no `poses partly uncaptured`, no `poses dropped`, no
+`replay driver failed`, no exception, clean unwind. Six screenshots across one playback window show a
+mech's legs changing configuration continuously — mid-stride with one leg forward and one back, then
+together, then striding again — while turning. **The units walk.** The argument is closed by the
+driver itself: `animator.enabled` is false on every dressed mech for the length of the window, so
+nothing but our bone writes can be moving them; had the writes been inert the mech would have been a
+frozen statue.
+
+Corroborating detail worth keeping: a mech that barely moved that turn barely changed pose, while one
+that crossed the field animated heavily. An idle loop would have bobbed both identically.
+
+### ⚡ THE COMBAT HUD IS NOT ENTERED UNTIL A UNIT IS SELECTED
+
+`docs/design/networking.md`, the M8 plan and the drive-rig notes have all carried
+"`CIViewCombatExecution` is NOT entered on a client that has just loaded into a fight, and why is
+unexplained". **It is unit selection.** Loading a combat save selects nothing, so the HUD never
+enters and `pbj.execute` refuses with "the execution view is not open". Pressing **F1–F4** snaps the
+camera to a player unit and the whole combat UI comes up; `pbj.execute` then answers
+"execute pressed — readied through the barrier".
+
+Not client-specific and nothing to do with the network: it is a property of arriving in combat by
+**loading a save** rather than by deploying through a briefing. A client following a host into a
+fight arrives exactly that way, which is why it looked like a client bug.
+
+**Fixed with `pbj.select-unit <index>`**, which calls `CIViewCombatMode.OnUnitSelectionByIndex` — the
+very method the F1–F6 bindings call (`InputCombatShared.cs:153-157`), the player's own path rather
+than the `ReplaceUnitSelected` beneath it. It reports the resulting selection rather than that it
+pressed, because both that method and the `OnUnitClick` under it return void and refuse silently.
+Verified on a running game: `selected unit 0: pb_mech_01`, and `pbj.execute` immediately went from
+"the execution view is not open" to "execute pressed — readied through the barrier".
+`pbj.ready` remains the lever that needs no view at all.
+
+### ⚠️ Do not drive anything the moment `game-wait.sh` returns
+
+`game-wait.sh` waits for the **drive channel**, which opens at `OnLoadEnd`. The launch **splash** —
+studio logos, then a seizure warning that needs an Enter press or waits out its own 30-second timer
+(`CIViewSplashScreen.seizureWarningTotalTime`) — is still up long after that, **and the game already
+reports `state=mainmenu` underneath it**. A `pbj.combat-load` sent into that gap loads combat *and
+then* the still-pending intro runs `CIViewPauseRoot.TryEntryAsMain`, dropping the title menu on top
+of the loaded battle:
+
+```
+Combat game state enabled
+...
+TryEntryAsMain | Intro skip: False
+View View_Pause (CIViewPauseRoot) | Entering (visible) | Enabling 6 colliders
+IntroStart
+```
+
+The drive channel reports `state=combat` throughout, so this is invisible to every scripted
+assertion and looks from the outside like a game that never left the menu. Re-issuing the load
+afterwards clears it (`CIViewPauseRoot | Exiting...`).
+
+`pbj.drive-state` now carries **`splash=`** and **`menu=`** for this. ⚠️ **Wait on `menu=True`, never
+on `splash=False`** — measured, and the reason is the shape of the bug this file keeps finding:
+`splash` reads false **before** the view enters as well as after it leaves, so a poll that starts at
+launch passes on its very first sample and drives a game whose intro has not run. `menu` is
+monotonic in the direction that matters. Observed sequence, five seconds apart:
+
+```
+splash=False menu=False      <- the trap: an await on splash=False stops HERE
+splash=True  menu=False      (x7, ~35s)
+splash=False menu=True       <- actually ready
+```
+
+⚠️ And a screenshot cannot be trusted to notice: KWin serves the **last rendered frame** for a window
+that is minimised or occluded, so a capture showed the title menu long after the game had loaded,
+executed a turn and returned to planning. Confirm from the log or the drive channel, never from a
+picture alone.
+
 ## Still open
 
 1. ~~A client's `Time.timeScale` during actual playback~~ — **answered above: 0, across 577 frames.**
@@ -344,3 +531,16 @@ Also confirmed in the same run: **M6 keyframes reaching a real client through th
    `unitFrameIntegrity` only (`StateDigest.cs:104`). §6's ECS write is digest-safe.
 4. ~~`ApplyTime` singletons~~ — answered, all non-null.
 5. ~~Volume~~ — answered, 253 KB for 12 units.
+6. **Whether the mech prefab's FinalIK components are serialized enabled.** If they are,
+   `SolverManager.LateUpdate` (`RootMotion/SolverManager.cs:140-160`) would self-solve and fight the
+   bone writes, and `IKExecutionOrder` (`RootMotion.FinalIK/IKExecutionOrder.cs:17-23`) would solve
+   even disabled ones. **Unverifiable from source** — it is prefab state, not code. Recorded rather
+   than assumed away because it is a real hole; the mitigating fact is that **vanilla replay makes
+   the identical bet and ships**, deactivating only the FBBIK holder. If a client's mechs animate
+   *nearly* right with the elbows fighting, look here first.
+7. **A unit crashing mid-playback.** `CombatUnitCrashSyncSystem` (`CombatSystems.cs:108`) can run
+   `OnUnitCrash` inside a window and flip a puppet to `Mode.Active`. Its mode-switch blend advances
+   by `Time.deltaTime` (`PuppetMaster.cs:1253-1255`), which is 0 at `timeScale` 0, so the mapping
+   weight probably never leaves zero — **inferred, not measured**. The driver deactivates the puppet
+   holders at install time regardless, which covers a unit already crashed but not one that crashes
+   after.
