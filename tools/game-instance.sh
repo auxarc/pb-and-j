@@ -147,14 +147,26 @@ fi
 #     in their own command lines, so one instance reports as several and the
 #     ceiling would refuse at one.
 #
-# So count what actually distinguishes instances: the Proton prefix each one is
-# running against. One prefix, one game. The bracketing keeps this script's own
-# command line from matching itself.
+# ⚠️ AND SO DOES COUNTING STEAM_COMPAT_DATA_PATH, which is what this did until
+# 2026-08-14 and which blocked the first M8 playtest with one game running.
+# Two independent reasons, either alone enough to break it:
+#
+#   * The wrappers and the game disagree. `steam.exe` re-execs the real exe with
+#     the Steam CLIENT's environment, so the python3 launcher reports
+#     `…/553540-pbj2` while the game it started reports the plain `…/553540` —
+#     two distinct values from ONE instance.
+#   * `/home` is a symlink to `/var/home` on this machine, so the same prefix
+#     arrives as two different strings depending on who exported it.
+#
+# So identify the GAME process instead of the prefix, using the very truncation
+# that broke `pgrep -x` above: /proc/PID/comm is cut to 15 characters, which
+# makes "PhantomBrigade." an exact match for the real process and no match at
+# all for `python3` or `steam.exe`. One such process per instance, no
+# environment reading, no path normalisation.
 RUNNING=$(
   for p in $(pgrep -f "[P]hantomBrigade.exe" 2>/dev/null); do
-    tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null \
-      | sed -n 's/^STEAM_COMPAT_DATA_PATH=//p'
-  done | sort -u | grep -c . || true
+    cat "/proc/$p/comm" 2>/dev/null
+  done | grep -c '^PhantomBrigade\.$' || true
 )
 if [ "${RUNNING:-0}" -ge 2 ]; then
   echo "game-instance: $RUNNING instances already running — two is the ceiling, close one first" >&2

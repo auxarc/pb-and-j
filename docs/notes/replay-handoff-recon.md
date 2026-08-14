@@ -218,11 +218,129 @@ requirement already buys.
 
 ---
 
-## Settle these before writing code
+## Measured — `pbj.replay-probe`, host, 2026-08-03
 
-1. **A client's `Time.timeScale` during playback.** Never observed. Gates §5 entirely. One log line.
-2. **Are mech bone names unique within a unit?** §2's identity scheme depends on it.
-3. **Is `DestructionProgress` a digest input?** §6 decides whether the ECS write is acceptable or
-   must be patched around.
-4. **Are `ApplyTime`'s singletons non-null** in a client's execution HUD? §7.
-5. **Volume**, sized against the real `ReplayUnit` rather than estimated.
+Two passes on one instance: a 12-unit combat at turn 0 before any execution, and the same combat at
+turn 1 after executing. Four of the five open questions are now answered from a running game rather
+than a reading.
+
+### `Time.timeScale` is 0 — and already 0 before anything executes
+
+| | before execution | after execution |
+|---|---|---|
+| `Time.timeScale` | **0** | **0** |
+| `simulationTime` / `currentTurn` | 0 / 0 | 5 / 1 |
+| `Simulating` | False | False |
+| `lateExecuteUnconditional` / `lateExecuteRequested` | False / False | False / False |
+
+The interesting reading is the **first** column. `timeScale` is already 0 at turn 0, before the host
+has ever passed through the `Simulating→false` transition that `SimulationTimeSystem` uses to zero
+it. So combat entry itself leaves `timeScale` at 0, by a path a client also takes when it loads into
+combat.
+
+**Therefore the FinalIK hazard of §5 is almost certainly dormant on a client after all** — not for
+the reason the first draft gave (which traced only one of two entry points and was rightly refuted),
+but because the *other* entry point is gated on `Time.timeScale > 0f` and that is measurably 0 from
+combat entry onward. Both `LateExecute` flags are also False in both passes.
+
+**Still set `view.pauseUpdates = true`.** It is one assignment, it blocks both paths unconditionally,
+and the inference above is from the host's value at combat entry rather than from a client's during
+playback. Cheap insurance against the one part still unmeasured.
+
+### Bone names are unique, and the count does not vary with loadout
+
+Every mech: `UnitVisualManager`, **26 bones, 26 distinct, 0 duplicates, 0 nulls** — across
+`w1_sr_shotgun`, `w2_mr_kinetic`, `w1_sr_smg`, `w1_mr_ar_shield`, `w3_sr_shotgun_shield`, the two
+player mechs and both workshop frames. Every tank: `UnitVisualManagerSimple`, **3 bones**.
+
+```
+joint_torso_parentSpace, joint_pelvis_xyz, joint_torso_xy, joint_head_xy,
+joint_right_arm_xyz, joint_right_forearm_x, joint_right_hand_palm_xyz,
+joint_left_arm_xyz,  joint_left_forearm_x,  joint_left_hand_palm_xyz,
+joint_right_thigh_xyz, joint_right_leg_x, joint_right_foot_xyz,
+joint_right_foot_front_x, joint_right_foot_tongue_x, joint_right_foot_heel_x,
+joint_left_thigh_xyz,  joint_left_leg_x,  joint_left_foot_xyz,
+joint_left_foot_front_x,  joint_left_foot_tongue_x,  joint_left_foot_heel_x,
+joint_left_weapon_local_xyz, joint_right_weapon_local_xyz,
+joint_left_weapon, joint_right_weapon
+```
+
+Two consequences, both good:
+
+- **`transform.name` is a sound identity key.** Zero duplicates anywhere in the sample.
+- **The list looks loadout-independent** — 26 for every mech regardless of weapons or shield. That
+  makes the count mismatch that would throw in §1's unguarded loop much less likely than feared.
+  Not proof: `jointSyncLinks` contributes to the tail and simply did not vary here. Keep the key
+  remap; it is now insurance rather than the load-bearing defence.
+
+Tanks are recorded *and* posed (`joints=3` tracks appear in the volume table), which confirms §2's
+correction — they are not excluded from playback.
+
+### Volume: 253 KB per turn for 12 units
+
+47 pose keyframes per 5-second turn. **34,216 bytes per mech per turn** (47 × 26 × 28), 3,948 per
+tank. **253.2 KB total across 12 tracks.** No `RAGGED` markers — joint array lengths are consistent
+within every track.
+
+The design doc estimated ~44 KB per unit and ~1.5 MB for a 30-unit combat. Measured is ~34 KB per
+*mech*, and tanks are an order of magnitude cheaper, so a 30-mech fight lands near ~1 MB. Still over
+`MaxFrameLength` and still needing the per-unit chunking already planned — but this is a comfortable
+size for a payload that arrives during the host's planning phase, and M9 already moves 65 KB
+scenarios over the same path.
+
+Also visible: `advParticles=3` on every mech, so the `ReplayAdvancedParticleBlock` holder
+re-resolution of §8 is live work, not hypothetical.
+
+### The `ApplyTime` singletons are all non-null
+
+`timeline`, `execution`, `strike`, `scene`, `timeControl`, `postprocessing` — all `ok`, in both
+passes, in the execution HUD. Guard the call site anyway, but §7's fear does not materialise here.
+
+### `activationAllowed` behaves exactly as §4 predicts
+
+`False` before execution, `True` after; `IsReplayAllowed` follows it `False → True`. On a client
+`OnExecutionEnd` never runs, so it stays False forever and `SetReplayActive` stays a silent no-op.
+`IsRecordingAllowed` is `False` even after execution, which re-confirms the M6-era rule that capture
+must not gate on it.
+
+Note `previewTimeLimit` reads **5** and `turnStartTime` **0** after execution — consistent with a turn
+that ran 0→5, and confirming both are *turn-dependent* values a client must be told, not constants it
+can assume.
+
+---
+
+## Measured on a real CLIENT, 2026-08-14 — the last question falls
+
+Two game instances, a shared campaign, a shared fight and a shared turn, driven end to end through
+`tools/playtest-m12b.sh`. The client received the host's keyframes and played them back; a sampler
+in `ReplayProbeGlue`, pumped from the `Heartbeat` postfix and gated on `KeyframePlayer.IsPlaying`,
+read `Time.timeScale` across **exactly** the playback window:
+
+```
+replay-probe playback window | frames=577 timeScale min=0 max=0 framesAboveZero=0
+  simulating=False session=CLIENT | FinalIK hazard dormant — pauseUpdates is insurance
+```
+
+**577 frames, `timeScale` 0 on every one of them, on a genuine client.** Not one frame above zero.
+
+So **the FinalIK hazard of §5 is dormant, measured rather than inferred.** `MechAnimationSystem`'s
+non-reactive `Execute` is gated on `!Simulating && Time.timeScale > 0f`, and the second conjunct is
+never true on a client during playback — so `UpdateAnimationsForAll` never runs, `LateUpdateUnit` is
+never reached by that path, and the manual FinalIK solves never fight replayed bone writes.
+
+**`view.pauseUpdates = true` still gets set.** It is one assignment, it closes both entry points
+unconditionally, and it costs nothing. The measurement downgrades it from load-bearing to insurance;
+it does not remove it. Sampling min/max rather than a single reading was deliberate: the hazard is
+"was it *ever* above zero", and one non-zero frame would have been enough.
+
+Also confirmed in the same run: **M6 keyframes reaching a real client through the M12b fight path** —
+8 tracks, 384 keys, 5.00 s of motion, broadcast by the host and received intact.
+
+## Still open
+
+1. ~~A client's `Time.timeScale` during actual playback~~ — **answered above: 0, across 577 frames.**
+2. ~~Mech bone name uniqueness~~ — answered, unique.
+3. ~~`DestructionProgress` a digest input?~~ — **No.** `StateDigest.Compute` hashes name, position and
+   `unitFrameIntegrity` only (`StateDigest.cs:104`). §6's ECS write is digest-safe.
+4. ~~`ApplyTime` singletons~~ — answered, all non-null.
+5. ~~Volume~~ — answered, 253 KB for 12 units.

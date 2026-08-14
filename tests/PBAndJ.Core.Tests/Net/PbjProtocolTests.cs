@@ -172,6 +172,14 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void ModVersion_MatchesTheShippedModMetadata()
         {
+            // 0.13.0 for M8's pose wire. Poses = 31 is a new message type, which
+            // by this project's own rule does not move the wire version — but it
+            // moves this one, in the same commit that added it rather than at
+            // release. That ordering is not hygiene: a host broadcasts the parts
+            // to every peer on every executed turn, so a peer admitted by a
+            // matching version string but built without the type would fault on
+            // the first turn of the first fight.
+            //
             // 0.12.0 for M12b·2. No message type moved and no layout changed —
             // what moved is IPbjGameBridge, which is hashed as part of the wire
             // surface because OrderApplyResult and RejectReason cross it as raw
@@ -183,7 +191,7 @@ namespace PBAndJ.Core.Tests.Net
             // 0.11.0 was M12b's first half: CombatOffer and CombatEntered were new
             // types, and the meaning of an existing one moved — CombatStart now
             // arrives only once everyone is in the fight.
-            Assert.Equal("0.12.0", PbjProtocol.ModVersion);
+            Assert.Equal("0.13.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

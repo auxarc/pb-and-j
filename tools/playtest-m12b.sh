@@ -181,14 +181,53 @@ stage_lobby() {
   # Selecting offers the save to peers that do not hold it (M11e transfers on
   # SELECTION, not on a failed load, so the client can only ready once it holds
   # those exact bytes). A campaign is 24-71 KB, so this is quick — but poll it.
-  drive "$PEER_N" "pbj.lobby-ready" | tee -a "$RUN_LOG"
+  # ⚠️ AND POLLING MEANS RE-POSTING, not just waiting. A ready posted while the
+  # save is still crossing is REFUSED, not queued — the host logs "ignoring
+  # lobby ready from #N for selection M — still waiting for the save to arrive"
+  # and the client never readies again on its own. This stage used to post each
+  # ready exactly once and then wait 240s for a load that could not come; the
+  # comment above already said "but poll it" while the code did not. (2026-08-14)
+  #
+  # Re-posting is safe: a ready that is already counted is idempotent, and the
+  # selection version has not moved, so nothing clears it.
   drive "$HOST_N" "pbj.lobby-ready" | tee -a "$RUN_LOG"
+
+  # ⚠️ Do NOT assert on "ready 2/2". It is TRANSIENT: satisfying the barrier
+  # fires the load and clears every ready in the same breath, so a poll for the
+  # count races the event it is waiting for and usually loses. Observed on the
+  # first successful two-party run — the tally never read 2/2 once, and both
+  # machines loaded anyway. Stop when the count is full OR the host has left the
+  # menu, and let the load assertions below be the real verdict.
+  local ready_deadline=$(( SECONDS + 120 )) lobby_state=""
+  while [ "$SECONDS" -lt "$ready_deadline" ]; do
+    drive "$PEER_N" "pbj.lobby-ready" >> "$RUN_LOG"
+    lobby_state="$(drive "$HOST_N" "pbj.drive-state")"
+    if printf '%s' "$lobby_state" | grep -Eq "ready 2/2"; then
+      pass "both readied (client readied once it held the save)"
+      break
+    fi
+    if ! printf '%s' "$lobby_state" | grep -Eq "state=mainmenu"; then
+      pass "the load fired (the ready tally cleared before it could be sampled)"
+      break
+    fi
+    sleep 2
+  done
 
   # Both machines land in the campaign. This is M11d, in-game-verified single
   # party but the two-party path is what is being exercised here.
   await "$HOST_N"  "state=overworld|state=basecrawler" "host loaded the campaign" 240
   await "$PEER_N"  "state=overworld|state=basecrawler" "client loaded the campaign" 240
 
+  # Poll, do not grep once. The drive channel answers from memory while the
+  # engine's log writer buffers, so drive-state can report a finished load
+  # seconds before the line describing it reaches the file. Grepping on the
+  # instant the state assertion passes loses that race and warns on a perfectly
+  # healthy run. (2026-08-14)
+  local log_deadline=$(( SECONDS + 30 ))
+  while [ "$SECONDS" -lt "$log_deadline" ]; do
+    grep -q "load complete | 2 of 2" "$(prefix_log "$HOST_N")" && break
+    sleep 2
+  done
   grep -q "load complete | 2 of 2" "$(prefix_log "$HOST_N")" \
     && pass "host logged 'load complete | 2 of 2'" \
     || note "WARNING: host did not log 'load complete | 2 of 2' — check the log"
@@ -206,6 +245,17 @@ stage_fight() {
   # below. Both paths are handled.
   local scenario="${PBJ_SCENARIO:-}"
   if [ -n "$scenario" ]; then
+    # ⚠️ LEAVE THE BASE FIRST. A synchronised load lands both machines in
+    # `basecrawler`, and every ow.* command guards on game state `overworld`,
+    # refusing via QuantumConsole.LogToConsole — which never reaches Player.log
+    # and arrives over the drive channel as an EMPTY REPLY. So a scripted fight
+    # from the base looks exactly like a scenario key that does not exist.
+    # (Cost one confused round on 2026-08-14.)
+    if drive "$HOST_N" "pbj.drive-state" | grep -q "state=basecrawler"; then
+      drive "$HOST_N" "pbj.nav-world" | tee -a "$RUN_LOG"
+      await "$HOST_N" "state=overworld" "host reached the overworld map" 120
+    fi
+
     drive "$HOST_N" "ow.load-scenario $scenario" | tee -a "$RUN_LOG"
   else
     note "no PBJ_SCENARIO set — expecting the briefing to be open already"

@@ -46,6 +46,11 @@ namespace PBAndJ.Mod
             // THROWAWAY (M12 review follow-up) — answers the two questions gating
             // M12d. Goes once both answers are in the design doc.
             Net.ManagementProbeGlue.RegisterConsoleCommands();
+            // THROWAWAY (M8 recon) — four of its five questions are answered in
+            // docs/notes/replay-handoff-recon.md. It stays only until the fifth,
+            // a client's Time.timeScale during playback, is read off a running
+            // client; then it goes the way of the other probes.
+            Net.ReplayProbeGlue.RegisterConsoleCommands();
         }
     }
 

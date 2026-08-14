@@ -495,6 +495,58 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void PosesSent_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 poses | 8 unit tracks | broadcast to 1 peer",
+                NetLog.PosesSent(4, 8, 1));
+        }
+
+        [Fact]
+        public void PosesSent_SpeaksOfOneTrackAndOnePeerInTheSingular()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 poses | 1 unit track | broadcast to 2 peers",
+                NetLog.PosesSent(4, 1, 2));
+        }
+
+        [Fact]
+        public void PosesReceived_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 poses complete | 8 unit tracks | playing the battle",
+                NetLog.PosesReceived(4, 8));
+        }
+
+        // The one symptom a player can see and cannot explain is a turn that
+        // slides instead of walking. "3 of 8" is the difference between a bug
+        // report and a diagnosis, so this is logged every time rather than only
+        // on the interesting arm.
+        [Fact]
+        public void PosesIncomplete_SaysWhatArrivedAndWhatItWillLookLike()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 poses incomplete — 3 of 8 arrived | units will slide, not walk",
+                NetLog.PosesIncomplete(4, 3, 8));
+        }
+
+        [Fact]
+        public void PosesUnsendable_NamesTheFaultAndTheUnitThatCausedIt()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 poses dropped: Ragged on 'pb_mech_01' — "
+                    + "the whole turn plays transform-only",
+                NetLog.PosesUnsendable(4, PoseTrackFault.Ragged, "pb_mech_01"));
+        }
+
+        [Fact]
+        public void PosesUnsendable_WithAnUnnamedUnit_SaysSo()
+        {
+            Assert.Contains(
+                "on '(unnamed)'", NetLog.PosesUnsendable(4, PoseTrackFault.NameTooLong, null));
+        }
+
+        [Fact]
         public void PeerHeldForReconnect_ComposesTheLine()
         {
             Assert.Equal(

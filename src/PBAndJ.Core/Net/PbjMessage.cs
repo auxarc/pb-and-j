@@ -46,6 +46,9 @@ namespace PBAndJ.Core.Net
 
         /// <summary>A client reporting whether it made it into the fight.</summary>
         CombatEntered = 30,
+
+        /// <summary>One unit's skeletal animation for the turn just executed. M8.</summary>
+        Poses = 31,
     }
 
     /// <summary>
@@ -600,6 +603,69 @@ namespace PBAndJ.Core.Net
         public float WindowEnd { get; }
 
         public IReadOnlyList<UnitTrack> Tracks { get; }
+    }
+
+    /// <summary>
+    /// One unit's skeletal animation for the turn just executed. M8.
+    /// </summary>
+    /// <remarks>
+    /// <b>One track per message, and the messages precede
+    /// <see cref="KeyframesMessage"/>, which terminates them.</b> Three
+    /// decisions live in that sentence and each one replaced something worse.
+    /// <para>
+    /// <i>Poses before transforms.</i> The client cannot begin playback until it
+    /// knows whether it has poses, because a unit slept for replay but holding
+    /// no pose is a rigid statue sliding down its path — worse than M6's
+    /// idle-animated slide, not equal to it. Sending poses first and letting the
+    /// existing transform message end the burst makes "the terminator arrived"
+    /// mean "everything arrived", since one send site and an ordered stream
+    /// admit no other outcome. The alternative was a deadline, i.e. a timer that
+    /// is either too short on a slow link or a visible stall on a fast one.
+    /// </para>
+    /// <para>
+    /// <i>One track per message.</i> Packing several under a byte budget needs a
+    /// rule for the track that alone exceeds it — an arm that cannot be reached
+    /// once the caps below bound a single track, and an unreachable arm fails
+    /// the coverage gate. One track per message makes the size bound provable
+    /// from the caps rather than from a heuristic.
+    /// </para>
+    /// <para>
+    /// <i>The part numbering is still carried</i> even though it is derivable by
+    /// counting, because a client must be able to distinguish "the host sent
+    /// four and I have four" from "the host sent five".
+    /// </para>
+    /// </remarks>
+    public sealed class PosesMessage : PbjMessage
+    {
+        public PosesMessage(int turn, int partIndex, int partCount, UnitPoseTrack? track)
+        {
+            Turn = turn;
+            PartIndex = partIndex;
+            PartCount = partCount;
+            Track = track;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.Poses;
+
+        /// <summary>
+        /// The turn these poses belong to, matching
+        /// <see cref="KeyframesMessage.Turn"/>.
+        /// </summary>
+        /// <remarks>
+        /// The client compares this against the terminator's turn and against
+        /// its own buffer label — <b>never</b> against its session's current
+        /// turn, which by then reads one higher: <c>TurnComplete</c> travels
+        /// ahead of these and advances it. Comparing against session state would
+        /// discard every part on every turn and fall back to transform-only
+        /// forever, silently.
+        /// </remarks>
+        public int Turn { get; }
+
+        public int PartIndex { get; }
+
+        public int PartCount { get; }
+
+        public UnitPoseTrack? Track { get; }
     }
 
     /// <summary>

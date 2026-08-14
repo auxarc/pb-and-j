@@ -31,6 +31,8 @@ namespace PBAndJ.Core.Net
     /// </remarks>
     public sealed class HostSession : IPbjSession
     {
+        private static readonly UnitPoseTrack[] NoPoses = new UnitPoseTrack[0];
+
         private readonly IPbjGameBridge bridge;
         private readonly PbjPeerRegistry registry;
         private readonly TurnBarrier barrier;
@@ -1961,6 +1963,23 @@ namespace PBAndJ.Core.Net
                 {
                     keyCount += keyframes.Tracks[i].Transforms.Count;
                 }
+                // M8's poses go out FIRST, inside this same guard, because the
+                // Keyframes broadcast below is what tells a client the set is
+                // complete. Emitting them outside it would let a turn with no
+                // transform tracks send poses that nothing ever terminates —
+                // the one orphan shape the client cannot resolve.
+                var posed = SendablePoses(committedTurn, keyframes.Poses, effects);
+                for (var i = 0; i < posed.Count; i++)
+                {
+                    effects.Add(new BroadcastEffect(
+                        new PosesMessage(committedTurn, i, posed.Count, posed[i])));
+                }
+                if (posed.Count > 0)
+                {
+                    effects.Add(new LogEffect(
+                        NetLog.PosesSent(committedTurn, posed.Count, registry.Count)));
+                }
+
                 effects.Add(new LogEffect(NetLog.KeyframesSent(
                     committedTurn, keyframes.Tracks.Count, keyCount,
                     keyframes.WindowStart, keyframes.WindowEnd, registry.Count)));
@@ -1971,6 +1990,48 @@ namespace PBAndJ.Core.Net
             barrier.AdvanceTo(bridge.CurrentTurn);
             State = HostSessionState.Planning;
             effects.Add(new SetExecutionLockEffect(false));
+        }
+
+        /// <summary>
+        /// The pose tracks that may travel, or none at all.
+        /// </summary>
+        /// <remarks>
+        /// All or nothing, per turn, and that is the whole point of the method.
+        /// Repairable faults are repaired by <see cref="PoseTracks.TryPrepare"/>;
+        /// a track it cannot repair takes the entire turn down to transform-only
+        /// rather than being quietly omitted. Omitting it would leave one unit
+        /// sliding among walking ones, which reads as a broken game, whereas
+        /// every unit sliding reads as the lower-fidelity mode it actually is.
+        /// <para>
+        /// The exception is a track with too few keys to animate. That one is
+        /// dropped alone and deliberately, because the host's own replay does
+        /// not animate it either — the game gates its pose block on more than
+        /// two keys — so skipping it shows the client exactly what the host sees.
+        /// </para>
+        /// </remarks>
+        private static IReadOnlyList<UnitPoseTrack> SendablePoses(
+            int turn, IReadOnlyList<UnitPoseTrack> captured, List<PbjEffect> effects)
+        {
+            var sendable = new List<UnitPoseTrack>(captured.Count);
+            for (var i = 0; i < captured.Count; i++)
+            {
+                var fault = PoseTracks.TryPrepare(captured[i], out var prepared);
+                if (fault == PoseTrackFault.None)
+                {
+                    sendable.Add(prepared!);
+                    continue;
+                }
+                if (fault == PoseTrackFault.TooFewKeys)
+                {
+                    continue;
+                }
+
+                effects.Add(new LogEffect(
+                    NetLog.PosesUnsendable(turn, fault, captured[i].Name)));
+                return NoPoses;
+            }
+
+            return sendable;
         }
 
         private void HandleDisconnect(int peerId, string? reason, List<PbjEffect> effects)

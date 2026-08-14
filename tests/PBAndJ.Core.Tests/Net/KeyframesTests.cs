@@ -112,5 +112,84 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(35f, message.WindowEnd);
             Assert.Equal(31f, message.Tracks[0].Transforms[1].Time);
         }
+
+        // --- poses (M8) ---
+
+        [Fact]
+        public void JointPose_CarriesItsLocalPlacement()
+        {
+            var pose = new JointPose(new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f));
+
+            Assert.Equal(2f, pose.Position.Y);
+            Assert.Equal(1f, pose.Rotation.W);
+        }
+
+        [Fact]
+        public void PoseKey_CarriesTheTwoEquipmentFlagsSeparately()
+        {
+            var key = new PoseKey(2.5f, true, false, new[] { new JointPose(default, default) });
+
+            Assert.Equal(2.5f, key.Time);
+            Assert.True(key.SyncLeftEquipment);
+            Assert.False(key.SyncRightEquipment);
+            Assert.Single(key.Joints);
+        }
+
+        [Fact]
+        public void PoseKey_WithNoJoints_IsEmptyRatherThanNull()
+        {
+            Assert.Empty(new PoseKey(0f, false, false, null).Joints);
+        }
+
+        [Fact]
+        public void UnitPoseTrack_CarriesTheHostsJointNamesInHostOrder()
+        {
+            var track = new UnitPoseTrack("pb_mech_01", new[] { "hip", "knee" }, null);
+
+            Assert.Equal("pb_mech_01", track.Name);
+            Assert.Equal(new[] { "hip", "knee" }, track.Joints);
+            Assert.Empty(track.Keys);
+        }
+
+        [Fact]
+        public void UnitPoseTrack_WithNothingAtAll_IsEmptyRatherThanNull()
+        {
+            var track = new UnitPoseTrack(null, null, null);
+
+            Assert.Empty(track.Joints);
+            Assert.Empty(track.Keys);
+        }
+
+        // Empty poses is a first-class outcome, not a failure: it is exactly
+        // M6's behaviour, and it is the only fallback that keeps every unit
+        // moving the same way as every other one.
+        [Fact]
+        public void KeyframeCapture_WithoutPoses_CarriesAnEmptySetRatherThanNull()
+        {
+            Assert.Empty(KeyframeCapture.None.Poses);
+            Assert.Empty(new KeyframeCapture(0f, 5f, null).Poses);
+        }
+
+        [Fact]
+        public void KeyframeCapture_CarriesPosesBesideTheTransformTracks()
+        {
+            var capture = new KeyframeCapture(
+                15f, 20f,
+                new[] { new UnitTrack("unit_a", null) },
+                new[] { new UnitPoseTrack("unit_a", null, null) });
+
+            Assert.Equal("unit_a", Assert.Single(capture.Tracks).Name);
+            Assert.Equal("unit_a", Assert.Single(capture.Poses).Name);
+        }
+
+        // Both turn-dependent statics the client needs to seed the game's own
+        // scrubber are already here: WindowStart IS the host's turnStartTime,
+        // and previewTimeLimit is only WindowEnd rounded. The first design of
+        // this stage put both on the wire a second time.
+        [Fact]
+        public void KeyframeCapture_WindowStartIsTheHostsTurnStartTime()
+        {
+            Assert.Equal(15f, new KeyframeCapture(15f, 20f, null).WindowStart);
+        }
     }
 }

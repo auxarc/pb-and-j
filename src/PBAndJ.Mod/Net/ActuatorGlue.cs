@@ -115,8 +115,66 @@ namespace PBAndJ.Mod.Net
                 return "[pb-and-j] the briefing is not open";
             }
 
+            // ⚠️ Ask BEFORE pressing, because pressing tells you nothing.
+            // OnDeployStart opens with `if (!IsDeploymentPossible()) {
+            // OnWarningFlash(); return; }` — the refusal is a flash of colour on
+            // a screen nobody is watching, and the method returns void either
+            // way. Reporting "deploy pressed" on that path is the connect-screen
+            // bug again: silent success indistinguishable from silent failure.
+            // A squad with no pilot assigned lands here, and it looked exactly
+            // like a confirmation dialog that would not open. (2026-08-14)
+            if (!view.IsDeploymentPossible())
+            {
+                return "[pb-and-j] deployment is not possible — the briefing refused "
+                    + "(squad not ready: check pilots, frame integrity and damage limits)";
+            }
+
             view.OnDeployStart();
             return "[pb-and-j] deploy pressed — confirm with pbj.dialog-confirm";
+        }
+
+        /// <summary>
+        /// Presses the navigation bar's World button — the base-to-map transition.
+        /// </summary>
+        /// <remarks>
+        /// Needed because a synchronised load lands both machines in
+        /// <c>basecrawler</c>, the base interior, while every overworld console
+        /// command guards on game state <c>overworld</c> and refuses silently:
+        /// <c>OverworldStateCheck</c> writes "Command only available from the
+        /// overworld" to the Quantum Console's own view, which never reaches
+        /// <c>Player.log</c> and comes back over the drive channel as an empty
+        /// reply. A scripted fight therefore looked like a scenario that would not
+        /// load, when the real answer was that nobody had left the base.
+        /// <para>
+        /// Drives <c>CIViewOverworldNav.OnClickWorld</c> — the player's own button
+        /// handler — rather than writing <c>GameControllerStatePopRequest</c>
+        /// directly. The handler is private, so this is reflection; the state
+        /// component is public, so writing it would have been easier and wrong.
+        /// It carries a transition check and a combat-exit branch, and an actuator
+        /// that skips those proves nothing about the path a player takes.
+        /// </para>
+        /// </remarks>
+        public static string NavWorld()
+        {
+            var nav = CIViewOverworldNav.ins;
+            if (nav == null || !nav.IsEntered())
+            {
+                return "[pb-and-j] the overworld navigation bar is not up";
+            }
+
+            if (IDUtility.IsGameState("overworld"))
+            {
+                return "[pb-and-j] already on the overworld";
+            }
+
+            var click = AccessTools.Method(typeof(CIViewOverworldNav), "OnClickWorld");
+            if (click == null)
+            {
+                return "[pb-and-j] CIViewOverworldNav.OnClickWorld is gone — the game build moved";
+            }
+
+            click.Invoke(nav, null);
+            return "[pb-and-j] world pressed — poll pbj.drive-state for state=overworld";
         }
 
         /// <summary>
@@ -279,6 +337,7 @@ namespace PBAndJ.Mod.Net
             Add(nameof(Execute), "pbj.execute");
             Add(nameof(BriefingDeploy), "pbj.briefing-deploy");
             Add(nameof(DialogConfirm), "pbj.dialog-confirm");
+            Add(nameof(NavWorld), "pbj.nav-world");
             Add(nameof(LobbyReady), "pbj.lobby-ready");
             Add(nameof(LobbyUnready), "pbj.lobby-unready");
             Add(nameof(DriveState), "pbj.drive-state");

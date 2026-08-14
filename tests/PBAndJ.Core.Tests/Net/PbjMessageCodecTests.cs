@@ -79,6 +79,36 @@ namespace PBAndJ.Core.Tests.Net
             yield return new object[] { new LobbyLoadMessage(2, null, null) };
             yield return new object[] { new LobbyLoadedMessage(2, LoadOutcome.Loaded) };
             yield return new object[] { new LobbyUnreadyMessage(2) };
+            yield return new object[] { new PosesMessage(3, 0, 1, PoseTrack("unit_a", 4, 3)) };
+
+            // A part carrying no track. Decode cannot produce this — it always
+            // builds a track — but encode has to survive it, because the host
+            // assembles parts from captured data and a null there must not
+            // throw inside SendTo, which encodes outside its own try block.
+            yield return new object[] { new PosesMessage(3, 0, 1, null) };
+        }
+
+        private static UnitPoseTrack PoseTrack(string name, int joints, int keys)
+        {
+            var names = new string[joints];
+            for (var i = 0; i < joints; i++)
+            {
+                names[i] = "joint_" + i;
+            }
+
+            var poseKeys = new PoseKey[keys];
+            for (var k = 0; k < keys; k++)
+            {
+                var values = new JointPose[joints];
+                for (var j = 0; j < joints; j++)
+                {
+                    values[j] = new JointPose(
+                        new Vec3(j, k, 0f), new Vec4(0f, 0f, 0f, 1f));
+                }
+                poseKeys[k] = new PoseKey(k * 0.1f, k % 2 == 0, k % 3 == 0, values);
+            }
+
+            return new UnitPoseTrack(name, names, poseKeys);
         }
 
         private static ScenarioFile File(string name, int bytes)
@@ -638,6 +668,149 @@ namespace PBAndJ.Core.Tests.Net
             var bytes = PbjMessageCodec.Encode(new KeyframesMessage(1, 0f, 5f, tracks));
             Assert.True(bytes.Length < PbjRuntime.MaxFrameLength,
                 $"a full keyframe message was {bytes.Length} bytes, over the frame limit");
+        }
+
+        // --- poses (M8) ---
+
+        [Fact]
+        public void RoundTrip_Poses_PreservesEveryFieldOfEveryKey()
+        {
+            var decoded = RoundTrip(new PosesMessage(9, 2, 5, PoseTrack("pb_mech_02", 3, 4)));
+
+            Assert.Equal(9, decoded.Turn);
+            Assert.Equal(2, decoded.PartIndex);
+            Assert.Equal(5, decoded.PartCount);
+            Assert.Equal("pb_mech_02", decoded.Track!.Name);
+            Assert.Equal(new[] { "joint_0", "joint_1", "joint_2" }, decoded.Track.Joints);
+            Assert.Equal(4, decoded.Track.Keys.Count);
+
+            var key = decoded.Track.Keys[2];
+            Assert.Equal(0.2f, key.Time);
+            Assert.True(key.SyncLeftEquipment);
+            Assert.False(key.SyncRightEquipment);
+            Assert.Equal(3, key.Joints.Count);
+            Assert.Equal(1f, key.Joints[1].Position.X);
+            Assert.Equal(2f, key.Joints[1].Position.Y);
+            Assert.Equal(1f, key.Joints[1].Rotation.W);
+        }
+
+        // The equipment flags are the reason a pose is not just "a time and some
+        // joints": they pin the weapon to the palm for that frame. A codec that
+        // dropped or transposed them would detach the rifle from the hand mid-
+        // burst, and nothing else in the suite would notice.
+        [Fact]
+        public void RoundTrip_Poses_KeepsTheTwoEquipmentFlagsApart()
+        {
+            var key = new PoseKey(1f, true, false, new[] { new JointPose(default, default) });
+            var decoded = RoundTrip(new PosesMessage(
+                1, 0, 1, new UnitPoseTrack("u", new[] { "j" }, new[] { key }))).Track!.Keys[0];
+
+            Assert.True(decoded.SyncLeftEquipment);
+            Assert.False(decoded.SyncRightEquipment);
+        }
+
+        [Fact]
+        public void RoundTrip_PosesWithNullTrack_ReadsBackAsAnEmptyTrack()
+        {
+            var decoded = RoundTrip(new PosesMessage(1, 0, 1, null));
+
+            Assert.Null(decoded.Track!.Name);
+            Assert.Empty(decoded.Track.Joints);
+            Assert.Empty(decoded.Track.Keys);
+        }
+
+        [Fact]
+        public void Decode_PosesWithTooManyParts_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.Poses);
+            writer.WriteInt32(1);
+            writer.WriteInt32(0);
+            writer.WriteInt32(PbjMessageCodec.MaxPosePartsPerTurn + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        [Fact]
+        public void Decode_PoseTrackWithTooManyJoints_Throws()
+        {
+            var writer = PosesHeader();
+            writer.WriteString("u");
+            writer.WriteInt32(PbjMessageCodec.MaxJointsPerPose + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        [Fact]
+        public void Decode_PoseTrackWithTooManyKeys_Throws()
+        {
+            var writer = PosesHeader();
+            writer.WriteString("u");
+            writer.WriteInt32(0);
+            writer.WriteInt32(PbjMessageCodec.MaxPoseKeysPerTrack + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        // A key claiming more joints than the cap, even though the track's own
+        // name list is empty. Bounding the key against the cap rather than
+        // against that list is what keeps a disagreeing sender from choosing our
+        // allocation size.
+        [Fact]
+        public void Decode_PoseKeyWithTooManyJoints_Throws()
+        {
+            var writer = PosesHeader();
+            writer.WriteString("u");
+            writer.WriteInt32(0);
+            writer.WriteInt32(1);
+            writer.WriteSingle(0f);
+            writer.WriteBool(false);
+            writer.WriteBool(false);
+            writer.WriteInt32(PbjMessageCodec.MaxJointsPerPose + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        private static PbjWriter PosesHeader()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.Poses);
+            writer.WriteInt32(1);
+            writer.WriteInt32(0);
+            writer.WriteInt32(1);
+            return writer;
+        }
+
+        // The size claim the one-track-per-message decision rests on — and note
+        // the names are at their cap too, which the M6 sibling above does NOT
+        // do. Its "pb_mech_00" names hide the fact that PbjWriter would accept a
+        // 4096-byte one; with names at that limit the analogous keyframe bound
+        // does not actually hold. An oversize frame is not a local failure, it
+        // is a PbjProtocolException on the RECEIVER, which drops the sender as
+        // malformed — so this has to be shown at the caps, not near them.
+        [Fact]
+        public void Encode_PosesAtEveryCapIncludingNames_StaysUnderTheFrameLimit()
+        {
+            var longName = new string('j', PbjMessageCodec.MaxPoseNameLength);
+            var joints = new string[PbjMessageCodec.MaxJointsPerPose];
+            for (var i = 0; i < joints.Length; i++)
+            {
+                joints[i] = longName;
+            }
+
+            var keys = new PoseKey[PbjMessageCodec.MaxPoseKeysPerTrack];
+            for (var k = 0; k < keys.Length; k++)
+            {
+                var values = new JointPose[PbjMessageCodec.MaxJointsPerPose];
+                for (var j = 0; j < values.Length; j++)
+                {
+                    values[j] = new JointPose(new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f));
+                }
+                keys[k] = new PoseKey(k, true, true, values);
+            }
+
+            var bytes = PbjMessageCodec.Encode(new PosesMessage(
+                1, 0, PbjMessageCodec.MaxPosePartsPerTurn,
+                new UnitPoseTrack(longName, joints, keys)));
+
+            Assert.True(bytes.Length < PbjRuntime.MaxFrameLength,
+                $"a fully capped pose part was {bytes.Length} bytes, over the frame limit");
         }
 
         // --- scenario transfer (M9) ---
