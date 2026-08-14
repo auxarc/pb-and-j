@@ -51,6 +51,12 @@ namespace PBAndJ.Mod
             // a client's Time.timeScale during playback, is read off a running
             // client; then it goes the way of the other probes.
             Net.ReplayProbeGlue.RegisterConsoleCommands();
+            // THROWAWAY (M13) — it answered why a client drew "no data" over a
+            // unit the host drew normally, and that answer is now in
+            // docs/notes/replay-handoff-recon.md. It stays only for the question
+            // that pass left open: a revealed unit's ArrivalTime reads -1 on a
+            // client against the host's real value. Goes with that one.
+            Net.OverlayProbeGlue.RegisterConsoleCommands();
         }
     }
 

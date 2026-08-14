@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
@@ -354,6 +355,19 @@ namespace PBAndJ.Mod.Net
                 "combat=" + IDUtility.IsGameState("combat"),
                 "turn=" + turn,
                 "simulating=" + combat.Simulating,
+                // The combat clock, and the planning clock that runs ahead of
+                // it. A client never advances simulationTime — ~38 reactive
+                // systems trigger on it and most do not self-gate on Simulating
+                // — so the gap between these two grows on a client and not on a
+                // host. The game's own overlay reads exactly that difference
+                // against a unit's predictionTimeHorizon to decide whether to
+                // show "no data", which is why it is worth being able to see.
+                "simTime=" + (combat.hasSimulationTime
+                    ? combat.simulationTime.f.ToString("0.00", CultureInfo.InvariantCulture)
+                    : "-"),
+                "predTime=" + (combat.hasPredictionTime
+                    ? combat.predictionTime.f.ToString("0.00", CultureInfo.InvariantCulture)
+                    : "-"),
                 "session=" + NetStatusShort(),
                 // The launch splash — logos, then the seizure warning. It sits
                 // OVER the main menu while the game already reports
