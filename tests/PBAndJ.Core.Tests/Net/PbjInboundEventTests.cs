@@ -174,5 +174,76 @@ namespace PBAndJ.Core.Tests.Net
         {
             Assert.Empty(new LocalTurnCompleteEvent("d", null, null).Keyframes.Tracks);
         }
+
+        [Fact]
+        public void LocalLobbySelect_RetainsFields()
+        {
+            var e = new LocalLobbySelectEvent("pbj_campaign", "3f9c1a04");
+            Assert.Equal(PbjInboundEventKind.LocalLobbySelect, e.Kind);
+            Assert.Equal("pbj_campaign", e.SaveKey);
+            Assert.Equal("3f9c1a04", e.SaveDigest);
+        }
+
+        [Fact]
+        public void LocalLobbySelect_WithNoKey_ClearsRatherThanFails()
+        {
+            // Deselecting is a real action, not a malformed event.
+            var e = new LocalLobbySelectEvent(null, null);
+            Assert.Null(e.SaveKey);
+            Assert.Null(e.SaveDigest);
+        }
+
+        [Fact]
+        public void LocalLobbyReady_HasItsKind()
+        {
+            Assert.Equal(PbjInboundEventKind.LocalLobbyReady, new LocalLobbyReadyEvent().Kind);
+        }
+
+        [Fact]
+        public void LocalLobbyUnready_HasItsKind()
+        {
+            Assert.Equal(PbjInboundEventKind.LocalLobbyUnready, new LocalLobbyUnreadyEvent().Kind);
+        }
+
+        [Fact]
+        public void LocalCombatReady_CarriesTheFightOnDisk()
+        {
+            var evt = new LocalCombatReadyEvent("pbj_combat_test", "d1");
+            Assert.Equal(PbjInboundEventKind.LocalCombatReady, evt.Kind);
+            Assert.Equal("pbj_combat_test", evt.SaveName);
+            Assert.Equal("d1", evt.Digest);
+        }
+
+        [Theory]
+        [InlineData(LoadOutcome.Loaded)]
+        [InlineData(LoadOutcome.Refused)]
+        [InlineData(LoadOutcome.Unavailable)]
+        public void CombatLoadFinished_CarriesTheOutcome(LoadOutcome outcome)
+        {
+            var evt = new CombatLoadFinishedEvent(outcome);
+            Assert.Equal(PbjInboundEventKind.CombatLoadFinished, evt.Kind);
+            Assert.Equal(outcome, evt.Outcome);
+        }
+
+        [Fact]
+        public void LocalBasePosition_CarriesWhereTheBaseIs()
+        {
+            var evt = new LocalBasePositionEvent(1024.5f, -37.25f);
+            Assert.Equal(PbjInboundEventKind.LocalBasePosition, evt.Kind);
+            Assert.Equal(1024.5f, evt.X);
+            Assert.Equal(-37.25f, evt.Z);
+        }
+
+        [Theory]
+        [InlineData(LoadOutcome.Loaded)]
+        [InlineData(LoadOutcome.Refused)]
+        [InlineData(LoadOutcome.Unavailable)]
+        public void LoadFinished_CarriesTheVersionAndTheOutcome(LoadOutcome outcome)
+        {
+            var evt = new LoadFinishedEvent(4, outcome);
+            Assert.Equal(PbjInboundEventKind.LoadFinished, evt.Kind);
+            Assert.Equal(4, evt.SelectionVersion);
+            Assert.Equal(outcome, evt.Outcome);
+        }
     }
 }

@@ -264,6 +264,18 @@ namespace PBAndJ.Core.Net
                         snapshot.Turn, snapshot.Units.Count, snapshot.ExpectedDigest, actual));
                 }
 
+                case BeginLoadEffect begin:
+                    // A started load reports later, through the glue's callback.
+                    // One that could not start reports now — otherwise the host
+                    // waits out the whole timeout on a machine that already knows
+                    // the answer.
+                {
+                    var refusal = bridge.BeginLoad(begin.SaveKey, begin.SelectionVersion, begin.SaveDigest);
+                    return refusal == null
+                        ? NoEffects
+                        : session.Handle(new LoadFinishedEvent(begin.SelectionVersion, refusal.Value));
+                }
+
                 case ClearLocalOrdersEffect:
                     bridge.ClearLocalOrders();
                     break;
@@ -276,6 +288,37 @@ namespace PBAndJ.Core.Net
 
                 case StopKeyframesEffect:
                     bridge.StopKeyframes();
+                    break;
+
+                case BeginCombatLoadEffect beginCombat:
+                    // Same effect-out, event-back shape as BeginLoad: a load that
+                    // started reports through the glue's callback later, and one
+                    // that could not start reports now, so the host is not left
+                    // waiting out a timeout for an answer this machine already has.
+                {
+                    var refusal = bridge.BeginCombatLoad(beginCombat.SaveName, beginCombat.Digest);
+                    return refusal == null
+                        ? NoEffects
+                        : session.Handle(new CombatLoadFinishedEvent(refusal.Value));
+                }
+
+                case ShipCombatEffect:
+                    // Nothing comes back here either, and for a sharper reason
+                    // than the mirror's: the answer is frames away. The glue
+                    // polls for a moment the game will permit a save at, and says
+                    // so with a LocalCombatReadyEvent when it has one — or when
+                    // it has given up.
+                    bridge.ShipCombat();
+                    break;
+
+                case MirrorBaseEffect mirror:
+                    // Nothing comes back, for the same reason keyframes report
+                    // nothing: the mirror is presentation and makes no
+                    // correctness claim to verify. It is also the one effect that
+                    // may land somewhere it cannot be seen — a client in a
+                    // management screen gets the write without the redraw — and
+                    // that is measured-correct rather than a failure to report.
+                    bridge.MirrorBase(mirror.X, mirror.Z);
                     break;
 
                 case WriteScenarioEffect write:

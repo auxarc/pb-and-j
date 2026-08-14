@@ -25,6 +25,13 @@ namespace PBAndJ.Core.Net
         CombatExited = 102,
         Tick = 103,
         LocalScenarioPull = 104,
+        LocalLobbySelect = 105,
+        LocalLobbyReady = 106,
+        LocalLobbyUnready = 107,
+        LoadFinished = 108,
+        LocalBasePosition = 109,
+        LocalCombatReady = 110,
+        CombatLoadFinished = 111,
     }
 
     /// <summary>
@@ -247,6 +254,128 @@ namespace PBAndJ.Core.Net
         public override PbjInboundEventKind Kind => PbjInboundEventKind.CombatEntered;
     }
 
+    /// <summary>
+    /// The host chose which save the lobby will play.
+    /// </summary>
+    /// <remarks>
+    /// The key and digest arrive on the event rather than being read from disk
+    /// by the session, which keeps the session a pure machine — it reads no
+    /// disk, exactly as it reads no clock — and leaves the catalogue, the
+    /// <c>pbj_</c> naming rules and the digesting to M11b's glue.
+    /// <para>
+    /// Host-only. A client that somehow posts one is told so and ignored: the
+    /// save picker is the host's, and a client's copy of it is a display.
+    /// </para>
+    /// </remarks>
+    public sealed class LocalLobbySelectEvent : PbjInboundEvent
+    {
+        public LocalLobbySelectEvent(string? saveKey, string? saveDigest)
+        {
+            SaveKey = saveKey;
+            SaveDigest = saveDigest;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalLobbySelect;
+
+        /// <summary>Null clears the selection rather than naming a save.</summary>
+        public string? SaveKey { get; }
+
+        /// <summary>Null is normal — this machine may not have hashed it.</summary>
+        public string? SaveDigest { get; }
+    }
+
+    /// <summary>
+    /// This machine's mobile base is here. Posted by the host's glue.
+    /// </summary>
+    /// <remarks>
+    /// <b>When to post is a glue decision, and the recon settled it.</b> The
+    /// overworld clock is not continuous — it advances only while the base
+    /// travels or a time skip runs — so the host has nothing new to say while
+    /// idle, and the honest cadence is "on movement, plus a slow heartbeat".
+    /// The heartbeat is not there to track motion; it is there so a client that
+    /// missed an update while the base was moving does not sit wrong
+    /// indefinitely once everything goes still.
+    /// <para>
+    /// Core deliberately does not throttle. A session that silently dropped
+    /// updates it judged too frequent would be second-guessing the glue about a
+    /// cadence only the glue can see.
+    /// </para>
+    /// </remarks>
+    public sealed class LocalBasePositionEvent : PbjInboundEvent
+    {
+        public LocalBasePositionEvent(float x, float z)
+        {
+            X = x;
+            Z = z;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalBasePosition;
+
+        public float X { get; }
+
+        public float Z { get; }
+    }
+
+    /// <summary>
+    /// The host's glue has written the fight to the scenario slot. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Posted from glue rather than derived in Core, because the moment is a
+    /// property of the game rather than of the protocol: <c>CanSave(false)</c>
+    /// refuses while <c>combat.isScenarioIntroInProgress</c>, and that flag is
+    /// set in the same tick that makes <c>InCombat</c> true. The glue polls until
+    /// the write is permitted and then says so once. A Core guard for the same
+    /// thing would be a branch nothing could reach, which the coverage gate turns
+    /// into a build failure.
+    /// </remarks>
+    public sealed class LocalCombatReadyEvent : PbjInboundEvent
+    {
+        public LocalCombatReadyEvent(string? saveName, string? digest)
+        {
+            SaveName = saveName;
+            Digest = digest;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalCombatReady;
+
+        public string? SaveName { get; }
+
+        public string? Digest { get; }
+    }
+
+    /// <summary>
+    /// This machine finished trying to load the host's fight. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="LoadFinishedEvent"/>, which answers the lobby's
+    /// campaign load. Sharing one event would mean a client in a fight and a
+    /// client in the lobby reporting through the same channel, and the session
+    /// would have to guess which question was being answered.
+    /// </remarks>
+    public sealed class CombatLoadFinishedEvent : PbjInboundEvent
+    {
+        public CombatLoadFinishedEvent(LoadOutcome outcome)
+        {
+            Outcome = outcome;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.CombatLoadFinished;
+
+        public LoadOutcome Outcome { get; }
+    }
+
+    /// <summary>The local player agreed to load the selected save.</summary>
+    public sealed class LocalLobbyReadyEvent : PbjInboundEvent
+    {
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalLobbyReady;
+    }
+
+    /// <summary>The local player withdrew that agreement.</summary>
+    public sealed class LocalLobbyUnreadyEvent : PbjInboundEvent
+    {
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalLobbyUnready;
+    }
+
     /// <summary>The local game left combat.</summary>
     public sealed class CombatExitedEvent : PbjInboundEvent
     {
@@ -321,5 +450,36 @@ namespace PBAndJ.Core.Net
         /// M5 behaviour.
         /// </remarks>
         public KeyframeCapture Keyframes { get; }
+    }
+
+    /// <summary>
+    /// How this machine's attempt to load the lobby's save turned out.
+    /// </summary>
+    /// <remarks>
+    /// Posted by the glue from <c>TryLoading</c>'s completion callback, or
+    /// immediately when the glue can already tell the load will not happen.
+    /// The <c>CommitOutcomeEvent</c> shape: an effect asked, this answers.
+    /// <para>
+    /// Only success has a callback behind it — the game fires
+    /// <c>callbackAfterLoading</c> on the success path alone — so every other
+    /// outcome here is something the glue worked out for itself before calling.
+    /// What it cannot work out arrives as nothing at all, and the host's timeout
+    /// is what turns that silence into an answer.
+    /// </para>
+    /// </remarks>
+    public sealed class LoadFinishedEvent : PbjInboundEvent
+    {
+        public LoadFinishedEvent(int selectionVersion, LoadOutcome outcome)
+        {
+            SelectionVersion = selectionVersion;
+            Outcome = outcome;
+        }
+
+        public override PbjInboundEventKind Kind => PbjInboundEventKind.LoadFinished;
+
+        /// <summary>Which load this is the answer to.</summary>
+        public int SelectionVersion { get; }
+
+        public LoadOutcome Outcome { get; }
     }
 }

@@ -28,3 +28,6 @@ TestResults/
 # Windows account name of whoever was testing. Redact into docs/notes/ instead;
 # see stage2-run-2026-08-02.md for the shape.
 logs/
+
+# Playtest run logs (tools/playtest-m12b.sh)
+.playtest/

@@ -172,7 +172,18 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void ModVersion_MatchesTheShippedModMetadata()
         {
-            Assert.Equal("0.5.0", PbjProtocol.ModVersion);
+            // 0.12.0 for M12b·2. No message type moved and no layout changed —
+            // what moved is IPbjGameBridge, which is hashed as part of the wire
+            // surface because OrderApplyResult and RejectReason cross it as raw
+            // int casts. The bump is honest rather than ceremonial: 0.11.0 is a
+            // build in which the host enters combat and nothing ever writes the
+            // fight, so it hangs at the point this release exists to fix, and
+            // refusing it is the correct outcome.
+            //
+            // 0.11.0 was M12b's first half: CombatOffer and CombatEntered were new
+            // types, and the meaning of an existing one moved — CombatStart now
+            // arrives only once everyone is in the fight.
+            Assert.Equal("0.12.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

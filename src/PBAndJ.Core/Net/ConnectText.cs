@@ -73,6 +73,16 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public static string LeaveButton() => "Leave";
 
+        /// <remarks>
+        /// The way through to M11c's lobby, offered alongside Leave once a session
+        /// is live. A button rather than opening the lobby automatically on a
+        /// successful connect: this screen exists to answer "did my connection
+        /// work?", and one that replaces itself the moment it succeeds cannot be
+        /// told apart from one that has gone wrong. That trade was already made
+        /// once here, deliberately, and it holds.
+        /// </remarks>
+        public static string LobbyButton() => "Lobby";
+
         public static string Hosting(string bind, int port) =>
             string.Format(CultureInfo.InvariantCulture, "Hosting on {0}:{1}. Waiting for a peer.", bind, port);
 

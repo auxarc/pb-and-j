@@ -24,16 +24,35 @@ The line runs through the out-of-combat game, not around it:
 | Everything else out of combat — mech customisation, loadouts, pilot assignment, salvage, repairs | **All players, concurrently** |
 | Combat | All players, under the existing turn barrier |
 
-This is deliberate and it is the cheap half of the problem. The overworld runs a *continuous* clock
-rather than the combat turn barrier, and "who moved the base" and "who spent the last of the alloy"
-are conflict problems with no good silent resolution. Keeping the map host-driven removes both. What
-survives is the part that makes co-op feel like co-op: between fights everyone kits out their own
-machines at the same time.
+Keeping the map host-driven removes the "who moved the base" conflict. What survives is the part that
+makes co-op feel like co-op: between fights everyone kits out their own machines at the same time.
 
-**Consequence to design for early:** concurrent management still needs an ownership rule. Two players
-editing the same mech, or spending from one shared resource pool, is the same class of conflict the
-map avoids. The likely answer is the one combat already uses — per-unit ownership, host validates —
-but it is unproven and it is the first real design question this direction raises.
+> ⚠️ **Two claims that used to be in this section were measured and found wrong on 2026-08-07.**
+> See `docs/notes/overworld-recon.md` for the evidence. They are corrected below and left visible
+> because both were built on and both would have shaped M12 in the wrong direction.
+
+**Corrected: the overworld clock is NOT continuous.** This section justified the host-only map by
+saying it was. It is not: `OverworldTimeUtility.RefreshTimeScale` derives `simulationTimeScale` from
+`overworld.isBaseMoving`, so **the campaign clock advances only while the base is travelling or a
+time skip is running** — measured as 60 consecutive samples frozen at the same `simulationTime` while
+idle, and confirmed at save level (three idle minutes changed nothing but wall-clock counters). The
+host-only map is still the right call, on the "who moved the base" ground alone. The continuous-clock
+reason was never real.
+
+**Corrected: per-unit ownership is NOT sufficient for concurrent management.** This section predicted
+"the likely answer is the one combat already uses — per-unit ownership, host validates". Measured on
+two machines: **the shared parts inventory lives on the mobile base entity**, and equipping moves an
+item out of it, so a loadout edit is never confined to a unit. Two players editing *different* mechs
+both claimed the same physical weapon (serial 2249) and equipped it on different machines, with
+neither aware. Per-unit ownership partitions the `Units/` files correctly — the conflict simply is
+not there. **M12 needs a claim protocol over the shared inventory, not a replication protocol**, and
+a client's management UI must be able to show a refused claim.
+
+**A third thing this section never anticipated:** generated contracts are rolled **per machine after
+the load** (the transferred save contains none), and they diverge wholesale — different `areaKey`,
+`biomeKey` and spawn points across 50–87% of each file. Two machines therefore disagree about what
+mission a map marker *is*, which would build different combat scenarios from the same selection.
+Mission generation has to be host-authoritative or resynced.
 
 ## Save storage
 
@@ -101,13 +120,54 @@ state and send their ready. A `LobbyBarrier` alongside the existing `TurnBarrier
 second barrier rather than a reuse, because the turn barrier's participants are decided by combat
 assignment and the lobby's by the roster.
 
-New message types from `PbjMessageType` 23+ (unallocated), new effects from `PbjEffectKind` 13+, new
-local events from 105+. Per the project's own rule, **new message types do not bump the wire
-version** — no layout moves. `ModVersion` remains the real compatibility gate.
+**Done 2026-08-04.** `LobbyState = 23`, `LobbyReady = 24`, `LobbyUnready = 25`;
+`LocalLobbySelect = 105`, `LocalLobbyReady = 106`, `LocalLobbyUnready = 107`. Per the project's own
+rule, **new message types do not bump the wire version** — no layout moves — but `ModVersion` went to
+0.7.0 in the same commit, deliberately rather than at the next release: a host broadcasts
+`LobbyState` on every handshake, so a peer admitted without those types would fault on its first
+message.
+
+**No new `PbjEffectKind` was needed** — an earlier draft of this section promised effects from 13+,
+and that was wrong. State changes travel on the existing `Broadcast`/`Send`, logs on `Log`, and a
+screen polls session properties every tick exactly as M10c's connect screen already does. 13+ remains
+unallocated for M11d.
+
+See `networking.md`, "The lobby barrier (M11a)", for the three things that turned out to be easy to
+get wrong: `NeedsResync` meaning something different here, a departing peer satisfying the barrier,
+and leaving combat needing to clear readiness.
 
 **M11b — the save catalogue.** Enumerate `pbj_`-prefixed saves and their metadata; create a new
 multiplayer save; convert a singleplayer one by directory copy and rename, never a move. Filter
 `pbj_` out of `CIViewPauseLoad`. Mostly glue, with the naming and validity rules in Core.
+
+**Built 2026-08-04.** `LobbySaveNames` / `LobbySaveRules` / `LobbyCatalogue` in Core under the gate;
+`SaveCatalogueGlue` and `SaveVisibilityPatches` in the mod; `pbj.saves`, `pbj.save-as`,
+`pbj.save-convert`, `pbj.lobby-select` on the console. Three decisions differ from the pre-build
+plan, each because a review pass refuted the first draft:
+
+- **No template ships and none is forged.** "Create a new co-op campaign" is: start a normal new
+  game, save it, convert it. `pbj.save-as` makes that two steps. This deleted an entire
+  sub-feature — no `mod/templates/`, no game-derived save committed to a public repo, no hook into
+  the new-game flow.
+- **`pbj_combat_test` is inside this namespace and is not a campaign.** M9's scenario slot would
+  have appeared in the catalogue as selectable while `WriteScenario` deletes and rewrites it on
+  every transfer. `LobbySaveNames.ScenarioSlot` now owns that name for both, the catalogue excludes
+  it, and `LobbySaveRules` reserves the *unprefixed* `combat_test` so nobody can type their way
+  into it.
+- **Multiplayer saves stay VISIBLE in the singleplayer save grid**, and are made unwritable and
+  undeletable there instead. Hiding them looked tidier and was wrong: `CIViewPauseSave.RebuildSaveGrid`
+  calls `UpdateSaveAvailability` → `GetSaveHeaders` *inside* the filter window, so the duplicate
+  check, the save count and the 60-save limit would all have run against a catalogue with holes in
+  it — and a player could then silently overwrite a lobby's save.
+
+**⚠️ The namespace is enforced on READS ONLY, and M11d owns the other half.** Once a `pbj_` campaign
+is actually *loaded*, the game writes it straight back out under unprefixed names:
+`OverworldTimedAutosaveSystem.cs:46` writes `autosave_timed_N` and `CIViewPauseRoot.cs:1449` writes
+`autosave_game_exit`, both `SaveLocation.Normal`. The title screen's Continue will then offer a
+co-op campaign as singleplayer through a path no read-side patch touches. This is not a defect in
+M11b — nothing in M11b loads one of these saves — but it becomes real the moment M11d does. The
+likely mechanism is a "this campaign is multiplayer" bit set at load that redirects autosave names
+through the prefix, and it needs M11d's state to exist before it can be built.
 
 **M11c — the lobby screen.** The connect screen gains a successor: roster with ready states, the save
 picker (editable for the host, read-only for clients), a ready toggle, and Start for the host. The
@@ -134,22 +194,97 @@ Measure before designing chunking.
 `M11a` first and alone; everything else depends on it. `M11b` is independent of `a` and can run in
 parallel. `M11c` needs both. `M11d` needs `a`. `M11e` needs a measurement before it needs a design.
 
-### The risk worth naming
+### The risk worth naming — ANSWERED 2026-08-04, on a running game
 
-**Whether `TryLoading` can be driven from outside the load screen's own flow is unverified.** Every
-call site read so far is inside `CIViewPauseLoad`. If it carries hidden assumptions about screen
-state, the synchronised load needs a different entry point and M11d changes shape. This is a
-decompile-shaped question, and this project has now paid five times for the difference between a
-careful reading and a running game — **answer it with a probe before designing around it.**
+**`TryLoading` works from outside the load screen's flow. M11d does not change shape.**
 
-## Open questions
+Measured with `pbj.load-probe` / `pbj.load-try` (since deleted), driven from the **dev console, in
+the overworld**, on the pinned 2.2.2-b8339 build:
 
-1. **Ownership under concurrent management.** Per-unit like combat, or something coarser? What
-   happens to a shared resource pool?
-2. **Campaign save size**, measured, and whether the existing transfer path carries it.
-3. **What the client does while the host is on the tactical map.** A blocked screen is honest but
-   dull; the management UI staying live is more interesting and is the point of the split.
-4. **When the campaign save is written back**, and by whom. Only the host holds the authoritative
-   copy, so clients need re-sync at some cadence — plausibly the same handoff as entering combat.
-5. **Whether the game's management UI can be driven at all outside its normal flow**, which is a
-   decompile question and therefore one to answer by probe, not by reading.
+```
+load-try 'TWO POINT OH BABY' | before   | state=overworld | isLoadingInProgress=False | isTeardownOfCampaignRequested=False
+load-try 'TWO POINT OH BABY' | returned | isLoadingInProgress=True  | isTeardownOfCampaignRequested=True | callbackAfterLoading=PENDING
+   ... Popping game controller state 'overworld' / Enabling state mainmenu / Attempting to load save data ...
+load-try 'TWO POINT OH BABY' | CALLBACK FIRED | state=overworld
+```
+
+1. **The completion callback fires from a console-driven load.** That is M11d's "peer reports it is
+   actually in" signal, proven rather than assumed — the whole reason the probe existed.
+2. **The wrong-state race did not lose.** From the overworld `TryLoading` set both flags, popped the
+   controller state, and `Co.DelayFrames(2)` was enough for `LoadingStart`'s `mainmenu` re-check.
+   One sample, not a proof — but the failure mode is a refused load, not a corrupt one.
+3. **All four `LoadingEnd2` singletons are non-null in both `mainmenu` and `overworld`** — including
+   the whole `CIViewPauseLoad.ins.sidebarHelper.buttonConfirm` chain, from a state where the load
+   screen was never opened. That hazard is **dormant**: the views persist, they are not built on
+   demand.
+4. **A successful load leaves the flags clean**: `isLoadingInProgress=False`,
+   `isTeardownOfCampaignRequested=False`, `callbackAfterLoading=null`.
+5. **`GetSaveHeaders` lists `pbj_`-prefixed saves alongside the rest** — 11 saves, with
+   `pbj_combat_test` among them. M11b's catalogue and the `CIViewPauseLoad` filter both have what
+   they need.
+
+**Two things M11d still has to handle, neither a blocker:**
+
+- **`keepScreenAfterLoading: true` means you must dismiss the loading screen yourself.**
+  `LoadingEnd2:380` only calls `CIViewBackgroundLoading.ins.TryExit()` when the flag is false.
+  `QuickLoad` (`DataManagerSave.cs:3518`) does it by hand in its callback after `Co.DelayFrames(10)`
+  — copy that, or pass `false` and let the game dismiss it.
+- **The `isLoadingInProgress` wedge is still unmeasured**, because the load *succeeded* and
+  `LoadingEnd2:375` clears the flag on success. The open question is only the **failure** path:
+  `LoadingStart:259-264` returns without clearing what `TryLoading:234` set, and no clear for it is
+  visible in the file. Until someone loses that race deliberately, M11d should treat a failed load as
+  possibly-terminal for that peer rather than retryable.
+
+Also worth knowing for anyone re-running this: **Quantum Console splits arguments on spaces**, so a
+save name like `TWO POINT OH BABY` has to be quoted or the command fails with "No overload of
+'pbj.load-try' with 4 parameters could be found."
+
+### What the reading got wrong on the way here
+
+An earlier version of this section said "every call site read so far is inside `CIViewPauseLoad`".
+That was false, and it was false in the direction that matters — a second, closer reading found
+**eight** caller classes, two of which are not view code at all:
+
+- **`PhantomBrigade.DebugConsole/ConsoleCommandsShared.cs:74`** — the game's own `load` console
+  command, `TryLoading(filename, SaveLocation.Normal)`, with no screen involved whatsoever.
+- **`PhantomBrigade.Data/DataManagerSave.cs:3518`** — `QuickLoad()`, which loads **by key, with a
+  completion callback, from arbitrary game states**, every time a player presses quickload.
+
+So the shipping game already drives M11d's exact shape from outside a load screen. The same reading
+raised three hazards in its place; the probe above settled all three, finding **one still live**
+(the callback is success-only, so a failed load reports nothing) and two dormant.
+
+The lesson stands even though the answer improved: two careful readings of the same file disagreed
+with each other, and the second was only trusted because the probe checked it. Reading harder is not
+the fix for a wrong reading.
+
+## Open questions — answered 2026-08-07 except where noted
+
+Evidence for all of these is in `docs/notes/overworld-recon.md`, measured on two real game instances
+running the same campaign.
+
+1. **Ownership under concurrent management.** ✅ **Answered, and not as predicted.** Per-unit
+   ownership is *necessary but not sufficient*: `Units/` partitions cleanly, but the shared parts
+   inventory lives on the mobile base and every equip mutates it. Two players editing different
+   mechs double-claimed one item on the first attempt. **A claim protocol over the shared pool is
+   required**, and a refused claim must be visible in the client's UI. The remaining *design*
+   decision is claim granularity — per item serial, or a coarser lease on the whole inventory.
+2. **Campaign save size.** ✅ **Answered.** 24–71 KB; the campaign used here transferred as
+   **62,076 bytes** in two files, byte-for-byte, between two real games, well inside the existing
+   path. No chunking needed.
+3. **What the client does while the host is on the tactical map.** ✅ **Answered, with a constraint
+   the question did not anticipate.** The client can watch: an external write to the base position
+   renders with the client's own clock stopped — but **only in game state `overworld`**, because the
+   bridge that feeds the renderer (`OverworldRangeSystem`) does not run in `basecrawler`, where the
+   management screens live. So "full UI access *and* watch the host drive" is not two states at
+   once; it is **catch-up on returning to the map**, which works because the position is already
+   correct by then. A blocked screen is not needed.
+4. **When the campaign save is written back**, and by whom. ⏳ **Still a design decision, but now an
+   informed one.** Everything that diverges between two machines is 5 files of 47, all carried by
+   the existing transfer — so a post-load resync closes the whole gap with no per-entity protocol.
+   Cadence remains to be chosen.
+5. **Whether the game's management UI can be driven outside its normal flow.** ⏳ **Partially
+   answered.** `basecrawler` is enterable with a session live and the clock stopped, every relevant
+   view singleton exists from the main menu onward, and loadout edits complete and serialise. What
+   has not been tested is driving that UI *from outside its own flow* — every edit so far was made
+   by a human clicking.

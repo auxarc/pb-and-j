@@ -6,7 +6,7 @@ namespace PBAndJ.Core.Net
     /// Discriminator byte at the head of every encoded message.
     /// </summary>
     /// <remarks>
-    /// Values are assigned once and never reused. 19+ are unallocated.
+    /// Values are assigned once and never reused. 31+ are unallocated.
     /// </remarks>
     public enum PbjMessageType : byte
     {
@@ -32,6 +32,20 @@ namespace PBAndJ.Core.Net
         ScenarioOffer = 20,
         ScenarioRequest = 21,
         Scenario = 22,
+        LobbyState = 23,
+        LobbyReady = 24,
+        LobbyUnready = 25,
+        LobbyLoad = 26,
+        LobbyLoaded = 27,
+
+        /// <summary>Where the host's mobile base is. Host to client only.</summary>
+        BasePosition = 28,
+
+        /// <summary>The host's fight is on disk and ready to be fetched.</summary>
+        CombatOffer = 29,
+
+        /// <summary>A client reporting whether it made it into the fight.</summary>
+        CombatEntered = 30,
     }
 
     /// <summary>
@@ -669,6 +683,296 @@ namespace PBAndJ.Core.Net
         public string? Digest { get; }
 
         public IReadOnlyList<ScenarioFile> Files { get; }
+    }
+
+    /// <summary>One roster entry in a <see cref="LobbyStateMessage"/>.</summary>
+    /// <remarks>
+    /// Carries the ready flag that <see cref="PeerInfo"/> does not. Kept
+    /// separate rather than adding a field to <c>PeerInfo</c>, whose layout is
+    /// pinned by byte-exact tests on <see cref="WelcomeMessage"/> — and where a
+    /// lobby flag would mean nothing anyway.
+    /// </remarks>
+    public readonly struct LobbyPeerState
+    {
+        public LobbyPeerState(int peerId, string? name, bool ready)
+        {
+            PeerId = peerId;
+            Name = name;
+            Ready = ready;
+        }
+
+        public int PeerId { get; }
+        public string? Name { get; }
+
+        /// <summary>Whether this member has agreed to load the selected save.</summary>
+        public bool Ready { get; }
+    }
+
+    /// <summary>
+    /// The whole lobby, as the host sees it: which save is selected and who has
+    /// agreed to it. Host to everyone, on every change.
+    /// </summary>
+    /// <remarks>
+    /// Full state rather than a per-peer delta, for the same reason
+    /// <see cref="AssignmentsMessage"/> is: it is idempotent, a client that
+    /// misses one is corrected by the next, and there is no ordering hazard
+    /// between "who joined" and "who is ready". A lobby is small — the roster
+    /// caps at 16 — so the bytes are not worth a diff protocol.
+    /// <para>
+    /// <see cref="SelectionVersion"/> is what a <see cref="LobbyReadyMessage"/>
+    /// names, so a ready for a save the host has since changed away from can be
+    /// recognised and ignored rather than counted.
+    /// </para>
+    /// </remarks>
+    public sealed class LobbyStateMessage : PbjMessage
+    {
+        private static readonly LobbyPeerState[] NoPeers = new LobbyPeerState[0];
+
+        public LobbyStateMessage(
+            int selectionVersion,
+            string? saveKey,
+            string? saveDigest,
+            IReadOnlyList<LobbyPeerState>? peers)
+        {
+            SelectionVersion = selectionVersion;
+            SaveKey = saveKey;
+            SaveDigest = saveDigest;
+            Peers = peers ?? NoPeers;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.LobbyState;
+
+        /// <summary>Bumped by the host every time the selected save changes.</summary>
+        public int SelectionVersion { get; }
+
+        /// <summary>The chosen save, or null when the host has not chosen one.</summary>
+        public string? SaveKey { get; }
+
+        /// <summary>
+        /// Identifies the contents, so a peer can tell whether it already holds
+        /// this save. Null is normal — the host may not have hashed it.
+        /// </summary>
+        public string? SaveDigest { get; }
+
+        /// <summary>Everyone in the lobby, the host included, with their ready flag.</summary>
+        public IReadOnlyList<LobbyPeerState> Peers { get; }
+    }
+
+    /// <summary>
+    /// "I agree to load that save." Peer to host.
+    /// </summary>
+    /// <remarks>
+    /// A separate type from <see cref="LobbyUnreadyMessage"/> rather than one
+    /// message with a flag, mirroring <see cref="ReadyMessage"/> and
+    /// <see cref="UnreadyMessage"/> so both barriers read the same way in the
+    /// codec, the switch arms and the logs.
+    /// <para>
+    /// Carries the selection it is answering for the same reason a
+    /// <see cref="ReadyMessage"/> carries its turn: without it, a ready sent
+    /// just before the host changed the save would be counted as agreement to
+    /// the new one.
+    /// </para>
+    /// </remarks>
+    public sealed class LobbyReadyMessage : PbjMessage
+    {
+        public LobbyReadyMessage(int selectionVersion)
+        {
+            SelectionVersion = selectionVersion;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.LobbyReady;
+
+        public int SelectionVersion { get; }
+    }
+
+    /// <summary>"Actually, wait." Peer to host.</summary>
+    /// <remarks>
+    /// Idempotent like <see cref="UnreadyMessage"/>: withdrawing when not ready
+    /// is a no-op, not an error.
+    /// </remarks>
+    public sealed class LobbyUnreadyMessage : PbjMessage
+    {
+        public LobbyUnreadyMessage(int selectionVersion)
+        {
+            SelectionVersion = selectionVersion;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.LobbyUnready;
+
+        public int SelectionVersion { get; }
+    }
+
+    /// <summary>How a peer's attempt to load the lobby's save turned out.</summary>
+    /// <remarks>
+    /// Three answers rather than a bool, because the host's response differs.
+    /// <see cref="Unavailable"/> deliberately covers both "I do not have that
+    /// save" and "mine does not match the digest": the host does the same thing
+    /// either way — and will, in M11e, send the bytes — while a fourth arm no
+    /// test could reach would break the coverage gate for a distinction nobody
+    /// acts on.
+    /// <para>
+    /// There is no "still loading". Silence is what that looks like, and the
+    /// host's timeout is what answers it.
+    /// </para>
+    /// </remarks>
+    public enum LoadOutcome : byte
+    {
+        Loaded = 0,
+        Refused = 1,
+        Unavailable = 2,
+    }
+
+    /// <summary>"Everyone agreed — load it now." Host to everyone.</summary>
+    /// <remarks>
+    /// Carries the selection version so a peer can tell this instruction from
+    /// one for a choice the host has since moved on from.
+    /// <para>
+    /// <b>The host advances the selection when it fires this</b>, so the version
+    /// here is one the client has not seen yet. That is why the host emits the
+    /// <see cref="LobbyStateMessage"/> carrying the new version <em>first</em>,
+    /// in the same batch: the stream is ordered, so the client has already
+    /// adopted the version by the time this arrives. Reverse them and every
+    /// client rejects the load while the host — which never validates its own —
+    /// loads alone.
+    /// </para>
+    /// </remarks>
+    public sealed class LobbyLoadMessage : PbjMessage
+    {
+        public LobbyLoadMessage(int selectionVersion, string? saveKey, string? saveDigest)
+        {
+            SelectionVersion = selectionVersion;
+            SaveKey = saveKey;
+            SaveDigest = saveDigest;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.LobbyLoad;
+
+        public int SelectionVersion { get; }
+
+        public string? SaveKey { get; }
+
+        /// <summary>
+        /// What the host's copy hashes to, so a peer can refuse a save of the
+        /// same name that is not the same save.
+        /// </summary>
+        public string? SaveDigest { get; }
+    }
+
+    /// <summary>"I am in", or why not. Peer to host.</summary>
+    public sealed class LobbyLoadedMessage : PbjMessage
+    {
+        public LobbyLoadedMessage(int selectionVersion, LoadOutcome outcome)
+        {
+            SelectionVersion = selectionVersion;
+            Outcome = outcome;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.LobbyLoaded;
+
+        public int SelectionVersion { get; }
+
+        public LoadOutcome Outcome { get; }
+    }
+
+    /// <summary>
+    /// Where the host's mobile base is, so a passenger can watch it move.
+    /// </summary>
+    /// <remarks>
+    /// <b>X and Z only — the height is deliberately not on the wire.</b> The
+    /// receiving machine finds its own Y by setting <c>isPositionUnchecked</c>
+    /// and letting <c>OverworldPositionValidationSystem</c> snap to its own
+    /// ground; the recon watched it correct 33.3 to 13.3. Sending Y would be
+    /// sending the host's idea of a surface the client renders for itself, which
+    /// is how a base ends up hovering.
+    /// <para>
+    /// There is no simulation time on this message either, and that is the
+    /// point. The mirror re-replaces the client's <em>own</em> time value to
+    /// wake the reactive collectors; writing the host's value instead would run
+    /// roughly twenty <c>SimulationTime</c> systems with a real delta on a
+    /// machine that is not simulating — the overworld cousin of the standing
+    /// rule against advancing <c>combat.simulationTime</c> on a client.
+    /// </para>
+    /// </remarks>
+    public sealed class BasePositionMessage : PbjMessage
+    {
+        public BasePositionMessage(float x, float z)
+        {
+            X = x;
+            Z = z;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.BasePosition;
+
+        public float X { get; }
+
+        public float Z { get; }
+    }
+
+    /// <summary>
+    /// The host has entered a fight, written it to the scenario slot, and is
+    /// waiting for everyone to join it. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately <b>not</b> M9's <see cref="ScenarioOfferMessage"/>, even
+    /// though it says almost the same thing. A client refuses a scenario offer
+    /// outright while <c>HostIsFighting</c> — a guard built on purpose, since
+    /// pulling a save mid-fight is normally nonsense — and this is the one flow
+    /// where the host being in a fight is precisely the reason to pull. Relaxing
+    /// that guard would have re-opened it for every other case; a second message
+    /// leaves it exactly as strict as it was.
+    /// <para>
+    /// The digest is not decoration. The slot is rewritten at the start of every
+    /// mission, so a client may be holding the <em>previous</em> fight under the
+    /// same name, and the name alone cannot tell the two apart.
+    /// </para>
+    /// </remarks>
+    public sealed class CombatOfferMessage : PbjMessage
+    {
+        public CombatOfferMessage(string? saveName, string? digest, int turn)
+        {
+            SaveName = saveName;
+            Digest = digest;
+            Turn = turn;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.CombatOffer;
+
+        public string? SaveName { get; }
+
+        public string? Digest { get; }
+
+        /// <summary>The turn the fight starts on, for the barrier to quote back.</summary>
+        public int Turn { get; }
+    }
+
+    /// <summary>
+    /// A client saying whether it got into the host's fight. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Carries the turn it is answering about, for the same reason every other
+    /// barrier report in this protocol carries its version: a report for a fight
+    /// that has since been abandoned must be recognisable as stale rather than
+    /// counted toward the current one.
+    /// <para>
+    /// <see cref="LoadOutcome.Unavailable"/> is the interesting value. The load
+    /// callback is success-only, so a client that never answers is the host's
+    /// timeout to notice — but a client that knows it cannot join says so
+    /// immediately, which is the difference between a two-minute wait and none.
+    /// </para>
+    /// </remarks>
+    public sealed class CombatEnteredMessage : PbjMessage
+    {
+        public CombatEnteredMessage(int turn, LoadOutcome outcome)
+        {
+            Turn = turn;
+            Outcome = outcome;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.CombatEntered;
+
+        public int Turn { get; }
+
+        public LoadOutcome Outcome { get; }
     }
 
     /// <summary>Graceful goodbye from either side.</summary>

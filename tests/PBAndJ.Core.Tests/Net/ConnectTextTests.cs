@@ -224,6 +224,11 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal("Host", ConnectText.HostButton());
             Assert.Equal("Join", ConnectText.JoinButton());
             Assert.Equal("Leave", ConnectText.LeaveButton());
+
+            // Named for the room it opens, matching LobbyText.Title(). A button
+            // and the screen it opens disagreeing about their own name is how a
+            // player loses track of where Back goes.
+            Assert.Equal("Lobby", ConnectText.LobbyButton());
             Assert.StartsWith("Hosting", ConnectText.Hosting("0.0.0.0", 27600));
             Assert.StartsWith("Joining", ConnectText.Joining("friend.example.com", 27600));
         }
@@ -258,7 +263,7 @@ namespace PBAndJ.Core.Tests.Net
                          ConnectText.PassphraseLabel(), ConnectText.RememberLabel(),
                          ConnectText.RememberWarning(), ConnectText.Title(),
                          ConnectText.HostButton(), ConnectText.JoinButton(),
-                         ConnectText.LeaveButton(),
+                         ConnectText.LeaveButton(), ConnectText.LobbyButton(),
                          ConnectText.Hosting("0.0.0.0", 1), ConnectText.Joining("x", 1),
                          ConnectText.DescribeRejection(RejectReason.BadPassphrase),
                          ConnectText.DescribeProblem(ConnectProblem.AddressEmpty),

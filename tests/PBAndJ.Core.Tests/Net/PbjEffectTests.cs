@@ -180,6 +180,58 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void BeginCombatLoad_CarriesTheFightAndItsDigest()
+        {
+            var effect = new BeginCombatLoadEffect("pbj_combat_test", "d1");
+            Assert.Equal(PbjEffectKind.BeginCombatLoad, effect.Kind);
+            Assert.Equal("pbj_combat_test", effect.SaveName);
+            Assert.Equal("d1", effect.Digest);
+        }
+
+        [Fact]
+        public void ShipCombat_CarriesNothing()
+        {
+            // Deliberately empty. Which save, and when it is permitted to write
+            // it, are properties of the game rather than of the protocol — the
+            // glue reads both for itself and answers with LocalCombatReadyEvent.
+            var effect = new ShipCombatEffect();
+            Assert.Equal(PbjEffectKind.ShipCombat, effect.Kind);
+        }
+
+        [Fact]
+        public void MirrorBase_CarriesTwoCoordinatesAndNoHeight()
+        {
+            // The absent Y is the design, not an omission: the receiving machine
+            // snaps to its own ground, and a height from elsewhere is how a base
+            // ends up hovering over terrain it did not generate.
+            var effect = new MirrorBaseEffect(1024.5f, -37.25f);
+            Assert.Equal(PbjEffectKind.MirrorBase, effect.Kind);
+            Assert.Equal(1024.5f, effect.X);
+            Assert.Equal(-37.25f, effect.Z);
+        }
+
+        [Fact]
+        public void BeginLoad_CarriesTheSaveAndTheVersion()
+        {
+            var effect = new BeginLoadEffect("pbj_campaign", 4, "a1b2c3d4");
+            Assert.Equal(PbjEffectKind.BeginLoad, effect.Kind);
+            Assert.Equal("pbj_campaign", effect.SaveKey);
+            Assert.Equal(4, effect.SelectionVersion);
+            // The digest the lobby agreed on, so the machine about to load can
+            // check its copy is the one everyone else is loading.
+            Assert.Equal("a1b2c3d4", effect.SaveDigest);
+        }
+
+        [Fact]
+        public void BeginLoad_WithNoSave_IsAllowed()
+        {
+            // No throw: the session emits what the selection holds, and refusing
+            // here would move a decision the glue is better placed to make into
+            // a constructor that cannot explain itself.
+            Assert.Null(new BeginLoadEffect(null, 0, null).SaveKey);
+        }
+
+        [Fact]
         public void Log_WithNullLine_Throws()
         {
             var ex = Assert.Throws<ArgumentNullException>(() => new LogEffect(null!));

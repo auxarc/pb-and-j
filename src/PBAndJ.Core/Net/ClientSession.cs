@@ -39,6 +39,7 @@ namespace PBAndJ.Core.Net
 
         private static readonly int[] HostOnly = { HostConnectionId };
         private static readonly string[] NoUnits = new string[0];
+        private static readonly LobbyPeerState[] NoLobbyPeers = new LobbyPeerState[0];
 
         private readonly IPbjGameBridge bridge;
         private readonly string playerName;
@@ -141,6 +142,92 @@ namespace PBAndJ.Core.Net
         /// <summary>Units this client may plan, as last told by the host.</summary>
         public IReadOnlyList<string> OwnedUnits { get; private set; } = new string[0];
 
+        /// <summary>
+        /// The host's selection version, or -1 before any lobby state arrives.
+        /// </summary>
+        /// <remarks>
+        /// -1 rather than 0 so "we have never been told" is distinguishable from
+        /// "the host has not chosen yet", which is version 0. The ready guard
+        /// keys off this: a client must never invent a version.
+        /// </remarks>
+        public int LobbySelectionVersion { get; private set; } = -1;
+
+        /// <summary>
+        /// Whether the <em>host</em> has said it is fighting.
+        /// </summary>
+        /// <remarks>
+        /// Set only by <c>CombatStart</c> and <c>CombatEnd</c>, so it says what the
+        /// host said and nothing about this machine. <see cref="State"/> cannot be
+        /// used for this: it is seeded at Welcome from our own
+        /// <c>bridge.InCombat</c>, which is a fact about the player's local game and
+        /// not about the session. See <see cref="HandleScenarioOffer"/>.
+        /// </remarks>
+        public bool HostIsFighting { get; private set; }
+
+        /// <summary>The save the host has chosen, or null if none.</summary>
+        public string? LobbySaveKey { get; private set; }
+
+        public string? LobbySaveDigest { get; private set; }
+
+        /// <summary>The lobby roster with ready flags, for a screen to render.</summary>
+        public IReadOnlyList<LobbyPeerState> LobbyRoster { get; private set; } = NoLobbyPeers;
+
+        /// <summary>How many lobby members have agreed to the selected save.</summary>
+        /// <remarks>
+        /// Derived from <see cref="LobbyRoster"/> rather than tracked separately,
+        /// so a client cannot hold a count that disagrees with the roster it is
+        /// drawing from. The host's <c>LobbyBarrier</c> is still the authority;
+        /// this is the same answer computed from the host's own broadcast.
+        /// </remarks>
+        public int LobbyReadyCount
+        {
+            get
+            {
+                var ready = 0;
+                for (var i = 0; i < LobbyRoster.Count; i++)
+                {
+                    if (LobbyRoster[i].Ready)
+                    {
+                        ready++;
+                    }
+                }
+                return ready;
+            }
+        }
+
+        public int LobbyParticipantCount => LobbyRoster.Count;
+
+        /// <summary>
+        /// True once every member of the last roster we were sent has agreed.
+        /// </summary>
+        /// <remarks>
+        /// Equals the host's own <c>LobbyBarrier.IsSatisfied</c> at the moment the
+        /// state was composed — the roster carries every participant and its ready
+        /// flag, so there is nothing left to infer. Between broadcasts it can be
+        /// stale, which is inherent to a client and not worth pretending
+        /// otherwise: nothing here acts on it, and only the host may Start.
+        /// </remarks>
+        public bool LobbyIsSatisfied =>
+            LobbyRoster.Count > 0 && LobbyReadyCount >= LobbyRoster.Count;
+
+        /// <summary>
+        /// Whether we have an outstanding lobby ready. Gates the withdrawal, the
+        /// way <c>submittedThisTurn</c> gates <c>Unready</c>.
+        /// </summary>
+        public bool LobbyReadySent { get; private set; }
+
+        /// <summary>
+        /// The last selection version we began loading, or -1.
+        /// </summary>
+        /// <remarks>
+        /// A load is destructive and not repeatable — it tears the campaign down
+        /// — so acting on the same instruction twice must be impossible. The
+        /// host's edge trigger should already make a duplicate <c>LobbyLoad</c>
+        /// unreachable, but the two guards fail independently and the cost of
+        /// being wrong here is the same lost campaign.
+        /// </remarks>
+        public int LoadBegunVersion { get; private set; } = -1;
+
         public IReadOnlyList<int> ConnectedPeerIds => HostOnly;
 
         /// <summary>
@@ -222,12 +309,46 @@ namespace PBAndJ.Core.Net
                     HandleLocalScenarioPull(effects);
                     break;
 
+                case LocalLobbySelectEvent:
+                    // The picker is the host's; ours is a display of it. Said
+                    // out loud rather than swallowed, because a button that does
+                    // nothing silently is the bug M10c already paid for.
+                    effects.Add(new LogEffect(NetLog.LobbySelectIsHostOnly()));
+                    break;
+
+                case LocalLobbyReadyEvent:
+                    HandleLocalLobbyReady(effects);
+                    break;
+
+                case LoadFinishedEvent loadFinished:
+                    HandleLoadFinished(loadFinished, effects);
+                    break;
+
+                case CombatLoadFinishedEvent combatLoaded:
+                    HandleCombatLoadFinished(combatLoaded, effects);
+                    break;
+
+                case LocalLobbyUnreadyEvent:
+                    HandleLocalLobbyUnready(effects);
+                    break;
+
                 case OrderAppliedEvent:
                     // Clients never apply remote orders.
                     break;
 
                 case SnapshotAppliedEvent applied:
                     HandleSnapshotApplied(applied, effects);
+                    break;
+
+                case LocalCombatReadyEvent:
+                    // Only a host ships a fight — but the glue that writes one is
+                    // armed by an effect and answers frames later, long enough
+                    // for the player to have stopped hosting and joined someone
+                    // else. Without this arm the default below throws, and
+                    // NetGlue.Pump turns a throw into "networking stopped" for
+                    // the rest of the process: a stray save would cost the
+                    // session.
+                    effects.Add(new LogEffect(NetLog.CombatShipNotOurs()));
                     break;
 
                 case CombatEnteredEvent:
@@ -336,13 +457,21 @@ namespace PBAndJ.Core.Net
                 case CombatStartMessage combatStart:
                     Turn = combatStart.Turn;
                     State = ClientSessionState.Planning;
+                    HostIsFighting = true;
                     submittedThisTurn = false;
+                    // The lobby is over, and whatever we agreed to there is
+                    // spent. Without this a client carries "ready" into the
+                    // fight with nothing to clear it until the host next bumps
+                    // the selection — and the host drops lobby readies during
+                    // combat, so our flag and its roster would disagree.
+                    LobbyReadySent = false;
                     effects.Add(new LogEffect(NetLog.CombatStartedByHost(combatStart.Turn)));
                     effects.Add(new SetExecutionLockEffect(false));
                     break;
 
                 case CombatEndMessage:
                     State = ClientSessionState.Lobby;
+                    HostIsFighting = false;
                     OwnedUnits = NoUnits;
                     submittedThisTurn = false;
                     effects.Add(new LogEffect(NetLog.CombatEndedByHost()));
@@ -369,6 +498,32 @@ namespace PBAndJ.Core.Net
 
                 case KeyframesMessage keyframes:
                     HandleKeyframes(keyframes, effects);
+                    break;
+
+                // M12b. The fight the host just entered. Handled here rather
+                // than through M9's ScenarioOffer because that path refuses
+                // everything while HostIsFighting -- which is exactly when this
+                // arrives, and is why a second message type exists.
+                case CombatOfferMessage combatOffer:
+                    HandleCombatOffer(combatOffer, effects);
+                    break;
+
+                // M12a. No state guard, deliberately: the mirror is presentation,
+                // it cannot desynchronise anything by arriving early, and a
+                // client whose own ClientSessionState is untrustworthy is a
+                // known hazard here — HandleWelcome seeds it from this machine's
+                // OWN combat flag, which is how a peer joining mid-fight once
+                // locked itself out of the lobby forever.
+                case BasePositionMessage basePosition:
+                    effects.Add(new MirrorBaseEffect(basePosition.X, basePosition.Z));
+                    break;
+
+                case LobbyLoadMessage lobbyLoad:
+                    HandleLobbyLoad(lobbyLoad, effects);
+                    break;
+
+                case LobbyStateMessage lobbyState:
+                    HandleLobbyState(lobbyState, effects);
                     break;
 
                 case ScenarioOfferMessage offer:
@@ -487,6 +642,158 @@ namespace PBAndJ.Core.Net
             return ours;
         }
 
+        // --- lobby (M11a) ---
+
+        /// <summary>Takes the host's view of the lobby wholesale.</summary>
+        /// <remarks>
+        /// Full state, so there is nothing to merge and no ordering hazard
+        /// between "who joined" and "who is ready" — the same reason
+        /// <c>Assignments</c> is a full replacement.
+        /// </remarks>
+        private void HandleLobbyState(LobbyStateMessage state, List<PbjEffect> effects)
+        {
+            if (state.SelectionVersion != LobbySelectionVersion)
+            {
+                // A new selection clears everyone's agreement on the host, so
+                // ours is gone too whether we asked or not.
+                LobbyReadySent = false;
+            }
+
+            LobbySelectionVersion = state.SelectionVersion;
+            LobbySaveKey = state.SaveKey;
+            LobbySaveDigest = state.SaveDigest;
+            LobbyRoster = state.Peers;
+
+            var readyCount = 0;
+            for (var i = 0; i < state.Peers.Count; i++)
+            {
+                if (state.Peers[i].Ready)
+                {
+                    readyCount++;
+                }
+            }
+
+            effects.Add(new LogEffect(NetLog.LobbyStateReceived(
+                state.SelectionVersion, state.SaveKey, readyCount, state.Peers.Count)));
+        }
+
+        /// <summary>
+        /// Agrees to load the selected save.
+        /// </summary>
+        /// <remarks>
+        /// Gated on <em>data</em> — a selection we have actually been told about
+        /// — and deliberately NOT on <see cref="ClientSessionState.Lobby"/>.
+        /// <see cref="HandleWelcome"/> sets the state from this client's OWN
+        /// <c>bridge.InCombat</c>, so a player who joins while their local game
+        /// happens to be mid-combat is welcomed straight into
+        /// <see cref="ClientSessionState.Planning"/>. A state guard would then
+        /// refuse them the lobby forever, holding a perfectly good
+        /// <c>LobbyState</c>, and no harness test would ever catch it because
+        /// the scripted bridge is never in combat.
+        /// <para>
+        /// The host re-checks its own state regardless, so this being permissive
+        /// costs nothing: a ready sent at the wrong moment is logged and dropped
+        /// there rather than counted.
+        /// </para>
+        /// </remarks>
+        /// <summary>
+        /// The host says everyone agreed. Start loading.
+        /// </summary>
+        /// <remarks>
+        /// Gated on data rather than on <see cref="State"/>, the M11a lesson:
+        /// <c>HandleWelcome</c> derives that state from this client's <em>own</em>
+        /// combat flag, so it is not something to make a destructive decision on.
+        /// </remarks>
+        private void HandleLobbyLoad(LobbyLoadMessage load, List<PbjEffect> effects)
+        {
+            if (load.SelectionVersion != LobbySelectionVersion)
+            {
+                effects.Add(new LogEffect(NetLog.LoadIgnoredStale(
+                    load.SelectionVersion, LobbySelectionVersion)));
+                return;
+            }
+            if (load.SelectionVersion == LoadBegunVersion)
+            {
+                effects.Add(new LogEffect(NetLog.LoadAlreadyBegun(load.SelectionVersion)));
+                return;
+            }
+
+            LoadBegunVersion = load.SelectionVersion;
+            effects.Add(new BeginLoadEffect(load.SaveKey, load.SelectionVersion, LobbySaveDigest));
+        }
+
+        private void HandleLoadFinished(LoadFinishedEvent finished, List<PbjEffect> effects)
+        {
+            effects.Add(new SendEffect(
+                HostConnectionId,
+                new LobbyLoadedMessage(finished.SelectionVersion, finished.Outcome)));
+        }
+
+        private void HandleLocalLobbyReady(List<PbjEffect> effects)
+        {
+            if (LobbySelectionVersion < 0)
+            {
+                effects.Add(new LogEffect(NetLog.LobbyReadyIgnored(
+                    PeerId, LobbySelectionVersion, "no lobby state received yet")));
+                return;
+            }
+            if (string.IsNullOrEmpty(LobbySaveKey))
+            {
+                effects.Add(new LogEffect(NetLog.LobbyReadyIgnored(
+                    PeerId, LobbySelectionVersion, "the host has not picked a save")));
+                return;
+            }
+            if (!HoldsSelectedSave())
+            {
+                // M11e. Readying without the save is what M11d's barrier cannot
+                // survive: the host would fire the load, this peer would report
+                // Unavailable, and the barrier completes on failure reports — so
+                // everyone else enters the campaign and this one is left behind
+                // with no way back in once the lobby seals. Readying is the promise
+                // that we can actually load, so it waits for the bytes.
+                effects.Add(new LogEffect(NetLog.LobbyReadyIgnored(
+                    PeerId, LobbySelectionVersion, "still waiting for the save to arrive")));
+                return;
+            }
+
+            LobbyReadySent = true;
+            effects.Add(new SendEffect(HostConnectionId, new LobbyReadyMessage(LobbySelectionVersion)));
+            effects.Add(new LogEffect(NetLog.LobbyReadyReceived(PeerId, playerName, LobbySelectionVersion)));
+        }
+
+        /// <summary>
+        /// Whether this machine holds the save the lobby selected.
+        /// </summary>
+        /// <remarks>
+        /// By digest and not by name, because same-name-different-contents is
+        /// exactly the case that would diverge silently: everyone loads "their"
+        /// copy and the campaigns drift apart with nothing to notice it. A lobby
+        /// that has published no digest yet cannot be checked against, so the name
+        /// alone has to do — the host re-offers on every selection, so this
+        /// resolves as soon as the digest arrives.
+        /// </remarks>
+        private bool HoldsSelectedSave()
+        {
+            var local = bridge.ReadScenario(LobbySaveKey);
+            if (local.Inspect() != ScenarioRejection.None)
+            {
+                return false;
+            }
+            return string.IsNullOrEmpty(LobbySaveDigest) || local.Matches(LobbySaveDigest);
+        }
+
+        private void HandleLocalLobbyUnready(List<PbjEffect> effects)
+        {
+            if (!LobbyReadySent)
+            {
+                return;
+            }
+
+            LobbyReadySent = false;
+            effects.Add(new SendEffect(HostConnectionId, new LobbyUnreadyMessage(LobbySelectionVersion)));
+            effects.Add(new LogEffect(NetLog.LobbyUnreadyReceived(PeerId, playerName, LobbySelectionVersion)));
+        }
+
         /// <summary>Gives up on a host that has gone quiet.</summary>
         private void HandleTick(TickEvent tick, List<PbjEffect> effects)
         {
@@ -601,23 +908,79 @@ namespace PBAndJ.Core.Net
         /// Two conditions, both deliberately conservative, with
         /// <c>pbj.scenario-pull</c> as the override for everything they exclude:
         /// <list type="bullet">
-        /// <item><b>Lobby only.</b> A client already in combat is in the host's
-        /// combat; pulling a save down mid-fight is at best wasted bandwidth and
-        /// at worst an invitation to load it and lose the session.</item>
+        /// <item><b>Not while the host is fighting.</b> A client in the host's
+        /// combat should not pull a save mid-fight: at best wasted bandwidth, at
+        /// worst an invitation to load it and lose the session.</item>
         /// <item><b>Only if we do not already hold it.</b> The client reads its
         /// own save through the same bridge call the host reads its own with, so
         /// this is a local digest comparison and no bytes move. This is what makes
         /// a reconnect free: a rejoining peer holds the save by definition.</item>
         /// </list>
+        /// <para>
+        /// ⚠️ <b>The first condition reads <see cref="HostIsFighting"/> and not
+        /// <see cref="State"/>, and that is the whole point.</b> <see cref="State"/>
+        /// is seeded at Welcome from <em>this machine's own</em>
+        /// <c>bridge.InCombat</c>, so a player who joins while their own
+        /// singleplayer game happens to be mid-combat lands in
+        /// <see cref="ClientSessionState.Planning"/> against a host that is merely
+        /// in its lobby — and would silently decline every offer for the rest of
+        /// the session, never holding the save and so never able to ready. No test
+        /// here could catch it: the scripted bridge is never in combat. Gate on
+        /// what the host said, never on what we inferred about ourselves — the same
+        /// rule M11a set for lobby-ready.
+        /// </para>
         /// </remarks>
+        /// <summary>
+        /// The fight the host is in, offered so we can join it. M12b.
+        /// </summary>
+        /// <remarks>
+        /// Same shape as M9's scenario offer — hold it already, or ask for the
+        /// bytes — with one difference that matters: the name alone is not
+        /// enough. The scenario slot is rewritten at the start of every mission,
+        /// so a client can be holding the <em>previous</em> fight under exactly
+        /// this name, and only the digest tells them apart.
+        /// </remarks>
+        private void HandleCombatOffer(CombatOfferMessage offer, List<PbjEffect> effects)
+        {
+            pendingCombatSave = offer.SaveName;
+            pendingCombatDigest = offer.Digest;
+            pendingCombatTurn = offer.Turn;
+
+            var local = bridge.ReadScenario(offer.SaveName);
+            if (local.Inspect() == ScenarioRejection.None && local.Matches(offer.Digest))
+            {
+                effects.Add(new LogEffect(NetLog.CombatAlreadyHeld(offer.SaveName)));
+                effects.Add(new BeginCombatLoadEffect(offer.SaveName, offer.Digest));
+                return;
+            }
+
+            effects.Add(new LogEffect(NetLog.CombatFetching(offer.SaveName)));
+            effects.Add(new SendEffect(HostConnectionId, new ScenarioRequestMessage(offer.SaveName)));
+        }
+
+        /// <summary>
+        /// Reports how the attempt to join the fight went. M12b.
+        /// </summary>
+        /// <remarks>
+        /// Sent even when it failed, and that is the point: the load callback is
+        /// success-only, so a client that says nothing costs the host its whole
+        /// timeout. A client that knows it could not join says so at once and the
+        /// fight starts without it.
+        /// </remarks>
+        private void HandleCombatLoadFinished(CombatLoadFinishedEvent finished, List<PbjEffect> effects)
+        {
+            effects.Add(new SendEffect(
+                HostConnectionId, new CombatEnteredMessage(pendingCombatTurn, finished.Outcome)));
+        }
+
         private void HandleScenarioOffer(ScenarioOfferMessage offer, List<PbjEffect> effects)
         {
-            if (State != ClientSessionState.Lobby)
+            if (HostIsFighting)
             {
                 return;
             }
 
-            var local = bridge.ReadScenario();
+            var local = bridge.ReadScenario(offer.SaveName);
             if (local.Inspect() == ScenarioRejection.None && local.Matches(offer.Digest))
             {
                 effects.Add(new LogEffect(NetLog.ScenarioAlreadyHeld(offer.Digest)));
@@ -658,6 +1021,11 @@ namespace PBAndJ.Core.Net
         /// recoverable annoyance into a lost game.
         /// </para>
         /// </remarks>
+        /// <summary>The fight we were last offered, so arriving bytes can be matched to it.</summary>
+        private string? pendingCombatSave;
+        private string? pendingCombatDigest;
+        private int pendingCombatTurn = -1;
+
         private void HandleScenario(ScenarioMessage scenario, List<PbjEffect> effects)
         {
             var payload = new ScenarioPayload(scenario.SaveName, scenario.Files);
@@ -678,6 +1046,16 @@ namespace PBAndJ.Core.Net
             effects.Add(new LogEffect(NetLog.ScenarioReceived(
                 scenario.SaveName, payload.Files.Count, payload.TotalBytes)));
             effects.Add(new WriteScenarioEffect(payload));
+
+            // If these are the bytes of a fight we were offered, load them. M9
+            // deliberately never auto-loads a scenario -- it tells the player to
+            // do it -- but a combat entry is not a suggestion: the host is
+            // already in the battle and waiting at a barrier for us.
+            if (pendingCombatSave != null
+                && string.Equals(pendingCombatSave, scenario.SaveName, StringComparison.Ordinal))
+            {
+                effects.Add(new BeginCombatLoadEffect(pendingCombatSave, pendingCombatDigest));
+            }
         }
 
         private void HandleSnapshotApplied(SnapshotAppliedEvent applied, List<PbjEffect> effects)

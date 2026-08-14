@@ -15,5 +15,12 @@ re-verify every Harmony patch target before trusting anything.
 The build script asserts the SHA256 of the *installed* game's Assembly-CSharp.dll
 against this value and refuses to deploy on mismatch.
 
+"Re-verify every Harmony patch target" above is still a human step, and it is the
+one a game update is most likely to break silently: `PatchAll` is all-or-nothing,
+so a single moved target aborts the pass and leaves an arbitrary subset of the
+mod's patches applied. The intended mechanisation is a patch-surface lock beside
+`wire-surface.lock` — see
+[The patch surface](docs/design/networking.md#the-patch-surface).
+
 **Manual step (Steam client):** Phantom Brigade → Properties → Updates →
 "Only update this game when I launch it", so a patch never lands mid-session.

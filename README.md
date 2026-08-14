@@ -119,7 +119,7 @@ this code mod is open source (MIT) and any networking will be strictly opt-in.
         refusal over real sockets
   - [ ] in-game: `pbj.combat-save` on the host, then a peer receives a byte-identical copy
 
-- [ ] M10 — streamlining the lift on a second player.
+- [x] M10 — streamlining the lift on a second player.
   - [x] 10a: **update check** — on session start (and via `pbj.check-update`) the mod asks the
         GitHub releases API for the newest published version and compares. Version *ordering* and
         the wording live in `PBAndJ.Core` under the coverage gate, because `0.9.0` sorts after
@@ -127,16 +127,41 @@ this code mod is open source (MIT) and any networking will be strictly opt-in.
         JSON live in the glue, using `UnityWebRequest` (the path the game's own crash reporter
         proves works under Proton) and a real JSON parser rather than a key scan, since a release
         body is user-authored text that could contain a convincing fake `tag_name`
-  - [ ] 10b: download-and-install on confirm — a deliberate stopgap until Steam Workshop
-  - [ ] 10c: Main Menu **Multiplayer** button and a connect screen with address, port and
-        passphrase. The risky part: the UI is NGUI, and free-text entry needs a `UIInput` cloned
-        from an existing view
+  - [x] 10b: an **offer**, not an install — a confirmation dialog naming both versions, opening
+        the releases page. Download-and-install was deliberately cut after review: an unproven zip
+        stack, a file-lock probe whose answer differs between Proton and Windows, and staging that
+        trips `ModManager`'s warning dialog — all for something Steam Workshop replaces
+  - [x] 10c: title-menu **Multiplayer** button and a connect screen with address, port and
+        passphrase. The risky part was as expected: the UI is NGUI, and free-text entry needed a
+        `UIInput` cloned from an existing view. `docs/notes/ngui-surface.md` is the record
 
-Next: **M8 — replay handoff.** Rather than streaming animation poses, hand the client the host's
-recorded replay and let the game's own playback system draw it, so a client sees the turn exactly
-as the host did. Designed in `docs/design/networking.md`; gated on stage 2, which is what makes
-the equipment and scenario match it depends on. M9 makes stage 2 easier to arrange but does not
-remove that dependency — it still takes two people and two games.
+- [ ] M11 — the **lobby**: the host picks a multiplayer save and everyone loads into it together.
+      Scoped in `docs/design/campaign-coop.md`; the lobby's job starts at the main menu and ends
+      the moment everyone is loaded.
+  - [x] 11a: lobby state on the wire — a `LobbyBarrier` alongside the turn barrier, `LobbyState`
+        broadcast as full state, and `LobbyReady`/`LobbyUnready` upward. Pure Core under the
+        coverage gate, and deliberately inert: nothing acts on a filled barrier yet, which is
+        11d's job. The eighth `peer-selftest` scenario is what stops that inertness becoming M6's
+        ship-it-inert failure
+  - [ ] 11b: the save catalogue — enumerate `pbj_`-prefixed saves, create one, convert a
+        singleplayer save by copy, and filter `pbj_` out of the singleplayer load screen
+  - [ ] 11c: the lobby screen, reusing all of 10c's NGUI machinery
+  - [ ] 11d: the synchronised load — **and the proper fix** for the defect below, rather than a
+        patch of its own
+  - [ ] 11e: save transfer generalised from M9's scenario transfer. Measure a campaign save first
+
+**A peer accepted while the host is already in combat is never sent `CombatStart`**, and
+`ClientSession.HandleWelcome` then decides its state from the *client's own* combat state — so a
+client joining from the menu lands in `Lobby` with no route to `Planning`, and its Execute is
+swallowed. Found 2026-08-03, deliberately unfixed: M11d's host-driven load instruction is the
+missing message, and fixing it separately would build a second mechanism for the same job. M11a
+already sidesteps the second half of it, gating lobby-ready on data rather than session state.
+
+Also open: **M8 — replay handoff**, parked for M11 rather than abandoned. Rather than streaming
+animation poses, hand the client the host's recorded replay and let the game's own playback system
+draw it. Four of its five open questions are now answered from a running game — see
+`docs/notes/replay-handoff-recon.md`, **not** `networking.md`'s M8 section, which is wrong in
+several places.
 
 **5f was never blocked.** M5 recorded two real instances as impossible because "there is no
 scenario transfer" — but M3a had already built one, and M9 has now put it on the wire.

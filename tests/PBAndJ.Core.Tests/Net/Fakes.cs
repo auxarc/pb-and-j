@@ -93,6 +93,29 @@ namespace PBAndJ.Core.Tests.Net
 
         public void StopKeyframes() => StopKeyframesCalls++;
 
+        /// <summary>Every mirrored base position, in order.</summary>
+        public List<(float X, float Z)> Mirrored { get; } = new List<(float, float)>();
+
+        public void MirrorBase(float x, float z) => Mirrored.Add((x, z));
+
+        /// <summary>How many times the glue was asked to write the fight.</summary>
+        public int ShipCombatCalls { get; private set; }
+
+        public void ShipCombat() => ShipCombatCalls++;
+
+        /// <summary>What a combat load should answer, or null to "it started".</summary>
+        public LoadOutcome? CombatLoadRefusal { get; set; }
+
+        /// <summary>Every combat load asked for, in order.</summary>
+        public List<(string? SaveName, string? Digest)> CombatLoads { get; } =
+            new List<(string?, string?)>();
+
+        public LoadOutcome? BeginCombatLoad(string? saveName, string? digest)
+        {
+            CombatLoads.Add((saveName, digest));
+            return CombatLoadRefusal;
+        }
+
         /// <summary>The local combat save, as ReadScenario hands it back.</summary>
         public ScenarioPayload Scenario { get; set; } = ScenarioPayload.None;
 
@@ -102,12 +125,37 @@ namespace PBAndJ.Core.Tests.Net
         /// <summary>Simulates the write failing — no space, no permission.</summary>
         public bool ScenarioWriteSucceeds { get; set; } = true;
 
-        public ScenarioPayload ReadScenario() => Scenario;
+        /// <summary>
+        /// Saves this machine holds under specific keys, for tests that need a
+        /// machine to hold one save and not another. Anything not named here falls
+        /// back to <see cref="Scenario"/>, so tests written before M11e — which
+        /// only ever modelled a single save — keep meaning what they meant.
+        /// </summary>
+        public Dictionary<string, ScenarioPayload> ScenariosByKey { get; }
+            = new Dictionary<string, ScenarioPayload>(StringComparer.OrdinalIgnoreCase);
+
+        public ScenarioPayload ReadScenario(string? saveKey)
+        {
+            return saveKey != null && ScenariosByKey.TryGetValue(saveKey, out var found)
+                ? found
+                : Scenario;
+        }
 
         public bool WriteScenario(ScenarioPayload payload)
         {
             WrittenScenarios.Add(payload);
             return ScenarioWriteSucceeds;
+        }
+
+        public List<string?> LoadsBegun { get; } = new List<string?>();
+
+        /// <summary>Set to make the next load refuse instead of starting.</summary>
+        public LoadOutcome? LoadRefusal { get; set; }
+
+        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion, string? saveDigest)
+        {
+            LoadsBegun.Add(saveKey);
+            return LoadRefusal;
         }
     }
 

@@ -218,6 +218,56 @@ namespace PBAndJ.Peer
         }
 
         /// <summary>
+        /// Remembered and nothing else. The harness has no overworld to move a
+        /// base around, and the selftest's interest is that the message crossed
+        /// and was decoded, not that anything was rendered.
+        /// </summary>
+        public (float X, float Z)? MirroredBase { get; private set; }
+
+        public void MirrorBase(float x, float z)
+        {
+            MirroredBase = (x, z);
+        }
+
+        /// <summary>
+        /// The fight the harness was told to load, and what it answered.
+        /// </summary>
+        /// <remarks>
+        /// The harness has no game to load into, so it reports success without
+        /// doing anything: the selftest's interest is that the offer crossed, the
+        /// bytes were fetched and the report came back, which is the whole
+        /// handshake Core owns. Set <see cref="CombatLoadRefusal"/> to drive the
+        /// failure arm instead.
+        /// </remarks>
+        public (string? SaveName, string? Digest)? CombatLoadRequested { get; private set; }
+
+        /// <summary>What to answer, or null to report that the load started.</summary>
+        public LoadOutcome? CombatLoadRefusal { get; set; }
+
+        public LoadOutcome? BeginCombatLoad(string? saveName, string? digest)
+        {
+            CombatLoadRequested = (saveName, digest);
+            return CombatLoadRefusal ?? LoadOutcome.Loaded;
+        }
+
+        /// <summary>
+        /// Whether the session has asked for the fight to be written. M12b.
+        /// </summary>
+        /// <remarks>
+        /// The harness has no game and no disk to write to, so it records the ask
+        /// and the self-test stands in for the write. That is still worth having:
+        /// what it proves is the <em>ordering</em> — that the ask arrives before
+        /// anything is offered — which is the half of this the game cannot be
+        /// asked about without two people and a mission.
+        /// </remarks>
+        public bool ShipCombatRequested { get; private set; }
+
+        public void ShipCombat()
+        {
+            ShipCombatRequested = true;
+        }
+
+        /// <summary>
         /// The combat save this peer "holds". In-memory rather than on disk: the
         /// harness must be runnable anywhere, and the protocol does not care
         /// where the bytes came from.
@@ -230,7 +280,37 @@ namespace PBAndJ.Peer
         /// <summary>Every scenario written, in order, for the self-test to check.</summary>
         public List<ScenarioPayload> WrittenScenarios { get; } = new List<ScenarioPayload>();
 
-        public ScenarioPayload ReadScenario() => Scenario;
+        /// <summary>
+        /// Saves this peer holds under specific keys; anything else falls back to
+        /// <see cref="Scenario"/> so the pre-M11e selftests keep their meaning.
+        /// </summary>
+        public Dictionary<string, ScenarioPayload> ScenariosByKey { get; }
+            = new Dictionary<string, ScenarioPayload>(StringComparer.OrdinalIgnoreCase);
+
+        public ScenarioPayload ReadScenario(string? saveKey)
+        {
+            return saveKey != null && ScenariosByKey.TryGetValue(saveKey, out var found)
+                ? found
+                : Scenario;
+        }
+
+        /// <summary>Save keys this bridge has been asked to load.</summary>
+        /// <remarks>
+        /// The harness has no game to tear down, so a load "starts" and then
+        /// nothing happens — completion is posted by the scenario itself, which
+        /// is exactly the shape the real glue has: begin here, report later from
+        /// somewhere else entirely.
+        /// </remarks>
+        public List<string?> LoadsBegun { get; } = new List<string?>();
+
+        /// <summary>Set to make the next load refuse instead of starting.</summary>
+        public LoadOutcome? LoadRefusal { get; set; }
+
+        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion, string? saveDigest)
+        {
+            LoadsBegun.Add(saveKey);
+            return LoadRefusal;
+        }
 
         public bool WriteScenario(ScenarioPayload payload)
         {

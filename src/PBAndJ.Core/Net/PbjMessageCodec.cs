@@ -217,6 +217,54 @@ namespace PBAndJ.Core.Net
                     }
                     break;
 
+                case LobbyStateMessage lobby:
+                    writer.WriteInt32(lobby.SelectionVersion);
+                    writer.WriteString(lobby.SaveKey);
+                    writer.WriteString(lobby.SaveDigest);
+                    writer.WriteInt32(lobby.Peers.Count);
+                    for (var i = 0; i < lobby.Peers.Count; i++)
+                    {
+                        writer.WriteInt32(lobby.Peers[i].PeerId);
+                        writer.WriteString(lobby.Peers[i].Name);
+                        writer.WriteBool(lobby.Peers[i].Ready);
+                    }
+                    break;
+
+                case LobbyReadyMessage lobbyReady:
+                    writer.WriteInt32(lobbyReady.SelectionVersion);
+                    break;
+
+                case LobbyUnreadyMessage lobbyUnready:
+                    writer.WriteInt32(lobbyUnready.SelectionVersion);
+                    break;
+
+                case LobbyLoadMessage lobbyLoad:
+                    writer.WriteInt32(lobbyLoad.SelectionVersion);
+                    writer.WriteString(lobbyLoad.SaveKey);
+                    writer.WriteString(lobbyLoad.SaveDigest);
+                    break;
+
+                case LobbyLoadedMessage lobbyLoaded:
+                    writer.WriteInt32(lobbyLoaded.SelectionVersion);
+                    writer.WriteInt32((int)lobbyLoaded.Outcome);
+                    break;
+
+                case BasePositionMessage basePosition:
+                    writer.WriteSingle(basePosition.X);
+                    writer.WriteSingle(basePosition.Z);
+                    break;
+
+                case CombatOfferMessage combatOffer:
+                    writer.WriteString(combatOffer.SaveName);
+                    writer.WriteString(combatOffer.Digest);
+                    writer.WriteInt32(combatOffer.Turn);
+                    break;
+
+                case CombatEnteredMessage combatEntered:
+                    writer.WriteInt32(combatEntered.Turn);
+                    writer.WriteInt32((int)combatEntered.Outcome);
+                    break;
+
                 case PingMessage ping:
                     writer.WriteInt32(ping.Nonce);
                     break;
@@ -416,6 +464,52 @@ namespace PBAndJ.Core.Net
                     }
                     return new ScenarioMessage(saveName, digest, files);
                 }
+
+                case PbjMessageType.LobbyState:
+                {
+                    var selectionVersion = reader.ReadInt32();
+                    var saveKey = reader.ReadString();
+                    var saveDigest = reader.ReadString();
+                    // Same roster, so the same cap Welcome and Assignments use.
+                    var count = ReadCount(reader, MaxPeersPerWelcome, "peer");
+                    var peers = new LobbyPeerState[count];
+                    for (var i = 0; i < count; i++)
+                    {
+                        peers[i] = new LobbyPeerState(
+                            reader.ReadInt32(), reader.ReadString(), reader.ReadBool());
+                    }
+                    return new LobbyStateMessage(selectionVersion, saveKey, saveDigest, peers);
+                }
+
+                case PbjMessageType.LobbyReady:
+                    return new LobbyReadyMessage(reader.ReadInt32());
+
+                case PbjMessageType.LobbyUnready:
+                    return new LobbyUnreadyMessage(reader.ReadInt32());
+
+                case PbjMessageType.LobbyLoad:
+                    return new LobbyLoadMessage(
+                        reader.ReadInt32(), reader.ReadString(), reader.ReadString());
+
+                // The cast is unvalidated, the same way RejectReason's is: an
+                // unknown value from a peer becomes an outcome nothing matches,
+                // which the host treats as a failure rather than throwing.
+                case PbjMessageType.LobbyLoaded:
+                    return new LobbyLoadedMessage(
+                        reader.ReadInt32(), (LoadOutcome)reader.ReadInt32());
+
+                case PbjMessageType.BasePosition:
+                    return new BasePositionMessage(reader.ReadSingle(), reader.ReadSingle());
+
+                case PbjMessageType.CombatOffer:
+                    return new CombatOfferMessage(
+                        reader.ReadString(), reader.ReadString(), reader.ReadInt32());
+
+                // Unvalidated cast, like LobbyLoaded's above: an unknown outcome
+                // from a peer becomes a value nothing matches, which the barrier
+                // treats as a failure rather than throwing.
+                case PbjMessageType.CombatEntered:
+                    return new CombatEnteredMessage(reader.ReadInt32(), (LoadOutcome)reader.ReadInt32());
 
                 case PbjMessageType.Ping:
                     return new PingMessage(reader.ReadInt32());

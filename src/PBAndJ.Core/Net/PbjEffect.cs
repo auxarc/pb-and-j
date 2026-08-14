@@ -18,8 +18,147 @@ namespace PBAndJ.Core.Net
         PlayKeyframes = 10,
         StopKeyframes = 11,
         WriteScenario = 12,
+        BeginLoad = 13,
+        MirrorBase = 14,
+        BeginCombatLoad = 15,
+        ShipCombat = 16,
 
-        // 13+ unallocated.
+        // 17+ unallocated.
+    }
+
+    /// <summary>
+    /// Write the fight now loading to the scenario slot, so it can be offered.
+    /// Hosts only. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Carries nothing, and that is the design. <em>Which</em> save is a
+    /// constant both sides already know (<see cref="LobbySaveNames.ScenarioSlot"/>),
+    /// and <em>when</em> the write is permitted is a property of the game rather
+    /// than of the protocol: <c>CanSave(false)</c> refuses while the scenario
+    /// intro runs, and that flag is set in the same tick that makes
+    /// <c>InCombat</c> true. So the glue polls for its own moment and answers
+    /// with <see cref="LocalCombatReadyEvent"/> — the same effect-out,
+    /// event-back shape as <see cref="BeginCombatLoadEffect"/>.
+    /// <para>
+    /// It exists at all so that the ask lands <em>inside</em> the pump that
+    /// observed the combat edge. A glue watching <c>InCombat</c> for itself would
+    /// work by frame timing rather than by construction, and could in principle
+    /// report a fight written before the session knew there was one.
+    /// </para>
+    /// </remarks>
+    public sealed class ShipCombatEffect : PbjEffect
+    {
+        public override PbjEffectKind Kind => PbjEffectKind.ShipCombat;
+    }
+
+    /// <summary>
+    /// Load the fight the host shipped us. Clients only. M12b.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="BeginLoadEffect"/> because the glue behind it
+    /// must skip the lobby catalogue check — <c>LobbyCatalogue.IsOffered</c>
+    /// excludes the scenario slot on purpose, so routing a fight through the
+    /// campaign path returns <c>Unavailable</c> every time, silently, and reads
+    /// as a save problem rather than a wiring one.
+    /// <para>
+    /// It also must not mark the campaign as entered: the slot is a fight, not
+    /// the campaign, and claiming it would point the save-namespace redirect at
+    /// a directory that is rewritten at the start of the next mission.
+    /// </para>
+    /// </remarks>
+    public sealed class BeginCombatLoadEffect : PbjEffect
+    {
+        public BeginCombatLoadEffect(string? saveName, string? digest)
+        {
+            SaveName = saveName;
+            Digest = digest;
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.BeginCombatLoad;
+
+        public string? SaveName { get; }
+
+        /// <summary>
+        /// What the host says the fight hashes to. Checked before loading,
+        /// because the slot is rewritten every mission and this machine may be
+        /// holding the previous one under the same name.
+        /// </summary>
+        public string? Digest { get; }
+    }
+
+    /// <summary>
+    /// Put the mobile base where the host's is. Clients only.
+    /// </summary>
+    /// <remarks>
+    /// Carries X and Z and no height, because the receiving machine snaps to its
+    /// own ground — see <see cref="BasePositionMessage"/>, which explains why at
+    /// length.
+    /// <para>
+    /// The glue that applies this must use the game's own teleport recipe rather
+    /// than writing Position alone: <c>StopMovement</c> first or the client's own
+    /// path fights the write, then Position <em>and</em> PositionTarget, because
+    /// <c>OverworldMovementSystem</c> drags position back toward a stale target
+    /// whenever the clock runs. Then <c>isPositionUnchecked</c> for the ground
+    /// snap, and a same-value <c>ReplaceSimulationTime</c> to wake the reactive
+    /// collectors while paused.
+    /// </para>
+    /// </remarks>
+    public sealed class MirrorBaseEffect : PbjEffect
+    {
+        public MirrorBaseEffect(float x, float z)
+        {
+            X = x;
+            Z = z;
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.MirrorBase;
+
+        public float X { get; }
+
+        public float Z { get; }
+    }
+
+    /// <summary>
+    /// Start loading the lobby's save. Every participant, host included.
+    /// </summary>
+    /// <remarks>
+    /// The effect-out, event-back shape <see cref="CommitTurnEffect"/> already
+    /// uses: the session never touches the game, so it asks, and the answer
+    /// arrives later as a <c>LoadFinishedEvent</c>. It has to be later — a
+    /// campaign load tears the game down and comes back several seconds and one
+    /// scene teardown afterwards.
+    /// <para>
+    /// <see cref="SelectionVersion"/> rides along so the report can be matched
+    /// to the load that asked for it rather than to whatever the lobby is doing
+    /// by the time it lands.
+    /// </para>
+    /// </remarks>
+    public sealed class BeginLoadEffect : PbjEffect
+    {
+        public BeginLoadEffect(string? saveKey, int selectionVersion, string? saveDigest)
+        {
+            SaveKey = saveKey;
+            SelectionVersion = selectionVersion;
+            SaveDigest = saveDigest;
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.BeginLoad;
+
+        public string? SaveKey { get; }
+
+        public int SelectionVersion { get; }
+
+        /// <summary>
+        /// The contents the lobby agreed on, or null if it published none.
+        /// </summary>
+        /// <remarks>
+        /// Carried so the machine about to load can check that its copy is the one
+        /// everyone else is loading. Without it the check could only be "a save of
+        /// that name exists", and same-name-different-contents is precisely the case
+        /// that diverges silently — every peer loads its own campaign and nothing
+        /// notices until the states disagree.
+        /// </remarks>
+        public string? SaveDigest { get; }
     }
 
     /// <summary>

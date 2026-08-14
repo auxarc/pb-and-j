@@ -14,6 +14,27 @@ namespace PBAndJ.Core.Net
         DisallowedName = 4,
         DuplicateName = 5,
         MissingRequiredFile = 6,
+
+        /// <summary>The save it would be written to is not one we permit. M11e.</summary>
+        DisallowedDestination = 7,
+
+        /// <summary>
+        /// One part is over <see cref="ScenarioPayload.MaxPartBytes"/>, which the
+        /// writer would throw on rather than send. M11e.
+        /// </summary>
+        PartTooLarge = 8,
+
+        /// <summary>
+        /// Split content with a gap in it, or not starting at part zero — it would
+        /// reassemble into a truncated save. M11e.
+        /// </summary>
+        PartsNotContiguous = 9,
+
+        /// <summary>
+        /// Whole and split content in the same payload, so which one is the save is
+        /// ambiguous. M11e.
+        /// </summary>
+        MixedContentForm = 10,
     }
 
     /// <summary>One file of a transferred save.</summary>
@@ -83,16 +104,68 @@ namespace PBAndJ.Core.Net
         public const int MaxFiles = 4;
 
         /// <summary>
-        /// Largest transfer, summed across files. The real save is ~124 KB
-        /// against <see cref="PbjRuntime.MaxFrameLength"/> of 1 MiB, so this
-        /// leaves a factor of four of headroom and still cannot fill a frame.
-        /// Over it, the transfer is <b>refused rather than truncated</b> — half a
-        /// save is worse than none, because <c>pbj.combat-load</c> would try to
-        /// load it.
+        /// Largest transfer, summed across files.
         /// </summary>
-        public const int MaxTotalBytes = 1 << 19;
+        /// <remarks>
+        /// Measured 2026-08-05 against a real save folder: campaign saves run
+        /// 24–71 KB and M9's combat scenario — the largest thing there — is 119 KB.
+        /// 768 KiB is therefore about six times the largest save anyone has, with
+        /// room for the pilot files that make a long campaign grow.
+        /// <para>
+        /// Over it the transfer is <b>refused rather than truncated</b>: half a save
+        /// is worse than none, because something would then try to load it.
+        /// </para>
+        /// </remarks>
+        public const int MaxTotalBytes = 3 << 18;
+
+        /// <summary>
+        /// Largest single file, and the reason content is split at all.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="PbjWriter.MaxBytesLength"/> caps one blob at 512 KiB and
+        /// <b>throws</b> over it (<c>PbjWriter</c>'s <c>WriteBytes</c>), while
+        /// <c>PbjRuntime.SendTo</c> deliberately does not guard encoding — so an
+        /// oversize blob does not fail politely, it escapes the effect pump and
+        /// takes every effect queued behind it. Splitting keeps each part well
+        /// under that cap so <see cref="MaxTotalBytes"/> can exceed it without ever
+        /// putting the writer in that position, and without giving up the writer's
+        /// own invariant that a single blob can never fill a frame.
+        /// <para>
+        /// 256 KiB × the three part slots <see cref="MaxFiles"/> leaves beside
+        /// <see cref="MetadataFileName"/> is exactly <see cref="MaxTotalBytes"/>.
+        /// </para>
+        /// </remarks>
+        public const int MaxPartBytes = 1 << 18;
+
+        /// <summary>
+        /// Longest accepted destination key: the <c>pbj_</c> prefix on top of a
+        /// full-length display name.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately not <see cref="MaxNameLength"/>, which bounds <em>file</em>
+        /// names. A legal save is <see cref="LobbySaveNames.MaxNameLength"/>
+        /// characters and the key carries the prefix as well, so borrowing the file
+        /// bound here would make perfectly legal saves untransferable.
+        /// </remarks>
+        public static readonly int MaxKeyLength =
+            LobbySaveNames.Prefix.Length + LobbySaveNames.MaxNameLength;
 
         private static readonly ScenarioFile[] NoFilesAtAll = new ScenarioFile[0];
+
+        private static readonly byte[] NoContentAtAll = new byte[0];
+
+        /// <summary>
+        /// How many numbered parts content may split into: everything
+        /// <see cref="MaxFiles"/> allows beside <see cref="MetadataFileName"/>.
+        /// </summary>
+        public const int MaxParts = MaxFiles - 1;
+
+        private static readonly string[] PartNames =
+        {
+            ContentFileName + ".0",
+            ContentFileName + ".1",
+            ContentFileName + ".2",
+        };
 
         private const uint FnvOffsetBasis = 2166136261;
         private const uint FnvPrime = 16777619;
@@ -172,18 +245,171 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public static bool IsSafeName(string? name)
         {
-            if (string.IsNullOrEmpty(name) || name!.Length > MaxNameLength)
+            return !string.IsNullOrEmpty(name)
+                && name!.Length <= MaxNameLength
+                && HasOnlySafeCharacters(name);
+        }
+
+        /// <summary>
+        /// Structurally safe <em>and</em> one of the files a save actually has:
+        /// the metadata, and the content either whole or as a numbered part.
+        /// </summary>
+        /// <remarks>
+        /// Case-sensitive on purpose: the game writes exactly these names, and
+        /// accepting <c>Content.Zip</c> would mean two spellings of one file on a
+        /// case-sensitive filesystem. The part names are an explicit short list
+        /// rather than a parsed suffix, for the same reason the rest of this class
+        /// prefers allowlists — a name shape nobody thought about is refused by
+        /// default.
+        /// </remarks>
+        public static bool IsAllowedName(string? name)
+        {
+            return IsSafeName(name)
+                && (string.Equals(name, ContentFileName, StringComparison.Ordinal)
+                    || string.Equals(name, MetadataFileName, StringComparison.Ordinal)
+                    || PartIndex(name) >= 0);
+        }
+
+        /// <summary>
+        /// Which numbered content part this is, or -1 if it is not one.
+        /// </summary>
+        public static int PartIndex(string? name)
+        {
+            for (var i = 0; i < MaxParts; i++)
             {
-                return false;
+                if (string.Equals(name, PartNames[i], StringComparison.Ordinal))
+                {
+                    return i;
+                }
             }
-            if (name[0] == '.' || name[name.Length - 1] == '.')
+            return -1;
+        }
+
+        /// <summary>
+        /// Whether a transfer may be written to <paramref name="key"/>.
+        /// </summary>
+        /// <remarks>
+        /// <b>The guard that replaces M9's fixed constant.</b> M9 never took a
+        /// directory name from the wire at all; M11d's barrier makes every peer load
+        /// the lobby's chosen key, so M11e has to — and this is the whole boundary
+        /// that makes it safe.
+        /// <para>
+        /// Two conjuncts, and the structural one is <b>not</b> redundant.
+        /// <see cref="LobbyCatalogue"/>'s own offer test checks the prefix and that
+        /// the key is not the scenario slot; <c>pbj_../../x</c> satisfies both. Only
+        /// <see cref="IsSafeKey"/> stops that, so it is stated here rather than
+        /// borrowed from a rule written for a different question.
+        /// </para>
+        /// </remarks>
+        public static bool IsAllowedDestination(string? key)
+        {
+            return IsSafeKey(key) && LobbySaveNames.IsMultiplayerKey(key);
+        }
+
+        /// <summary>
+        /// Structural safety for a save <em>directory</em> name.
+        /// </summary>
+        /// <remarks>
+        /// The same character rule as <see cref="IsSafeName"/> — one allowlist, so a
+        /// separator neither has heard of is rejected by both — against the longer
+        /// bound a prefixed key needs. See <see cref="MaxKeyLength"/>.
+        /// </remarks>
+        public static bool IsSafeKey(string? key)
+        {
+            return !string.IsNullOrEmpty(key)
+                && key!.Length <= MaxKeyLength
+                && HasOnlySafeCharacters(key);
+        }
+
+        /// <summary>
+        /// Splits save content into parts small enough for the writer to encode.
+        /// </summary>
+        /// <remarks>
+        /// Content that fits in one part keeps <see cref="ContentFileName"/>
+        /// unchanged, so the common case — every save measured so far — is
+        /// byte-identical on the wire to what M9 already sends.
+        /// </remarks>
+        public static IReadOnlyList<ScenarioFile> SplitContent(byte[]? content)
+        {
+            var bytes = content ?? NoContentAtAll;
+            if (bytes.Length <= MaxPartBytes)
+            {
+                return new[] { new ScenarioFile(ContentFileName, bytes) };
+            }
+
+            var parts = new List<ScenarioFile>();
+            var offset = 0;
+            while (offset < bytes.Length && parts.Count < MaxParts)
+            {
+                var length = Math.Min(MaxPartBytes, bytes.Length - offset);
+                var part = new byte[length];
+                Array.Copy(bytes, offset, part, 0, length);
+                parts.Add(new ScenarioFile(PartNames[parts.Count], part));
+                offset += length;
+            }
+            return parts;
+        }
+
+        /// <summary>
+        /// Reassembles the content of a payload <see cref="Inspect"/> has accepted.
+        /// </summary>
+        /// <remarks>
+        /// Ordered by part index rather than by position, because the digest is
+        /// deliberately order-independent and nothing else promises the wire keeps
+        /// file order either. Reassembling in arrival order would corrupt a save in
+        /// a way no check downstream would catch.
+        /// </remarks>
+        public static byte[] JoinContent(ScenarioPayload? payload)
+        {
+            if (payload == null)
+            {
+                return NoContentAtAll;
+            }
+
+            var files = payload.Files;
+            for (var i = 0; i < files.Count; i++)
+            {
+                if (string.Equals(files[i].Name, ContentFileName, StringComparison.Ordinal))
+                {
+                    return files[i].Content;
+                }
+            }
+
+            var ordered = new byte[MaxParts][];
+            var total = 0;
+            for (var i = 0; i < files.Count; i++)
+            {
+                var index = PartIndex(files[i].Name);
+                if (index >= 0)
+                {
+                    ordered[index] = files[i].Content;
+                    total += files[i].Content.Length;
+                }
+            }
+
+            var joined = new byte[total];
+            var offset = 0;
+            for (var i = 0; i < MaxParts; i++)
+            {
+                if (ordered[i] != null)
+                {
+                    Array.Copy(ordered[i], 0, joined, offset, ordered[i].Length);
+                    offset += ordered[i].Length;
+                }
+            }
+            return joined;
+        }
+
+        private static bool HasOnlySafeCharacters(string value)
+        {
+            if (value[0] == '.' || value[value.Length - 1] == '.')
             {
                 return false;
             }
 
-            for (var i = 0; i < name.Length; i++)
+            for (var i = 0; i < value.Length; i++)
             {
-                var c = name[i];
+                var c = value[i];
                 var ok = (c >= 'a' && c <= 'z')
                     || (c >= 'A' && c <= 'Z')
                     || (c >= '0' && c <= '9')
@@ -194,19 +420,6 @@ namespace PBAndJ.Core.Net
                 }
             }
             return true;
-        }
-
-        /// <summary>
-        /// Structurally safe <em>and</em> one of the two files a save actually
-        /// has. Case-sensitive on purpose: the game writes exactly these names,
-        /// and accepting <c>Content.Zip</c> would mean two spellings of one file
-        /// on a case-sensitive filesystem.
-        /// </summary>
-        public static bool IsAllowedName(string? name)
-        {
-            return IsSafeName(name)
-                && (string.Equals(name, ContentFileName, StringComparison.Ordinal)
-                    || string.Equals(name, MetadataFileName, StringComparison.Ordinal));
         }
 
         /// <summary>
@@ -233,8 +446,21 @@ namespace PBAndJ.Core.Net
                 return ScenarioRejection.TooLarge;
             }
 
+            // After the size checks, so a flood is still refused before any
+            // per-file work — but before the names, because a payload aimed
+            // somewhere we will never write is not worth inspecting further.
+            // NoFiles deliberately still wins: ScenarioPayload.None carries no
+            // destination and HostSession.OfferScenario reads NoFiles as the benign
+            // "nothing to offer" rather than as a fault to warn about.
+            if (!IsAllowedDestination(SaveName))
+            {
+                return ScenarioRejection.DisallowedDestination;
+            }
+
             var seenContent = false;
             var seenMetadata = false;
+            var seenParts = 0;
+            var partSeen = new bool[MaxParts];
             for (var i = 0; i < Files.Count; i++)
             {
                 var name = Files[i].Name;
@@ -242,8 +468,22 @@ namespace PBAndJ.Core.Net
                 {
                     return ScenarioRejection.DisallowedName;
                 }
+                if (Files[i].Content.Length > MaxPartBytes)
+                {
+                    return ScenarioRejection.PartTooLarge;
+                }
 
-                if (string.Equals(name, ContentFileName, StringComparison.Ordinal))
+                var part = PartIndex(name);
+                if (part >= 0)
+                {
+                    if (partSeen[part])
+                    {
+                        return ScenarioRejection.DuplicateName;
+                    }
+                    partSeen[part] = true;
+                    seenParts++;
+                }
+                else if (string.Equals(name, ContentFileName, StringComparison.Ordinal))
                 {
                     if (seenContent)
                     {
@@ -261,9 +501,26 @@ namespace PBAndJ.Core.Net
                 }
             }
 
-            return seenContent && seenMetadata
-                ? ScenarioRejection.None
-                : ScenarioRejection.MissingRequiredFile;
+            if (seenContent && seenParts > 0)
+            {
+                return ScenarioRejection.MixedContentForm;
+            }
+            if (!seenMetadata || (!seenContent && seenParts == 0))
+            {
+                return ScenarioRejection.MissingRequiredFile;
+            }
+
+            // A contiguous run from zero. A gap would reassemble into a truncated
+            // save that something would then try to load.
+            for (var i = 0; i < seenParts; i++)
+            {
+                if (!partSeen[i])
+                {
+                    return ScenarioRejection.PartsNotContiguous;
+                }
+            }
+
+            return ScenarioRejection.None;
         }
 
         private static string ComputeDigest(IReadOnlyList<ScenarioFile> files)

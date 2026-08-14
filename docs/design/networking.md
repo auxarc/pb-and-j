@@ -83,6 +83,51 @@ host is executing or when it names a turn other than the current one, and has no
 has no un-ready button to intercept, because single-player has nothing to wait for. The console
 command `pbj.unready` and the harness's `unready` are the PoC affordances.
 
+## The lobby barrier (M11a)
+
+A **second** barrier, alongside the turn barrier below, for a different question: not "has everyone
+submitted orders for this turn" but "has everyone agreed to load this save". It is the wire half of
+`docs/design/campaign-coop.md`'s M11.
+
+- The host holds a **`LobbySelection`** — a save key, its digest, and a **version**. Only the host
+  mints a version, and it never rewinds.
+- Every roster member, host included, is a **`LobbyBarrier`** participant. Membership is added when
+  `registry.Add` succeeds and dropped in `RemovePeer`, which is what makes
+  `ReadyOutcome.UnknownParticipant` unreachable in the host's handler — and therefore absent, since
+  the coverage gate refuses unreachable code.
+- `LobbyState` is broadcast, as **full state**, on every change: selection, roster, and each member's
+  ready flag. Idempotent, like `Assignments`, so a client that misses one is corrected by the next.
+- `LobbyReady { selectionVersion }` and `LobbyUnready { selectionVersion }` travel upward. Two types
+  rather than one flag-carrying message, mirroring `Ready`/`Unready`.
+
+**The selection version is the lobby's turn number.** Change the save and every ready clears, so a
+peer that agreed to save A is never counted as agreeing to save B. Re-choosing the *same* save still
+advances it: one path, no equality branch, and clearing is the safe direction — the cost is a
+re-click, the alternative is loading a save somebody never confirmed.
+
+### Three things that are easy to get wrong here
+
+**`NeedsResync` does not mean what it means on the turn barrier.** There it is honest — a scenario
+force-execute can advance the host outside the barrier, so a peer really can fall behind. For a
+selection version there is no such path, so a peer claiming a version the host has not reached is
+misbehaving or buggy. The arm survives because messages do not validate and a test can deliver a
+forged one; the host answers with the truth rather than a kick, in case the bug is ours.
+
+**A departing peer can satisfy the lobby barrier**, exactly as it can satisfy the turn barrier — the
+last unready member simply leaves. A host that only re-checks after a ready misses that case
+entirely, which in M11d is a trigger that never fires.
+
+**Leaving combat clears lobby readiness** by advancing the selection. Without it, returning to the
+lobby after a fight finds everyone already "ready", and a `LobbyReady` still in flight from before
+the fight would be counted.
+
+### Scope: M11a is deliberately inert
+
+Nothing acts on a satisfied lobby barrier. `HostSession.LobbyIsSatisfied` and a log line are the
+whole output; broadcasting "load this save" is M11d's job, and building the trigger here would mean
+two mechanisms for one job. The eighth `peer-selftest` scenario is what stops that inertness becoming
+the M6 failure — a feature that ships with every test green and has never once run.
+
 ## The turn barrier
 
 **Batch-at-ready, not incremental streaming.**
@@ -954,6 +999,183 @@ load, since `ModLink.OnLoadEnd()` runs inside `Heartbeat.Awake` → `ModManager.
 before `GameController` exists. `Stop()` is also called from `Heartbeat.OnDestroy` /
 `OnApplicationQuit` postfixes.
 
+## The patch surface
+
+Everything above assumes the patches run. That assumption carries more weight here than it does in
+most mods, and it was examined in `docs/notes/harmony-patch-durability.md` after a co-op mod next
+door lost a multiplayer run to a Harmony patch that stopped executing partway through a process —
+zero exceptions, a clean `Applied 272 patches successfully, 0 failed` at startup, and a one-line
+state divergence that surfaced nine checkpoints later as a wrong number. This section is what that
+examination changed here.
+
+### The mechanism that ate the run next door cannot happen here
+
+It is a .NET Core effect. On CoreCLR, Harmony installs a native jump over a method's *compiled*
+code while its IL stays unpatched, so every recompilation the runtime performs — tier-0 to tier-1
+promotion, then again under `TieredPGO` — republishes an entry point the detour has to be
+re-applied to. MonoMod hooks `ICorJitCompiler::compileMethod` to catch that and does not reliably
+win the race: across four observed runs next door the detour survived twice and was lost twice.
+
+Unity's Mono JIT compiles a method once and does not re-JIT it. No tiering, no PGO recompilation,
+no entry-point republication for a detour to lose. `Directory.Build.props` targets `net472` and the
+host is Phantom Brigade 2.2.2 under Unity, so **a patch that is applied and takes effect here stays
+in effect for the life of the process**.
+
+Recorded so it is not chased: do not add `DOTNET_*` variables to anything, and do not go looking for
+this. It is also written down so the assumption is inherited explicitly rather than silently — if
+this ever ran under CoreCLR, every suppression prefix below becomes a desync waiting on a JIT
+decision.
+
+### The exposure is nonetheless the highest of the three projects sharing this note
+
+Elsewhere a Harmony patch is a thin seam that delegates to a provider the mod owns, and a patch
+dying there degrades to cosmetically wrong. This mod is the inverse: it retrofits multiplayer onto a
+singleplayer game **through the patches themselves**. 35 `[HarmonyPatch]` classes over 31 distinct
+target methods, and eight of them are prefixes that return `false` to replace game behaviour
+outright.
+
+| Suppression prefix | Target | What a silent loss looks like |
+|---|---|---|
+| `ExecutionPatches` | `CIViewCombatExecution.CheckAndAttemptExecution` | **the game runs the turn locally inside a networked session** |
+| `PassengerGlue` ×4 | `OverworldUtility.OrderMovementToPosition`, `.TryRetreatToResupplyBase`, `CIViewOverworldRoster.OnCampInitiated`, `ScenarioSetupUtility.EnterCombat` | a passenger client drives the base, camps, retreats, or engages a site — and re-rolls contracts doing it (M12a) |
+| `LobbyPicker` ×2 | `CIViewPauseLoad.OnConfirmButton`, `.OnDeleteButton` | the picker loads a save straight into singleplayer instead of offering it to the lobby; Delete becomes live on the save every peer has readied on |
+| `SaveVisibilityPatches` | `CIViewPauseSave.OnDeleteButton` | a multiplayer save is deletable from the singleplayer save screen, behind singleplayer wording |
+
+The first row is the sharp one, and it is the same failure class as the desync next door reached by
+a different route: nothing looks broken, and the divergence is immediate, silent and one-sided.
+
+**There is no relocation fix available.** The repair next door was to move the rule out of a patch
+and into an engine-dispatched hook, because a hook reaches the JIT as the mod's own IL and cannot be
+lost the way a detour can. That option does not exist for a suppression gate — a prefix returning
+`false` *is* the extension point, and there is no non-patch equivalent of "do not run the original".
+**The defence here has to be detection, not relocation**, and everything below follows from that.
+
+### `PatchAll` is all-or-nothing, and `OnLoadEnd` is downstream of the throw
+
+This mod never instantiates Harmony. The game does, in `ModManager.TryLoadingLibraries`
+(`ModManager.cs:1201`, `new Harmony(id)` where `id` is the mod id), and calls
+`ModLink.OnLoad(harmonyInstance)`, whose body is a `try`/`finally` around `PatchAll` with **no
+`catch`**, followed by `OnLoadEnd()` — `ModLink.cs:57–79`, with `PatchAll` at `:69` and the
+`OnLoadEnd()` call at `:79`. Three consequences, verified against the decompile:
+
+1. **One throwing patch aborts the whole pass.** An `AmbiguousMatchException` on an overload, a
+   prefix parameter bound by a name the game does not use, or a target method that moved in a game
+   update — every patch after it in `assembly.GetTypes()` order silently never applies.
+2. **`OnLoadEnd` never runs**, so `ModEntry.cs`'s registrations never happen: no console commands,
+   no `SaveLoadGlue.EnableCombatSaves()`, no `NetGlue.RegisterConsoleCommands()`.
+3. **The game catches it and carries on.** `TryLoadingLibraries` wraps the lot in
+   `catch (Exception ex)` → `PostWarning` (`ModManager.cs:1214–1215`), which queues a non-critical
+   mod warning. `loadedData.patchedMethods` is populated *after* `OnLoad` returns, so on this path
+   the game's own record of what we patched stays empty — the mod is listed as loaded and can name
+   nothing it patched.
+
+Point 2 is genuinely good news and worth stating plainly: **this failure is loud.** Unlike the
+outage next door you would notice immediately, because none of the mod's console commands would
+exist. What is bad is the state it leaves behind — an **arbitrary partial patch set**, some
+suppression gates live and others not, decided by enumeration order. A half-gated multiplayer layer
+is worse than an absent one, and nothing currently stops a session being started in that state.
+
+### Assert the patch surface at session entry, and refuse
+
+Not at load: `OnLoadEnd` is exactly the thing that cannot be trusted to run, which rules out the
+obvious place. Put the check where being half-patched is actually fatal — **`pbj.host` and
+`pbj.join`** — count the methods this assembly's Harmony id owns, and refuse the session with both
+numbers named when it disagrees.
+
+**Count methods, not patch classes.** The 35 classes resolve to 31 distinct target methods, because
+four targets are patched twice: `CombatUtilities.ConfirmExecution` (`ActionDumpGlue` and
+`ExecutionPatches`), `DataHelperLoading.TryLoading` (`MainMenuGlue` and `SaveNamespacePatches`), and
+`OverworldUtility.OrderMovementToPosition` plus `ScenarioSetupUtility.EnterCombat` (`OverworldProbeGlue`
+and `PassengerGlue`). An assertion written against the class count fails on a perfectly healthy
+build, on the first run, which is the fastest way to have it deleted.
+
+The expected number moves whenever the patch set does — including when M12's throwaway probes are
+deleted — so it belongs beside the patch set rather than in a comment, and a wrong number must fail
+loudly rather than be tolerated.
+
+The split is the usual one: the reflection walk over `Harmony.GetAllPatchedMethods()` /
+`GetPatchInfo(m).Owners` is Mod-side glue; the comparison and the refusal wording are pure Core,
+under the 100% gate.
+
+**Refusing rather than logging and continuing is the point.** A session that cannot gate execution
+produces divergence that looks like a gameplay bug and costs somebody a run to diagnose — which is
+the entire content of the story next door.
+
+### A patch-surface lock, mirroring `wire-surface.lock`
+
+The discipline already exists in this repo, and this is the same shape applied to a different
+surface: record the set of (declaring type, method, patch kind) that every `[HarmonyPatch]` in the
+assembly resolves to, check it at build time against `vendor/Managed/`, and re-record only as a
+deliberate act — `check-patch-surface` and `record-patch-surface` beside the wire pair.
+
+That catches a moved target **before a build ships**, rather than at `PatchAll` time on a player's
+machine, and it closes the loop `GAME_BUILD.md` currently leaves to human diligence: re-vendoring
+after a game update would fail the check instead of relying on somebody remembering to re-verify by
+hand. It pairs with the existing `Assembly-CSharp.dll` SHA256 assertion — the SHA says *the game
+changed*, the patch-surface lock says *and here is what it broke*.
+
+It is not a substitute for the session-entry count and neither is a substitute for it. The lock is
+build-time and catches a target that moved; the count is run-time and catches whatever aborted the
+pass on the machine actually about to host.
+
+### Never patch lazily
+
+Mono's own version of the hazard is real but differently shaped. There is no re-JIT, so the risk
+moves to **patch-application time**: if a target method is small and gets inlined into a caller that
+was already JIT-compiled before the patch landed, the patch never takes effect for that call site
+and never will, because there is no second compilation to fix it.
+
+What protects us is that `ModLink.OnLoad` runs during mod loading, well before combat code executes.
+Every patch here is attribute-driven through that one `PatchAll`; nothing calls `harmony.Patch` at
+runtime, and nothing should. **If deferred patching is ever added** — on a timer, on scene load, on
+session start, on content registration — this becomes live, and the mitigation is the usual one: do
+not patch tiny members, prefer a larger method or an interface boundary.
+
+M8's replay handoff reaches private members through `AccessTools` *reflection* rather than patching
+(see [Call `SetReplayActive`'s pieces](#call-setreplayactives-pieces-not-setreplayactive)), so it
+does not open this.
+
+### Verify the effect, not the gate
+
+`Net/ExecutionPatches.cs` already says it: *"The real backstop is `CombatGameBridge.CommitTurn`
+reporting whether the turn actually advanced."* That is the correct principle, written down in the
+codebase before any of this note existed. What the note asks for is generalising it from one patch
+to the patch set.
+
+**The cheapest instance we do not yet have is a client-side turn-advance detector.**
+`NetGlue.NotifyExternalTurnAdvance` — fed by the `ConfirmExecution` pre/postfix pair — is host-only
+today (`NetGlue.cs:609–615`); on a client it returns without a word. But a client's
+`combat.currentTurn` must *never* advance, because a client never commits (that is already recorded
+twice above as a limitation). So the same postfix on a client is an exact, free detector for the
+worst failure mode in the mod: the Execute gate dead and the turn running locally. It should log
+loudly and fault the session rather than stay quiet, on the same reasoning that makes a refused
+session better than a half-gated one.
+
+Alongside it, a per-turn counter of whether the Execute gate fired against whether a `Ready` was
+actually posted makes that failure self-reporting rather than something to be diagnosed afterwards.
+
+The diagnostic discipline from next door transfers whole, and is worth having written down before it
+is needed rather than after:
+
+- A trace patch on the *same target* as each critical patch, one line per invocation.
+- A second trace written from **non-patch** code as a control. This is the part that matters: the
+  absence of a log line is only evidence if something else proves the process was still alive and
+  logging. That control is what turned "we cannot explain this" into a one-line answer next door —
+  hook-dispatched breadcrumbs kept flowing for 18 more turn boundaries after the patch-driven ones
+  stopped, in the same process and the same file.
+- Flush per line, to a file separate from the engine log. Engine logs and stdout both buffer and
+  both drop their tails when a process dies.
+- **Keep one previous generation of that file.** The decisive artifact next door was the *rotated*
+  copy; a truncate-on-launch policy had already destroyed the evidence for an earlier occurrence of
+  the same bug.
+
+### What was already right
+
+Recorded so nobody reworks it: `wire-surface.lock` and its Makefile check, which is the model the
+patch-surface lock copies; the `Assembly-CSharp.dll` SHA256 assertion that refuses to deploy on
+mismatch, plus the manual Steam "only update on launch" step in `GAME_BUILD.md`; and the backstop
+comment in `Net/ExecutionPatches.cs`.
+
 ## Wire format
 
 A Core-owned POCO (`OrderPayload`) with a hand-rolled binary codec, mirroring
@@ -1196,6 +1418,9 @@ otherwise diagnosed together and badly.
 | Assignments not pruned when a unit dies | unscheduled |
 | ~~No keepalive; relies on TCP FIN/RST~~ | **fixed in M5c** |
 | ~~A socket that connects and never sends `Hello` is never timed out~~ | **fixed in M7** — see [Remote play](#remote-play-m7) |
+| Nothing asserts the patch surface before a session starts, so a half-applied `PatchAll` can host | unscheduled — see [The patch surface](#the-patch-surface) |
+| A moved patch target is caught at load on a player's machine, never at build | unscheduled — patch-surface lock, ditto |
+| A client whose Execute gate stopped running advances its own turn undetected | unscheduled — ditto |
 
 ## The outbound queue
 
@@ -1265,6 +1490,15 @@ test pins that, because it is exactly the invariant a later edit would break sil
   and `pb_mech_02` came back with it. Confirms both that the id space stays append-only while the
   *player* is continuous, and that the name reservation refuses an impostor's `Hello` without
   standing in the way of the owner's `Rejoin`.
+- **The mod's patches cannot be lost mid-process.** Unity Mono compiles a method once and never
+  re-JITs it, so the CoreCLR tiered-compilation detour loss that cost a co-op run next door has no
+  mechanism here — see [The patch surface](#the-patch-surface). Read from the runtime's documented
+  behaviour and the `net472` target, not measured on this game.
+- **`ModLink.OnLoad` has no `catch` and `OnLoadEnd()` is downstream of `PatchAll`**
+  (`decompiled/PhantomBrigade.Mods/ModLink.cs:57–79`), so a single throwing patch skips every
+  registration in `ModEntry`. `ModManager.TryLoadingLibraries` catches the escape and posts a
+  non-critical mod warning (`ModManager.cs:1214–1215`); the game keeps running with an arbitrary
+  partial patch set.
 - A plain C# `lock` block does **not** strand the 100% branch gate. It lowers to
   `Monitor.Enter(o, ref lockTaken)` plus `if (lockTaken)` in the finally, but coverlet 6.0.2
   accounts for that generated branch — measured 2026-08-02 on `PbjMailbox.Post`: 4 branches, 0

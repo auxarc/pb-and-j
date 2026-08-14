@@ -408,6 +408,96 @@ namespace PBAndJ.Mod.Net
             KeyframePlayer.Stop();
         }
 
+        /// <summary>
+        /// Puts this machine's mobile base where the host's is. M12a.
+        /// </summary>
+        /// <remarks>
+        /// The game's own teleport recipe, cribbed from
+        /// <c>ConsoleCommandsOverworld:893-901</c> and proven by <c>pbj.ow-mirror</c>
+        /// during the recon rather than invented here. Every step earns its
+        /// place, and the recipe is the whole reason this is not two lines:
+        /// <list type="bullet">
+        ///   <item><c>StopMovement</c> — or the client's own path fights the write.</item>
+        ///   <item><c>ReplacePosition</c> — the authoritative value.</item>
+        ///   <item><c>ReplacePositionTarget</c> — <b>not optional.</b>
+        ///   <c>OverworldMovementSystem</c> drags position back toward a stale
+        ///   target whenever the clock runs, so a mirror without it snaps back.</item>
+        ///   <item><c>isPositionUnchecked</c> — hands the height to
+        ///   <c>OverworldPositionValidationSystem</c>, which snaps to this
+        ///   machine's own ground. That is why no Y crosses the wire.</item>
+        ///   <item>A <b>same-value</b> <c>ReplaceSimulationTime</c> — Entitas
+        ///   raises the replaced event with no value-equality short-circuit, so
+        ///   this wakes every <c>SimulationTime</c> collector at a delta of zero.
+        ///   <c>OverworldRangeSystem</c> is the one that matters: it copies
+        ///   Position into PositionDetectedLast, which is what the renderer
+        ///   actually draws.</item>
+        /// </list>
+        /// <b>Never write the host's time value here.</b> Roughly twenty systems
+        /// collect on that component and a real delta would run all of them on a
+        /// machine that is not simulating — the overworld cousin of the standing
+        /// rule against advancing <c>combat.simulationTime</c> on a client.
+        /// <para>
+        /// In game state <c>basecrawler</c> the write lands and does not render,
+        /// because the feeder above runs only in <c>overworld</c>. That is
+        /// measured-correct, not a bug to work around: the position is already
+        /// right when the player returns to the map.
+        /// </para>
+        /// </remarks>
+        public void MirrorBase(float x, float z)
+        {
+            var playerBase = IDUtility.playerBaseOverworld;
+            if (playerBase == null || !playerBase.hasPosition)
+            {
+                return;
+            }
+
+            // Keep our own Y. The snap below corrects it against local ground,
+            // and starting from the current height means an unremarkable
+            // correction rather than a fall from wherever the host stands.
+            var target = new Vector3(x, playerBase.position.v.y, z);
+
+            PhantomBrigade.Overworld.OverworldUtility.StopMovement(playerBase);
+            playerBase.ReplacePosition(target);
+            playerBase.ReplacePositionTarget(target);
+            playerBase.isPositionUnchecked = true;
+
+            var overworld = Contexts.sharedInstance.overworld;
+            if (overworld.hasSimulationTime)
+            {
+                overworld.ReplaceSimulationTime(overworld.simulationTime.f);
+            }
+        }
+
+        /// <summary>
+        /// Loads the fight the host shipped. M12b.
+        /// </summary>
+        /// <remarks>
+        /// Routed to <see cref="LoadGlue.BeginCombat"/> rather than
+        /// <see cref="LoadGlue.Begin"/>, and the difference is not cosmetic: the
+        /// campaign path checks the lobby catalogue, which deliberately excludes
+        /// the scenario slot, so a fight sent through it returns Unavailable
+        /// every single time and reads as a missing save rather than as wiring.
+        /// </remarks>
+        public LoadOutcome? BeginCombatLoad(string? saveName, string? digest)
+        {
+            return LoadGlue.BeginCombat(saveName, digest);
+        }
+
+        /// <summary>
+        /// Writes the fight we have just entered, so it can be offered. M12b.
+        /// </summary>
+        /// <remarks>
+        /// Only arms the write. The game refuses to save while the scenario intro
+        /// runs, and raises that flag in the same tick that makes
+        /// <see cref="InCombat"/> true, so <see cref="CombatShipGlue"/> polls from
+        /// the next frame on and answers with <c>LocalCombatReadyEvent</c> when it
+        /// has a save — or when it has given up on getting one.
+        /// </remarks>
+        public void ShipCombat()
+        {
+            CombatShipGlue.Arm();
+        }
+
         public void ClearLocalOrders()
         {
             if (!InCombat)
@@ -439,28 +529,34 @@ namespace PBAndJ.Mod.Net
         // works unchanged on Windows and under Proton, where the same logical
         // folder lives somewhere quite different.
 
-        public ScenarioPayload ReadScenario()
+        public ScenarioPayload ReadScenario(string? saveKey)
         {
             try
             {
-                var folder = SaveFolder();
+                var folder = SaveFolder(saveKey);
                 if (folder == null || !Directory.Exists(folder))
                 {
                     return ScenarioPayload.None;
                 }
 
+                // Content is split into parts only when it has to be — M11e. Every
+                // save measured is far under one part, so the common case still
+                // sends a single content.zip exactly as M9 did. Splitting here
+                // rather than at the session keeps the wire-size decision in one
+                // place: PbjWriter throws on an oversize blob and PbjRuntime.SendTo
+                // does not guard encoding, so nothing above may hand it one.
                 var files = new List<ScenarioFile>();
-                foreach (var name in new[]
-                         {
-                             ScenarioPayload.ContentFileName,
-                             ScenarioPayload.MetadataFileName,
-                         })
+                var contentPath = Path.Combine(folder, ScenarioPayload.ContentFileName);
+                if (File.Exists(contentPath))
                 {
-                    var path = Path.Combine(folder, name);
-                    if (File.Exists(path))
-                    {
-                        files.Add(new ScenarioFile(name, File.ReadAllBytes(path)));
-                    }
+                    files.AddRange(ScenarioPayload.SplitContent(File.ReadAllBytes(contentPath)));
+                }
+
+                var metadataPath = Path.Combine(folder, ScenarioPayload.MetadataFileName);
+                if (File.Exists(metadataPath))
+                {
+                    files.Add(new ScenarioFile(
+                        ScenarioPayload.MetadataFileName, File.ReadAllBytes(metadataPath)));
                 }
 
                 // A partial directory is handed over as-is rather than patched
@@ -469,7 +565,7 @@ namespace PBAndJ.Mod.Net
                 // glue is how the two drift apart.
                 return files.Count == 0
                     ? ScenarioPayload.None
-                    : new ScenarioPayload(SaveLoadGlue.SaveName, files);
+                    : new ScenarioPayload(saveKey, files);
             }
             catch (Exception e)
             {
@@ -481,10 +577,14 @@ namespace PBAndJ.Mod.Net
 
         public bool WriteScenario(ScenarioPayload payload)
         {
-            var folder = SaveFolder();
+            // The destination now travels with the payload — M11e. SaveFolder
+            // refuses anything outside the namespace, so a forged key fails here
+            // rather than composing a path.
+            var folder = SaveFolder(payload.SaveName);
             if (folder == null)
             {
-                Debug.LogWarning("[pb-and-j] the game did not report a save folder — cannot write the scenario");
+                Debug.LogWarning("[pb-and-j] no writable save folder for '"
+                    + payload.SaveName + "' — cannot write the save");
                 return false;
             }
 
@@ -500,6 +600,11 @@ namespace PBAndJ.Mod.Net
                 }
                 Directory.CreateDirectory(staging);
 
+                // Split content is reassembled here, never written out as parts:
+                // the parts are a wire concern and the game must find the ordinary
+                // content.zip it wrote. JoinContent orders by part index rather
+                // than by arrival, because the digest is order-independent and
+                // nothing promises the wire preserved file order.
                 for (var i = 0; i < payload.Files.Count; i++)
                 {
                     var file = payload.Files[i];
@@ -514,8 +619,20 @@ namespace PBAndJ.Mod.Net
                         Directory.Delete(staging, true);
                         return false;
                     }
+                    if (ScenarioPayload.PartIndex(file.Name) >= 0)
+                    {
+                        continue;
+                    }
+                    if (string.Equals(file.Name, ScenarioPayload.ContentFileName, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
                     File.WriteAllBytes(Path.Combine(staging, file.Name), file.Content);
                 }
+
+                File.WriteAllBytes(
+                    Path.Combine(staging, ScenarioPayload.ContentFileName),
+                    ScenarioPayload.JoinContent(payload));
 
                 if (Directory.Exists(folder))
                 {
@@ -545,13 +662,44 @@ namespace PBAndJ.Mod.Net
         }
 
         /// <summary>
+        /// Starts loading a campaign save. M11d.
+        /// </summary>
+        /// <remarks>
+        /// Delegates to <see cref="LoadGlue"/>, which owns the pre-checks and the
+        /// completion callback. Kept out of this class because the bridge is
+        /// otherwise all ECS reads and writes, and a load is neither — it tears
+        /// the ECS down and builds a new one.
+        /// </remarks>
+        public LoadOutcome? BeginLoad(string? saveKey, int selectionVersion, string? saveDigest) =>
+            LoadGlue.Begin(saveKey, selectionVersion, saveDigest);
+
+        /// <summary>
         /// Where this save lives, from the game's own path resolution. The
         /// directory name is always ours — never the one on the wire.
         /// </summary>
-        private static string? SaveFolder()
+        /// <summary>
+        /// Where a save lives, from the game's own path resolution.
+        /// </summary>
+        /// <remarks>
+        /// <b>The one statement in the mod that turns a wire-supplied name into a
+        /// path</b>, so the guard is here and not only at the caller. M9 passed a
+        /// constant and needed no check; M11e carries the lobby's key, and
+        /// <see cref="ScenarioPayload.IsAllowedDestination"/> is what stands between
+        /// that and a <c>Path.Combine</c>. Refusing here rather than trusting the
+        /// session keeps this safe on its own terms — the session checking first is
+        /// defence in depth, not a substitute.
+        /// </remarks>
+        private static string? SaveFolder(string? saveKey)
         {
+            if (!ScenarioPayload.IsAllowedDestination(saveKey))
+            {
+                Debug.LogWarning("[pb-and-j] refusing to resolve a save folder for '"
+                    + saveKey + "' — not an allowed destination");
+                return null;
+            }
+
             var root = DataManagerSave.GetSaveFolderPath(SaveLocation.Normal);
-            return string.IsNullOrEmpty(root) ? null : Path.Combine(root, SaveLoadGlue.SaveName);
+            return string.IsNullOrEmpty(root) ? null : Path.Combine(root, saveKey);
         }
     }
 }

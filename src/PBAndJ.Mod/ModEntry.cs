@@ -16,6 +16,10 @@ namespace PBAndJ.Mod
         public override void OnLoadStart()
         {
             Debug.Log(LoadBanner.Compose(modID, metadata.ver));
+            // The game owns this string — it is what it passed to `new Harmony(id)`
+            // — so it is captured rather than copied, and pbj.drive-state can
+            // report how many methods we actually patched.
+            Net.ActuatorGlue.RememberHarmonyId(modID);
         }
 
         public override void OnLoadEnd()
@@ -26,8 +30,27 @@ namespace PBAndJ.Mod
             SaveLoadGlue.EnableCombatSaves();
             InjectGlue.RegisterConsoleCommand();
             Net.NetGlue.RegisterConsoleCommands();
-            Net.ReplayProbeGlue.RegisterConsoleCommands();
+            Net.ActuatorGlue.RegisterConsoleCommands();
             UpdateGlue.RegisterConsoleCommand();
+#if PBJ_DRIVE
+            // Started from here rather than from a patch, and the coupling is
+            // deliberate: OnLoadEnd runs only if PatchAll succeeded, and the
+            // channel's pump is a Harmony postfix. Starting it anywhere earlier
+            // could leave a socket accepting commands that nothing would ever
+            // execute. No port set means no listener.
+            Net.DriveProbeGlue.RegisterConsoleCommand();
+            Net.DriveGlue.Start();
+#endif
+            // THROWAWAY (M12 recon) — goes when docs/notes/overworld-recon.md is written.
+            Net.OverworldProbeGlue.RegisterConsoleCommands();
+            // THROWAWAY (M12 review follow-up) — answers the two questions gating
+            // M12d. Goes once both answers are in the design doc.
+            Net.ManagementProbeGlue.RegisterConsoleCommands();
+            // THROWAWAY (M8 recon) — four of its five questions are answered in
+            // docs/notes/replay-handoff-recon.md. It stays only until the fifth,
+            // a client's Time.timeScale during playback, is read off a running
+            // client; then it goes the way of the other probes.
+            Net.ReplayProbeGlue.RegisterConsoleCommands();
         }
     }
 
@@ -43,6 +66,8 @@ namespace PBAndJ.Mod
         {
             Debug.Log(LoadBanner.PatchFired("Heartbeat.Start"));
             UpdateGlue.SetCoroutineHost(__instance);
+            Net.OverworldProbeGlue.SetCoroutineHost(__instance);
+            Net.BaseMirrorGlue.SetCoroutineHost(__instance);
         }
     }
 }
