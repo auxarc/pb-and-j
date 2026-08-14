@@ -79,6 +79,36 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void CombatOffer_FetchesByDIGEST_NotBySaveName()
+        {
+            // Regression, found by the first two-instance M8 playtest and NOT by
+            // the test above, which asserted only that *a* request went out.
+            //
+            // ScenarioRequestMessage identifies a save by DIGEST -- deliberately,
+            // so a peer never gets to name a file on the host's disk. This path
+            // passed offer.SaveName instead. Both are string?, so nothing caught
+            // it, and the failure is entirely remote: HostSession.ResolveRequested
+            // compares the value against the scenario slot's digest, misses, and
+            // falls through to "the lobby's campaign wins" -- so the client asked
+            // for the fight and was sent the CAMPAIGN SAVE. It then never entered
+            // combat, and the host dropped it after 120s and fought alone.
+            //
+            // Observed on the host as:
+            //   refused scenario: sender claimed pbj_combat_test
+            //     but the bytes digest to 32a3ae4e
+            //   sent scenario 'pbj_fromsp' (62,076 bytes) to peer #1
+            var client = Welcomed();
+            bridge.Scenario = CombatPayload();
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId,
+                new CombatOfferMessage("pbj_combat_test", "the-fight-digest", 4));
+
+            var request = Assert.IsType<ScenarioRequestMessage>(Single<SendEffect>(effects).Message);
+            Assert.Equal("the-fight-digest", request.Digest);
+            Assert.NotEqual("pbj_combat_test", request.Digest);
+        }
+
+        [Fact]
         public void CombatOffer_IsNotRefusedTheWayAScenarioOfferWouldBe()
         {
             // The whole reason this is a separate message type. A client with

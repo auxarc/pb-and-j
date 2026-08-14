@@ -955,7 +955,17 @@ namespace PBAndJ.Core.Net
             }
 
             effects.Add(new LogEffect(NetLog.CombatFetching(offer.SaveName)));
-            effects.Add(new SendEffect(HostConnectionId, new ScenarioRequestMessage(offer.SaveName)));
+
+            // ⚠️ The DIGEST, never the name. A request identifies a save by its
+            // bytes precisely so a peer cannot name a file on the host's disk --
+            // HostSession.ResolveRequested matches against the digests it has
+            // already decided to offer and grants the peer no say. Passing the
+            // name here type-checks (both are string?) and then fails entirely on
+            // the far side: the match misses, the host falls through to "the
+            // lobby's campaign wins", and the client is sent the campaign save
+            // when it asked for the fight. Found by the first two-instance
+            // playtest, 2026-08-14.
+            effects.Add(new SendEffect(HostConnectionId, new ScenarioRequestMessage(offer.Digest)));
         }
 
         /// <summary>
