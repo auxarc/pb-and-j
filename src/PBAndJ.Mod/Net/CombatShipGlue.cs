@@ -42,8 +42,19 @@ namespace PBAndJ.Mod.Net
         /// Counted against <b>machine-paced</b> refusals only — see
         /// <see cref="Blocker"/>. The entry barrier's own timeout is 120s and
         /// starts only once this has finished, so this is not competing with it.
+        /// <para>
+        /// <b>Was 30s, and that was too tight to survive a playtest.</b> Real
+        /// entries have been measured at 26.7s, 26.9s and 27.4s, every one of
+        /// them blocked throughout on "the turn is being simulated" — under ten
+        /// percent of margin — and the fourth run went past 30s and lost. The
+        /// cost of being too short is not a slow start: the host gives up, drops
+        /// the peer with "the fight could not be shared", and fights alone, so a
+        /// co-op session ends because a machine was briefly busy. The cost of
+        /// being too long is that a genuinely stuck write is noticed later, and
+        /// nothing else is waiting on it.
+        /// </para>
         /// </remarks>
-        private const float ShipTimeoutSeconds = 30f;
+        private const float ShipTimeoutSeconds = 90f;
 
         private const float SayWhyEverySeconds = 1f;
 
