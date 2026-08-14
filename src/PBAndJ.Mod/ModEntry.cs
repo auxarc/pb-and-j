@@ -57,6 +57,17 @@ namespace PBAndJ.Mod
             // that pass left open: a revealed unit's ArrivalTime reads -1 on a
             // client against the host's real value. Goes with that one.
             Net.OverlayProbeGlue.RegisterConsoleCommands();
+            // THROWAWAY (M8 leftovers) — when a unit was visible during a turn,
+            // and where that answer comes from. Four rounds of reading the
+            // decompile produced four accounts of this mechanism and three were
+            // wrong; the arguments are all about facts one line of output
+            // settles. Goes once the answers are in the recon file.
+            Net.VisibilityProbeGlue.RegisterConsoleCommands();
+            // THROWAWAY (M8 item 3 recon) — §8 of the recon file says the VFX
+            // volume "has never been measured", and designing a wire around an
+            // unmeasured volume is how M6 nearly shipped a frame the receiver
+            // would have rejected. Goes once the number is in the recon file.
+            Net.VfxProbeGlue.RegisterConsoleCommands();
         }
     }
 
