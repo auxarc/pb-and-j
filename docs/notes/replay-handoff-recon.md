@@ -673,3 +673,44 @@ picture alone.
    weight probably never leaves zero — **inferred, not measured**. The driver deactivates the puppet
    holders at install time regardless, which covers a unit already crashed but not one that crashes
    after.
+
+---
+
+## ⚡ THE THREE THINGS LEFT UNDONE — deliberately, and written down rather than quietly widened
+
+Every one of these was found while verifying something else, and each was left out because doing it
+would have grown a change that was already verified. None of them blocks M8 or M13.
+
+### 1. `ArrivalTime` does not travel
+
+A revealed unit reads `arrivalTime = -1` on a client against the host's real value (measured: `-1.00`
+vs `10.13`). The host's reveal path sets it in the same breath as the visibility flags
+(`ScenarioUtility.cs:1853`); our snapshot does not carry it.
+
+**Invisible today** — `widgetLanding` is off, so the countdown label it feeds is not drawn — but it
+is the same class of divergence as the visibility bug, and `ScenarioUtility.cs:3653` reads
+`hasArrivalTime` on the salvage-exemption path. `hasArrivalTime` is true on both machines (the save
+restores the component whenever `deployed` is set), so only the *value* differs.
+
+**Cost:** one float on `UnitSnapshot`. That is another wire layout move and therefore another
+`PbjProtocol.Version` bump, which is the only reason it was not folded into M13 — the visibility fix
+was already verified and reopening the wire would have meant re-verifying it.
+
+### 2. Reveal timing is lost, so a mid-turn reveal plays back wrong
+
+The recorder skips hidden units at turn start (`:283`), so a unit hidden at `turnStartTime` and
+revealed mid-turn has **no key at the window start** — its first key is at reveal time.
+`KeyframePlayback.TrySample` clamps below the first key, so the client shows it **for the whole
+window, frozen at its reveal position**, and it only starts moving partway through. The host showed
+nothing until the reveal moment.
+
+Strictly better than the bug it replaced (invisible forever), but it is a new visible artefact. The
+game solves this with `ReplayUnit.keyframeReveal` / `keyframeHidden` (`:1922-1943`, consumed at
+`:1118-1126`); our wire carries no such time. **Fix is a reveal timestamp per pose track**, or accept
+it in writing — which is what this paragraph is.
+
+### 3. No projectiles, beams or VFX on a client
+
+Covered in full above under "NO BULLETS ON A CLIENT". Repeated here so the three open items sit
+together: it is a scope line, not a defect, and carrying it is its own milestone. §8 enumerates the
+live references that cannot cross a process boundary.
