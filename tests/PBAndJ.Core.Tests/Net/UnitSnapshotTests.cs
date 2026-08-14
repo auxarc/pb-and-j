@@ -23,6 +23,52 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(2.5f, unit.DeathTime);
         }
 
+        // The defaults describe a unit that is on the field and being drawn,
+        // which is what almost every unit is. Stated as a test because they are
+        // what a caller that forgets the new arguments will silently send.
+        [Fact]
+        public void Constructor_DefaultsToAVisibleDeployedUnit()
+        {
+            var unit = Snapshot();
+            Assert.False(unit.IsHidden);
+            Assert.False(unit.IsHiddenDetectable);
+            Assert.True(unit.IsDeployed);
+        }
+
+        [Fact]
+        public void Constructor_RetainsVisibility()
+        {
+            var unit = new UnitSnapshot(
+                "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
+                new Vec3(0f, 0f, -1f), 1f, false, 0f,
+                isHidden: true, isHiddenDetectable: true, isDeployed: false);
+
+            Assert.True(unit.IsHidden);
+            Assert.True(unit.IsHiddenDetectable);
+            Assert.False(unit.IsDeployed);
+        }
+
+        // Visibility is deliberately absent from the digest: it is presentational,
+        // and correction cannot repair it, so including it would turn every
+        // reveal into a permanent divergence report. Its absence is also exactly
+        // why a client showing a different battlefield went unnoticed for weeks,
+        // which is worth a test rather than a comment.
+        [Fact]
+        public void ToUnitState_IgnoresVisibility()
+        {
+            var visible = new UnitSnapshot(
+                "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
+                new Vec3(0f, 0f, -1f), 1f, false, 0f);
+            var hidden = new UnitSnapshot(
+                "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
+                new Vec3(0f, 0f, -1f), 1f, false, 0f,
+                isHidden: true, isHiddenDetectable: true, isDeployed: false);
+
+            Assert.Equal(
+                StateDigest.Compute(new[] { visible.ToUnitState() }),
+                StateDigest.Compute(new[] { hidden.ToUnitState() }));
+        }
+
         [Fact]
         public void Vec4_RetainsAllFourComponents()
         {

@@ -434,6 +434,26 @@ namespace PBAndJ.Core.Net
                 captured, cap, thinned);
         }
 
+        /// <summary>
+        /// The correction changed which units this machine is drawing.
+        /// </summary>
+        /// <remarks>
+        /// Logged only on the edge, never every turn, because the steady state
+        /// is "nothing changed" and a line per turn would bury the one that
+        /// matters. The counts are what make it a diagnosis rather than a
+        /// notice: a client that quietly diverges on visibility shows a
+        /// different battlefield from the host while every digest still reports
+        /// OK, which is precisely how this went unnoticed until somebody looked
+        /// at two screens at once.
+        /// </remarks>
+        public static string VisibilityCorrected(int revealed, int hidden)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "visibility corrected | {0} unit{1} revealed, {2} hidden",
+                revealed, Plural(revealed), hidden);
+        }
+
         // --- poses (M8) ---
 
         public static string PosesSent(int turn, int partCount, int peerCount)

@@ -531,6 +531,22 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void VisibilityCorrected_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] visibility corrected | 3 units revealed, 1 hidden",
+                NetLog.VisibilityCorrected(3, 1));
+        }
+
+        [Fact]
+        public void VisibilityCorrected_SpeaksOfOneRevealedUnitInTheSingular()
+        {
+            Assert.Equal(
+                "[pb-and-j] visibility corrected | 1 unit revealed, 0 hidden",
+                NetLog.VisibilityCorrected(1, 0));
+        }
+
+        [Fact]
         public void PosesNotCaptured_NamesBothLossesSeparately()
         {
             Assert.Equal(

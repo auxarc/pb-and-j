@@ -187,7 +187,15 @@ namespace PBAndJ.Mod.Net
                     new Vec3(facing.x, facing.y, facing.z),
                     integrity,
                     dead,
-                    dead ? persistent.deathStatus.time : 0f));
+                    dead ? persistent.deathStatus.time : 0f,
+                    // M13. A client cannot work any of these out for itself: the
+                    // game's detector is line-of-sight fog of war whose only
+                    // caller triggers on simulationTime, which a client never
+                    // advances. Left un-sent, its copy stays frozen at whatever
+                    // the scenario save said on the turn it loaded.
+                    unit.isHidden,
+                    unit.isHiddenDetectable,
+                    persistent.isUnitDeployed));
 
                 if (units.Count == PbjMessageCodec.MaxUnitsPerSnapshot)
                 {
@@ -223,6 +231,8 @@ namespace PBAndJ.Mod.Net
             }
 
             var localOnly = 0;
+            var revealed = 0;
+            var hidden = 0;
             foreach (var unit in Contexts.sharedInstance.combat.GetGroup(CombatMatcher.UnitTag).GetEntities())
             {
                 var persistent = IDUtility.GetLinkedPersistentEntity(unit);
@@ -234,6 +244,23 @@ namespace PBAndJ.Mod.Net
                 {
                     localOnly++;
                     continue;
+                }
+
+                // M13. Visibility goes FIRST, before the position write below,
+                // and the order is load-bearing: CombatUILinkInWorldMarkers
+                // triggers on Position but skips units that are hidden, so a
+                // unit revealed after its position had already been replaced
+                // would get no world marker until something else moved it.
+                if (ApplyVisibility(unit, persistent, state))
+                {
+                    if (state.IsHidden)
+                    {
+                        hidden++;
+                    }
+                    else
+                    {
+                        revealed++;
+                    }
                 }
 
                 // Components only, and that is sufficient to render: PositionLinkSystem
@@ -261,6 +288,75 @@ namespace PBAndJ.Mod.Net
             {
                 Debug.Log(NetLog.SnapshotUnitsSkipped(byName.Count, localOnly));
             }
+            if (revealed > 0 || hidden > 0)
+            {
+                Debug.Log(NetLog.VisibilityCorrected(revealed, hidden));
+            }
+        }
+
+        /// <summary>
+        /// Puts one unit's visibility where the host's is. True if it moved.
+        /// </summary>
+        /// <remarks>
+        /// <c>VisibilityLinkSystem</c> is reactive on
+        /// <c>CombatMatcher.Hidden.AddedOrRemoved()</c> and is not gated on the
+        /// simulation running, so the flag alone does redraw the three views —
+        /// the same self-healing shape <c>PositionLinkSystem</c> gives the
+        /// transform writes above.
+        /// <para>
+        /// The explicit helper calls are not belt-and-braces. The game never
+        /// treats that system as sufficient: every place it writes
+        /// <c>isHidden</c> itself it follows with the marker and overlay calls
+        /// below. And on the hiding side it must — the in-world marker link
+        /// skips hidden units, so nothing would ever take a stale marker down.
+        /// </para>
+        /// <para>
+        /// The Entitas flag setters early-return when the value is unchanged, so
+        /// the steady-state cost of this is a comparison per unit per turn and
+        /// the collector cannot re-fire on a no-op.
+        /// </para>
+        /// </remarks>
+        private static bool ApplyVisibility(
+            CombatEntity unit, PersistentEntity persistent, UnitSnapshot state)
+        {
+            // Deployment first: the overlay eligibility check rejects on this
+            // BEFORE it looks at visibility, so revealing an undeployed unit
+            // would show a mesh with no marker, overlay or unit-bar entry.
+            persistent.isUnitDeployed = state.IsDeployed;
+            unit.isHiddenDetectable = state.IsHiddenDetectable;
+
+            if (unit.isHidden == state.IsHidden)
+            {
+                return false;
+            }
+
+            unit.isHidden = state.IsHidden;
+            var visible = !state.IsHidden;
+            // Fully qualified rather than pulled in with a using: the
+            // PhantomBrigade.Combat namespace carries a lot of short names and
+            // this file already reaches into three others.
+            PhantomBrigade.Combat.CIHelperWorldMarkers.OnUnitVisibilityChanged(unit.id.id, visible);
+            CIHelperOverlays.OnUnitVisibilityChanged(unit.id.id, visible);
+            CIHelperOverlays.OnUnitEligibilityChange(persistent);
+
+            // And then hand the freshly-built overlay to the game's own
+            // time-dependent refresh, because on a client nothing else ever
+            // will. OnTimeChange is what decides the "no data" widget — it is
+            // the ONLY writer of it — and that widget is on by default in the
+            // prefab, so an overlay created and left alone shows it forever.
+            //
+            // The host never notices: its timeline and prediction clock move
+            // constantly, so OnTimeChange runs and clears the widget within a
+            // frame. A client's combat clock is frozen by design, so the call
+            // happens during setup and effectively never again — which is fine
+            // for every overlay built at setup, and wrong for any built later.
+            // Revealing a unit mid-fight builds one later.
+            //
+            // Measured rather than reasoned: probing the same unit on both
+            // machines showed unknown=off on the host and unknown=ON on the
+            // client, with a unit visible from turn 0 reading off on both.
+            CIHelperOverlays.OnTimeChange();
+            return true;
         }
 
         // Walks the game's own replay recorder and re-keys it for the wire.

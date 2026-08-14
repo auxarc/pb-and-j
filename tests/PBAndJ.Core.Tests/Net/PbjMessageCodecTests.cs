@@ -498,6 +498,32 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(0.125f, dead.Position.Z);
         }
 
+        // Three booleans that all default to a different value from the one
+        // being asserted, per unit, so a decoder that read them in the wrong
+        // order or dropped one cannot pass. They are the last fields in the
+        // record, which is exactly where an off-by-one in the reader lands.
+        [Fact]
+        public void RoundTrip_Snapshot_PreservesVisibilityPerUnit()
+        {
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f, false, 0f,
+                    isHidden: true, isHiddenDetectable: false, isDeployed: false),
+                new UnitSnapshot("pb_mech_02", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f, false, 0f,
+                    isHidden: false, isHiddenDetectable: true, isDeployed: true),
+            }));
+
+            Assert.True(m.Units[0].IsHidden);
+            Assert.False(m.Units[0].IsHiddenDetectable);
+            Assert.False(m.Units[0].IsDeployed);
+
+            Assert.False(m.Units[1].IsHidden);
+            Assert.True(m.Units[1].IsHiddenDetectable);
+            Assert.True(m.Units[1].IsDeployed);
+        }
+
         [Fact]
         public void RoundTrip_Snapshot_WithNoUnits_PreservesEmpty()
         {

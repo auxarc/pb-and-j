@@ -531,8 +531,67 @@ and integrity, none of which visibility touches, so correction reports `OK` ever
 machines show different battlefields. Note also that **M8 is doing its part correctly**: the pose
 tracks for those units do arrive (14 → 17), the client simply will not draw the units.
 
-Fix, when it is wanted: a visibility bit on `UnitSnapshot` and an apply on the client. That moves a
-wire layout, so it owes a `ModVersion` bump. Its own piece of work, not a Stage 5.
+### ✅ FIXED (M13) — and the fix needed one thing nobody would have predicted
+
+`UnitSnapshot` gained `IsHidden`, `IsHiddenDetectable` and `IsDeployed`; the host reads them, the
+client applies them. **First change in the project's history to move `PbjProtocol.Version`** (3 → 4)
+rather than only `ModVersion` (→ 0.14.0): three bytes were appended to every unit record inside an
+existing message, so a v3 peer would read one unit's visibility as the next unit's name length.
+
+Verified on two independent two-instance runs: `visibility corrected | 3 units revealed, 0 hidden`,
+fired **once**, on the edge — the Entitas flag setters early-return on an unchanged value, so the
+reactive collector cannot re-fire — and the enemy mech appears on the client.
+
+**Both flags travel, not just `isHidden`.** The game sets and clears the pair together, and
+`CombatScenarioStateSystem` counts hostiles remaining as `isHiddenDetectable || IsUnitActive(...)`
+before declaring victory, so a client left with a stale `true` keeps counting a unit the host has
+revealed and killed. `IsDeployed` travels because `CIHelperOverlays.IsUnitUsableForOverlay` rejects
+on it **before** it looks at visibility — measured to be already true here, carried because the
+game's own reveal path sets it in the same breath and the wire was being broken anyway.
+
+**Visibility stays out of `StateDigest`, deliberately.** It is presentational and correction cannot
+repair it. That exclusion is also exactly why this went unseen: the digest reported `OK` every turn
+while the two machines showed different battlefields.
+
+#### 🐛 The fix caused a second bug, and finding it killed a plausible theory first
+
+Revealed units showed a `no data` marker **on the client only**. The first explanation — the
+overlay's `widgetUnknown` is gated on `predictionTime - simulationTime > predictionTimeHorizon`, and
+a client's combat clock is frozen — was **refuted by measuring both clocks**, which is the entire
+argument for measuring:
+
+```
+          turn        simTime      predTime
+HOST      0 → 3       0 → 15.00    0.00
+CLIENT    0 (frozen)  0.00         0.00
+```
+
+The client's clock *is* frozen (worth knowing, and now measured). But `predictionTime` is 0.00 on
+**both**, so that difference is 0 on the client and -15 on the host — neither can exceed a horizon
+clamped to 0..5. A probe then showed `hasPredictionTimeHorizon` is absent on these units entirely.
+
+**The real cause, from probing the same unit on both machines:**
+
+```
+REVEALED   host: arrival=10.13  unknown=off      client: arrival=-1.00  unknown=ON
+CONTROL    host: arrival=-0.74  unknown=off      client: arrival=-0.74  unknown=off
+```
+
+`OnTimeChange` is the **only** writer of `widgetUnknown` (`CIHelperOverlays.cs:1075-1077`), and with
+no prediction horizon it writes *off*. So it never turned the widget on — **the widget is on by
+default in the prefab, and `OnTimeChange` is what clears it.** A host's timeline and prediction clock
+move constantly so it runs every frame; a client's are frozen, so it runs during setup and
+effectively never again. Every overlay built at setup gets cleared. **An overlay built later does
+not** — and revealing a unit mid-fight builds one later.
+
+Fix: call `CIHelperOverlays.OnTimeChange()` after `OnUnitEligibilityChange`. Confirmed by re-probing:
+`unknown=off` on both. **The lesson is the prefab one** — a cloned UI object starts at whatever the
+prefab serialized, and the code that normally corrects it may not run on a machine that does not
+simulate. `docs/notes/ngui-surface.md` has the same lesson about `CILabel` reverting cloned text.
+
+**Still open and deliberately not fixed:** `ArrivalTime` does not travel, so a revealed unit reads
+`-1` on the client against the host's real value. Invisible today — `widgetLanding` is off — but it
+is the same class of divergence and it is what drives the landing countdown.
 
 ### ⚡ THE COMBAT HUD IS NOT ENTERED UNTIL A UNIT IS SELECTED
 

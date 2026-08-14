@@ -6,7 +6,7 @@ namespace PBAndJ.Core.Tests.Net
     public class PbjProtocolTests
     {
         [Fact]
-        public void Version_IsThree()
+        public void Version_IsFour()
         {
             // Pinned deliberately: bumping the wire format must be an explicit
             // edit here and in Write_MinimalOrder_ProducesExactBytes.
@@ -14,7 +14,11 @@ namespace PBAndJ.Core.Tests.Net
             // earlier in M5 left every existing layout alone and so kept v1.
             // v3 (M7) added GameBuild and Passphrase to Hello and Rejoin, for
             // play between two machines; M6's Keyframes was a new type only.
-            Assert.Equal(3, PbjProtocol.Version);
+            // v4 (M13) is the FIRST bump for a changed layout rather than an
+            // added type: the visibility fix appends three bytes to every unit
+            // record inside Snapshot. A v3 peer would read one unit's
+            // visibility bytes as the next unit's name length.
+            Assert.Equal(4, PbjProtocol.Version);
         }
 
         [Fact]
@@ -191,7 +195,11 @@ namespace PBAndJ.Core.Tests.Net
             // 0.11.0 was M12b's first half: CombatOffer and CombatEntered were new
             // types, and the meaning of an existing one moved — CombatStart now
             // arrives only once everyone is in the fight.
-            Assert.Equal("0.13.0", PbjProtocol.ModVersion);
+            // 0.14.0 for M13, the visibility fix. This one moves PbjProtocol.Version
+            // as well, which no release before it has done — the snapshot's unit
+            // record grew, so an older peer decodes every unit after the first
+            // out of step rather than merely meeting an unknown message.
+            Assert.Equal("0.14.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

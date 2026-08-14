@@ -110,8 +110,17 @@ namespace PBAndJ.Core.Net
         /// in without those types would fault on its first message — the mod
         /// version has to move with the surface, not after it.
         /// </para>
+        /// <para>
+        /// <b>M13 is the first change to move it since it was written.</b> The
+        /// visibility fix adds three bytes to every unit record inside
+        /// <c>Snapshot</c> — an existing layout, changed — which is exactly the
+        /// case this constant is for, and the first one the project has had. A
+        /// v3 peer decoding a v4 snapshot would read a unit's visibility bytes
+        /// as the next unit's name length. <see cref="ModVersion"/> moved to
+        /// 0.14.0 in the same commit, per the rule above.
+        /// </para>
         /// </remarks>
-        public const int Version = 3;
+        public const int Version = 4;
 
         /// <summary>
         /// This build of the mod, as peers announce it to each other.
@@ -125,7 +134,7 @@ namespace PBAndJ.Core.Net
         /// mod/metadata.yaml; the Makefile refuses to build a distributable when
         /// they disagree, since that is the one file this constant cannot reach.
         /// </remarks>
-        public const string ModVersion = "0.13.0";
+        public const string ModVersion = "0.14.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.
