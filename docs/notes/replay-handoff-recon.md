@@ -307,11 +307,38 @@ Note `previewTimeLimit` reads **5** and `turnStartTime` **0** after execution �
 that ran 0→5, and confirming both are *turn-dependent* values a client must be told, not constants it
 can assume.
 
+---
+
+## Measured on a real CLIENT, 2026-08-14 — the last question falls
+
+Two game instances, a shared campaign, a shared fight and a shared turn, driven end to end through
+`tools/playtest-m12b.sh`. The client received the host's keyframes and played them back; a sampler
+in `ReplayProbeGlue`, pumped from the `Heartbeat` postfix and gated on `KeyframePlayer.IsPlaying`,
+read `Time.timeScale` across **exactly** the playback window:
+
+```
+replay-probe playback window | frames=577 timeScale min=0 max=0 framesAboveZero=0
+  simulating=False session=CLIENT | FinalIK hazard dormant — pauseUpdates is insurance
+```
+
+**577 frames, `timeScale` 0 on every one of them, on a genuine client.** Not one frame above zero.
+
+So **the FinalIK hazard of §5 is dormant, measured rather than inferred.** `MechAnimationSystem`'s
+non-reactive `Execute` is gated on `!Simulating && Time.timeScale > 0f`, and the second conjunct is
+never true on a client during playback — so `UpdateAnimationsForAll` never runs, `LateUpdateUnit` is
+never reached by that path, and the manual FinalIK solves never fight replayed bone writes.
+
+**`view.pauseUpdates = true` still gets set.** It is one assignment, it closes both entry points
+unconditionally, and it costs nothing. The measurement downgrades it from load-bearing to insurance;
+it does not remove it. Sampling min/max rather than a single reading was deliberate: the hazard is
+"was it *ever* above zero", and one non-zero frame would have been enough.
+
+Also confirmed in the same run: **M6 keyframes reaching a real client through the M12b fight path** —
+8 tracks, 384 keys, 5.00 s of motion, broadcast by the host and received intact.
+
 ## Still open
 
-1. **A client's `Time.timeScale` during actual playback.** The host measurement above makes dormancy
-   very likely but is not the same observation. Needs the `make peer-listen` pass — load the combat
-   save **before** joining, or the client strands in `Lobby`.
+1. ~~A client's `Time.timeScale` during actual playback~~ — **answered above: 0, across 577 frames.**
 2. ~~Mech bone name uniqueness~~ — answered, unique.
 3. ~~`DestructionProgress` a digest input?~~ — **No.** `StateDigest.Compute` hashes name, position and
    `unitFrameIntegrity` only (`StateDigest.cs:104`). §6's ECS write is digest-safe.

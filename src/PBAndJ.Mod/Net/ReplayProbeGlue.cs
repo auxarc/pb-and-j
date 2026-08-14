@@ -63,6 +63,97 @@ namespace PBAndJ.Mod.Net
             }
         }
 
+        // --- Q1 continued: the SAME question, but sampled during playback ---
+
+        // ProbeTime below answers "what is timeScale when I ask", which is not
+        // the question. The question is what it is *during playback*, on a
+        // client, and that window is about five seconds long — far too short to
+        // hit by hand over the drive channel, and hitting it by luck would be a
+        // sample of one with no way to tell a miss from a zero.
+        //
+        // So sample from the pump instead, gated on KeyframePlayer.IsPlaying,
+        // which is precisely the window in question. No console command arms
+        // this: an arming step is one more thing to forget, and the cost of
+        // always-on is a handful of float compares per frame during playback.
+        //
+        // Reports min/max rather than a single reading because the hazard is
+        // "was it EVER above zero" — one non-zero frame is enough for
+        // UpdateAnimationsForAll to run manual IK solves against our bone
+        // writes, and a mean would hide it.
+        private static bool wasPlaying;
+        private static int sampleFrames;
+        private static float scaleMin;
+        private static float scaleMax;
+        private static int framesAboveZero;
+
+        /// <summary>
+        /// Pumped from the Heartbeat postfix, immediately after
+        /// <c>KeyframePlayer.Advance</c>, so the sampled window is exactly the
+        /// one playback ran in.
+        /// </summary>
+        internal static void SampleDuringPlayback()
+        {
+            var playing = KeyframePlayer.IsPlaying;
+
+            if (playing && !wasPlaying)
+            {
+                sampleFrames = 0;
+                framesAboveZero = 0;
+                scaleMin = float.MaxValue;
+                scaleMax = float.MinValue;
+            }
+
+            if (playing)
+            {
+                var scale = Time.timeScale;
+                sampleFrames++;
+                if (scale > 0f)
+                {
+                    framesAboveZero++;
+                }
+                if (scale < scaleMin)
+                {
+                    scaleMin = scale;
+                }
+                if (scale > scaleMax)
+                {
+                    scaleMax = scale;
+                }
+            }
+
+            if (!playing && wasPlaying)
+            {
+                ReportPlaybackWindow();
+            }
+
+            wasPlaying = playing;
+        }
+
+        private static void ReportPlaybackWindow()
+        {
+            if (sampleFrames == 0)
+            {
+                return;
+            }
+
+            var simulating = Contexts.sharedInstance.combat.Simulating;
+
+            // The derived verdict, not just the numbers. framesAboveZero > 0
+            // with Simulating false is exactly the condition under which
+            // MechAnimationSystem's non-reactive Execute calls
+            // UpdateAnimationsForAll, which calls LateUpdateUnit directly, which
+            // runs the manual FinalIK solves that would fight M8's bone writes.
+            var hazardLive = framesAboveZero > 0 && !simulating;
+
+            Debug.Log(Tag + " playback window | frames=" + sampleFrames
+                + " timeScale min=" + F(scaleMin) + " max=" + F(scaleMax)
+                + " framesAboveZero=" + framesAboveZero
+                + " simulating=" + simulating
+                + " session=" + (NetGlue.HasSession ? (NetGlue.IsHost ? "host" : "CLIENT") : "none")
+                + " | FinalIK hazard " + (hazardLive ? "LIVE — pauseUpdates is load-bearing"
+                                                     : "dormant — pauseUpdates is insurance"));
+        }
+
         // --- Q1: a client's Time.timeScale, never once observed ---
 
         /// <remarks>

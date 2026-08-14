@@ -561,76 +561,104 @@ what this project needs. **Sliding is the accepted degraded state until M8.**
 
 ### Replay handoff (M8) — the intended answer to "why does it slide"
 
+> ⚠️ **This section was written before `CombatReplayHelper` was read end to end, and
+> `docs/notes/replay-handoff-recon.md` supersedes it.** Five claims below were wrong; each is
+> corrected in place and marked. The recon file is measured against a running game and reviewed
+> twice. Where the two disagree, the recon file wins.
+
 **Do not stream poses. Hand the client the host's replay and let the game play it.**
 
 The game already owns a system that turns recorded combat into a visually complete playback — poses,
 particles, beams, projectiles, terrain destruction, audio, the lot. Re-implementing any part of that
-is the wrong trade. M8's shape is: reconstruct the host's `CombatReplayHelper` state on the client,
-call `SetReplayActive(true)`, and let `CombatReplayHelper.Update` drive it.
+is the wrong trade.
+
+> ⚠️ **CORRECTED (1 of 5).** This paragraph used to end: "M8's shape is: reconstruct the host's
+> `CombatReplayHelper` state on the client, call `SetReplayActive(true)`, and let
+> `CombatReplayHelper.Update` drive it." **Both halves are dead on a client.**
+> `SetReplayActive` self-gates on `IsReplayAllowed()`, which needs `activationAllowed` — set at
+> exactly one place, inside `OnExecutionEnd`, which a client never runs — so the call is a **silent
+> no-op**. And `CombatReplayHelper.Update` early-returns unless `activeLast` (`:481`), which only
+> `SetReplayActive` sets. The "call the pieces, not `SetReplayActive`" subsection below is the real
+> shape and has always contradicted this intro; the intro was simply never rewritten.
+
+M8's actual shape: carry the host's recorded poses, then drive `PrepareUnitForReplay` and
+`ApplyTime` directly through reflection, under `CombatUIModes.Simulating`, with our own cursor.
 
 This also fits what a client already is. It is inherently one turn behind — it never simulates, and
 it is corrected at end of turn — and the host sits in planning waiting for it to ready. There is a
 natural window in which the client can watch the turn it just missed, as if the combat were playing
 out for the first time.
 
-#### The activation gate is satisfiable, which M6 got wrong
+#### The activation gate is NOT satisfiable on a client
+
+> ⚠️ **CORRECTED (2 of 5).** This subsection used to be headed "The activation gate is satisfiable,
+> which M6 got wrong", and its table's first row claimed `activationAllowed` is **True** on a client
+> because it "is set at `OnExecutionEnd`, which is exactly when playback would start". That is
+> **host reasoning applied to a client**, and it is the single most expensive error in this section:
+> it makes the cheap stepping stone look available when it is not.
 
 M6 rejected the scrubber partly because it is "gated behind `IsReplayAllowed()`". That is true —
-`SetReplayActive` self-gates (`CombatReplayHelper.cs:578`) — but the gate was never examined:
+`SetReplayActive` self-gates (`CombatReplayHelper.cs:578`) — and examining the gate does not help:
 
 | Condition | On a client, post-turn |
 |---|---|
-| `activationAllowed` | True — set at `OnExecutionEnd`, which is exactly when playback would start |
+| `activationAllowed` | **False, permanently.** Set true at exactly one place, `:417`, inside `OnExecutionEnd` — which never runs on a client. Measured `False`→`True` across a host's execution, and a client never executes |
 | UI mode is `Unit_Selection` | True — where a client sits after a turn |
 | scenario `coreProc.replayUsed` | Same scenario as the host, when both loaded the same save |
 | `feature_combat_replay` unlocked | Same campaign as the host, when both loaded the same save |
 
-The last two hold **because of** the save-file transfer that stage 2 already requires. And all four
-are reachable from a Harmony patch if one ever does not. The gate is not the obstacle; it was
-assumed to be one without being read.
+The last two do hold, because of the save-file transfer stage 2 already requires. The first does
+not, so **`SetReplayActive(true)` is a silent no-op on a client** and the "just accept the replay
+UI" stepping stone does not exist without reflecting into `activationAllowed` anyway — at which
+point driving the pieces directly is simpler.
 
 #### Joint identity must travel, because bone order is positional and derived
 
-This is the part most likely to fail silently and horribly. `ApplyTimeToUnit` writes
-`recordedBones[l].localPosition = joints[l].position` — a **positional** correspondence between the
-pose array and a list rebuilt per-unit from its equipment. `RefreshRecordedBones`
-(`UnitVisualManagerSimple.cs:2062`) composes that list from, in order:
+> ⚠️ **CORRECTED (3 of 5).** The whole analysis this subsection used to carry was of
+> **`UnitVisualManagerSimple`** — the **tank** visual manager. **Mechs use `UnitVisualManager`**, and
+> M8 is about mechs. The `jointsLookup` dictionary-enumeration worry, the unreachable skinned-mesh
+> block and the unnamed positional leg joints are all that other class, and with them went the
+> composed `v2:joint_shoulder_l` / `leg3:pitchMid` key scheme this section prescribed. Naming one
+> class as a proxy for a feature, again.
 
-1. every `visualsWithJoints[].jointsLookup` entry — a `Dictionary<string, Transform>`, so these
-   have **real string keys**;
-2. socket-mapped skinned-mesh bones — which contribute nothing: the guard is
-   `skinnedMeshRenderer.bones.Length == 0` and the loop then runs to `bones.Length`, so the body is
-   unreachable. Appears to be a bug in the game; harmless, but do not rely on it staying that way;
-3. `visualLegGroupComposite.legs[]`, or failing that every `visualLegGroups[].legs[]`, each
-   contributing `jointYawRoot`, `jointPitchRoot`, `jointPitchMid`, and `jointPitchLow` when
-   `tripleMode` — **unnamed, purely positional**.
+The hazard is real and the remedy is much simpler than it looked. `ApplyTimeToUnit` writes
+`recordedBones[l].localPosition = joints[l].position` — a **positional** correspondence into a
+dense array — and its loop has **no length guard at all**, so a client list longer than the recorded
+array throws every frame, and a reordered one writes the elbow's transform onto the knee.
 
-With identical saves the two sides have identical equipment, and the orders would almost certainly
-agree. "Almost certainly" is doing far too much work: group 1 depends on `Dictionary` enumeration
-order, which is an implementation detail rather than a guarantee, and groups 3 and 4 depend on leg
-enumeration and on `tripleMode` matching per leg. A mismatch does not throw — it writes the elbow's
-transform onto the knee, for every frame of playback.
+But a mech's `recordedBones` (`UnitVisualManager.cs:558-594`) is composed of
+`jointTorsoParentSpace`, the skinned mesh's bind-order `body.bones[]` filtered by name, the two
+weapon local references, and every `jointSyncLinks[].joint` — **all named Transforms**. Measured on a
+running game: **26 bones, 26 distinct, zero duplicates**, identical across every loadout and both
+player mechs, built once in `CheckInitialization` and never rebuilt mid-combat.
 
-**So capture a stable identity per bone alongside the pose, and remap on arrival.** The identity is
-available or derivable for every contributing group:
+**So `transform.name` is the identity key.** The wire carries `(name, position, rotation)` per
+joint; the client resolves an index map once per unit per turn and rebuilds every key to **its own**
+order and length. Two things the simple reading misses:
 
-- group 1 → the `jointsLookup` key, prefixed by the owning visual's index to keep it unique across
-  parts, e.g. `v2:joint_shoulder_l`;
-- group 3/4 → a composed structural key, e.g. `leg3:pitchMid`, from the leg's index and its role.
-
-The wire then carries `(key, position, rotation)` per joint. The client builds the same key list
-from its own `recordedBones`, resolves an index map once per unit per turn, and applies by name. A
-key present on one side and not the other is reported and skipped — the same "structural mismatch is
-reported, never papered over" rule `ApplySnapshot` already follows. That turns the worst failure
-mode of this design from silent visual nonsense into a log line.
+- a bone the host did not send still needs a **filler at its index** — and the filler must be that
+  bone's *current local pose at install time*, not identity, or the mech deforms. "Report and skip"
+  is not implementable against a dense array;
+- uniqueness is proven **for mechs only**. `UnitVisualManagerSimple.RefreshRecordedBones` does re-run
+  mid-combat-lifetime, from `ApplyUnit` (`:1133`) on view re-creation, and leg-group units append
+  cloned per-leg joints whose names collide. Verify uniqueness at capture and drop that unit's pose
+  track with a log line rather than assuming 26-and-unique universally.
 
 #### Volume, and why it is the least interesting problem
 
-Poses dominate: ~28 bytes a joint, dozens of joints per mech, ~53 samples a turn — call it 44 KB per
-unit per turn, ~1.5 MB for a 30-unit combat, before the level, projectile and beam tracks. That is
-over `MaxFrameLength`, but that constant is ours and the payload chunks naturally along turn and
-unit boundaries. It arrives during the host's planning phase, which is dead time on the wire, and
-5b's outbound queue and writer thread exist precisely so a payload this size cannot stall a frame.
+> ⚠️ **CORRECTED (4 of 5).** The estimate here was ~44 KB per unit and ~1.5 MB for a 30-unit combat.
+> **Measured: 34,216 B per mech per turn** (47 pose keyframes × 26 joints × 28 B), **3,948 per
+> tank**, **253 KB across 12 tracks**. Tanks are an order of magnitude cheaper than assumed, so a
+> 30-mech fight lands near ~1 MB rather than 1.5 MB.
+
+Still over `MaxFrameLength`, but that constant is ours and the payload chunks along turn and unit
+boundaries. It arrives during the host's planning phase, which is dead time on the wire, and 5b's
+outbound queue and writer thread exist precisely so a payload this size cannot stall a frame.
+
+**Chunk per turn, by index.** `experimentalMode` is true by default and accumulates tracks for the
+whole combat, so an unsliced per-unit track crosses `PbjWriter.MaxBytesLength` — a hard 512 KiB that
+**throws**, and whose throw escapes the effect pump and loses every effect behind it — somewhere
+around turn 15. M6's capture already slices by index for exactly this reason.
 
 #### Making it look like execution, not like a replay
 
@@ -657,9 +685,21 @@ without the clock:
 | Execution HUD state | `input.ReplaceCombatUIMode(CombatUIModes.Simulating)` — a component write |
 | Unit motion | already shipped: M6 keyframes onto `combatView.view.transform` |
 | Unit animation | The recorded bone poses, via `ApplyTime`. **Not the animator** — `PrepareUnitForReplay` → `SleepPuppet` sets `view.animator.enabled = false` (`CombatReplayHelper.cs:839`), so animator parameters are dead here. An earlier version of this row claimed `MechAnimationSystem` runs during planning and "only needs `velocity` written"; both halves are wrong — see the section above |
-| Timeline scrubbing | `CIViewCombatTimeline.ins.OnTimeChange(t)` — imperative, callable with the playback cursor |
-| Simulation-time shader globals | `Shader.SetGlobalFloat`/`SetGlobalVector` directly |
+| Timeline scrubbing | ⚠️ **Do not drive this.** `ApplyTime` already calls `CIViewCombatTimeline.ins.OnTimeChange(...)` itself (`CombatReplayHelper.cs:971`) |
+| Simulation-time shader globals | ⚠️ **Do not drive this either.** `ApplyTime` already calls `Shader.SetGlobalFloat(shaderID_TimeSimulation, ...)` (`:970`) |
 | Projectiles, beams, VFX | the replay tracks — nothing else can supply these without the sim |
+
+> ⚠️ **CORRECTED (5 of 5).** The two rows above used to read "`CIViewCombatTimeline.ins.OnTimeChange(t)`
+> — imperative, callable with the playback cursor" and "`Shader.SetGlobalFloat`/`SetGlobalVector`
+> directly", as though they were ours to drive. **`ApplyTime` performs both internally, every call**,
+> so following the table as written double-fires them on every frame of playback.
+>
+> The same block is where the one thing the table *omits* lives: `ApplyTime` also calls
+> `PostprocessingHelper.OnPastIntensity(1f - progress)` unconditionally (`:969`) — the desaturated
+> "past" tint, at **full strength at window start** — plus a `replay_time` audio sync when
+> `replayAudioUsed`. Under "it is the battle" that is exactly the replay look we are trying not to
+> show, and only `SetReplayActive(false)`, which we never call, ever zeroes it (`:654`). Patch around
+> it or reset it per frame.
 
 #### Call `SetReplayActive`'s pieces, not `SetReplayActive`
 
@@ -685,6 +725,32 @@ puppets must be woken again afterwards, `activeLast` stays false so the game doe
 in replay mode, and `CombatReplayHelper.Update` will not be driving `previewTime` for us — our own
 playback cursor does. Those are worth listing in the implementation, not discovering.
 
+##### The exit sequence is where the failures live, and it is owned entirely by us
+
+Vanilla's unwind is `SetReplayActive(false)` (`:633-741`): reapply the last pose and the ECS
+transform per unit, wake the puppets, re-enable VFX, `OnPastIntensity(0f)` (`:654`), and
+`ReplaceCombatUIMode(Unit_Selection)` (`:655`). Skipping the front door means performing all of it
+ourselves, in that order, wired to **every** way playback can end — clean finish, `StopKeyframes`
+(CombatEnd, Bye, resync), a driver exception, a mid-window `TurnCommit`, or `ClearData`.
+
+Two specific hazards, neither of which vanilla can reach:
+
+- **Softlock.** `CombatUIModes.Simulating` hides all planning UI —
+  `InputUILinkModeSync` computes `mode != End && != Simulating && != Replay` and passes it to
+  `WorldUICombat.SetPlanningUIActive` (`:70-75`) — and the only vanilla route back to
+  `Unit_Selection` sits behind a unit-selection event that Simulating mode itself gates off. **A
+  driver that throws mid-window strands the client in a mode with no way out.** This is the
+  no-view-stack problem in its sharpest form: every route out of a mod-driven UI state is ours to
+  build. Wrap the per-frame driver so that a throw unwinds rather than escaping.
+- **Crash on wake.** `DisableRagdollPhysics` **stores** into `puppetPhysicsMap` only after an
+  `isFunctional & !isCrashing` early-return, while `EnableRagdollPhysics` **indexes that dictionary
+  unguarded** after the same test (`:895-945`). If a unit's state changes between sleep and wake,
+  wake proceeds where sleep skipped and throws `KeyNotFoundException`. On a client that state
+  *does* change mid-window, because the host's `Snapshot` for the next turn can land while playback
+  is still running. **Keep our own record of which puppets we slept; never trust `puppetPhysicsMap`.**
+  The same applies re-entrantly: a second `Play` arriving mid-window would double-sleep and overwrite
+  the stored velocities with the kinematic zeros it just wrote.
+
 **And a fourth, which vanilla never needs: set `view.pauseUpdates = true` per tracked unit.**
 `SleepPuppet` disables `view.animator` and deactivates the *FBBIK* GameObject
 (`CombatReplayHelper.cs:839-840`), but the animator's own GameObject stays active — and
@@ -705,24 +771,46 @@ netcode bug. `pauseUpdates` is checked at `:164` and `:1254` and shuts both path
 Two coherent answers, and they should be chosen rather than inherited:
 
 - **"It is a replay"** — call `SetReplayActive(true)` and accept its UI: replay mode, scrub bar,
-  audio stings, input suspended. Honest about what is happening, cheapest to build, and the client
-  is unmistakably a spectator for those five seconds.
+  audio stings, input suspended. Honest about what is happening, and the client is unmistakably a
+  spectator for those five seconds. ⚠️ **Not actually cheaper**, and not reachable as written: the
+  call is a silent no-op on a client, so this option costs a reflected write to `activationAllowed`
+  before it does anything at all.
 - **"It is the battle"** — drive `PrepareUnitForReplay` + `ApplyTime` under
   `CombatUIModes.Simulating`, as above. More work, more invariants owned by us, and the client
   experiences the turn the way the host does.
 
-The second is the point of the exercise, but the first is a legitimate stepping stone and shares
-almost all its machinery — the difference is which statements around `ApplyTime` get made.
+**Decided (2026-08-14): "it is the battle".** The stepping-stone argument for the first option
+rested on it being cheap, and the activation-gate correction above removes that.
+
+#### Playback starts when the payload is complete, not when the first message lands
+
+`ClientSession.HandleKeyframes` emits `PlayKeyframesEffect` the instant a `Keyframes` message
+arrives, and `KeyframePlayer` advances its own cursor in real time. Poses are two orders of
+magnitude heavier than transforms, so a pose payload sent alongside lands **seconds into** a
+five-second window — mid-playback, as the normal case rather than the degenerate one.
+
+Three things follow, and they rule out the obvious "send poses per unit and let them install as they
+arrive" design:
+
+- a second cursor beside `KeyframePlayer`'s desynchronises gait from body motion permanently;
+- a unit slept for replay but still awaiting its poses is **rigid** — a frozen statue sliding along
+  its path, which is *worse* than the idle-animated slide M6 already gives;
+- so partial arrival is not a graceful degradation. It is a third, worse state.
+
+**Therefore: hold the turn's poses until the payload is complete, then start playback on one cursor
+shared with the transform track. If the payload is incomplete at a deadline, fall back explicitly —
+and audibly, in the log — to transform-only playback**, which is exactly today's known-good
+behaviour. The fallback must be uniform sliding, never a mixture. The client is a turn behind and the
+host is sitting in planning either way, so the delay is free; the frozen statues are not.
 
 #### Dependency
 
-None of this is worth building before stage 2. The gate analysis, the equipment match that makes
-joint remapping tractable, and the shared scenario all rest on both machines having loaded the same
-save. Prove stage 2 with M6's sliding playback first; it is the precondition, not a detour.
+~~None of this is worth building before stage 2.~~ **Satisfied.** Stage 2 ran on 2026-08-02 (two
+real games in two households executing a shared turn), and the two-instance drive rig has since made
+the pairing reproducible on one machine without a second person.
 
-M9 removes the manual step that made stage 2 awkward to arrange — see
-[Scenario transfer (M9)](#scenario-transfer-m9) — but it does not remove the dependency. Stage 2 is
-two people running two games; that still has to actually happen.
+The gate analysis, the equipment match that makes joint remapping tractable, and the shared scenario
+all rested on both machines having loaded the same save. They do.
 
 #### Still open
 
@@ -734,10 +822,27 @@ two people running two games; that still has to actually happen.
   `OnExecutionStart` roster, so they have no track and simply appear at their corrected position.
 - `keyframeReveal`/`keyframeHidden` are not carried, so a unit revealed mid-turn is visible for the
   whole playback.
-- **A client's `Time.timeScale` during playback has never been observed.** It gates whether
-  `MechAnimationSystem` runs at all (`:130-133`) and therefore whether the `pauseUpdates` hazard
-  above is live; a client never executes the branch that sets it. Worth logging on the first M8 run
-  rather than reasoning about further.
+- ~~A client's `Time.timeScale` during playback has never been observed.~~ **MEASURED 2026-08-14 on
+  a real client: 0 across 577 consecutive frames of playback, never once above zero.** So
+  `MechAnimationSystem`'s non-reactive `Execute` (`:130-133`) never runs there and the FinalIK
+  hazard is **dormant**. `pauseUpdates` is still set — one assignment, closes both entry points —
+  but it is insurance now rather than the load-bearing defence. See
+  `docs/notes/replay-handoff-recon.md`.
+- **`ApplyTime` is not presentation-pure.** It writes `DestructionProgress` to the client's own
+  equipment entities from local `isWrecked` state. That is digest-safe — `StateDigest` hashes name,
+  position and `unitFrameIntegrity` only — but the "playback is presentation only, never ECS"
+  invariant stated elsewhere in this document is **not true of the game's own playback path**.
+- **The `Simulating` UI mode is not an inert presentation flag.** Entering it opens
+  `CIViewCombatTimeControl` (`InputUILinkModeSync.cs:88-90`), whose handlers write `TimeScale`
+  components; and any programmatic `ReplaceUnitSelected` reverts the mode mid-playback
+  (`CombatUILinkUnitSelection.cs:135-138`) because a client's `combat.Simulating` is always false.
+  Neither is catastrophic — `SimulationTimeSystem` advances only when
+  `simulationTime < simulationTargetTime` — but both are unowned input paths into a window we are
+  driving, and they should be disabled or accepted in writing rather than discovered.
+- **Pose keyframes carry `syncLeftEquipment`/`syncRightEquipment`**, which pin the weapon transforms
+  to the palm joints (`:1228-1240`). They are easy to miss when modelling a pose as "time plus a
+  joint array", and dropping them detaches the weapon from the hand during exactly the firing
+  animations the milestone exists to show.
 
 Allocated by M6: `PbjMessageType.Keyframes = 19`, `PbjEffectKind.PlayKeyframes = 10` and
 `StopKeyframes = 11`. By M9: `PbjMessageType.ScenarioOffer = 20`, `ScenarioRequest = 21`,

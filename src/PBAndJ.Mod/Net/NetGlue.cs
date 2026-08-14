@@ -782,6 +782,11 @@ namespace PBAndJ.Mod.Net
             // planning.
             KeyframePlayer.Advance(Time.unscaledDeltaTime);
 
+            // THROWAWAY (M8 recon) — samples Time.timeScale across exactly the
+            // playback window, which is the one M8 question a running game has
+            // never answered. Goes with ReplayProbeGlue.
+            ReplayProbeGlue.SampleDuringPlayback();
+
             // Also outside the session guard: the connect screen exists in order
             // to start a session, so it must run when there is none.
             ConnectScreenGlue.Tick();
