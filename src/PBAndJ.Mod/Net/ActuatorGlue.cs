@@ -84,6 +84,83 @@ namespace PBAndJ.Mod.Net
         }
 
         /// <summary>
+        /// Selects one of this machine's units, as pressing F1–F6 does.
+        /// </summary>
+        /// <remarks>
+        /// This exists because of a refusal that went unexplained in the notes
+        /// for weeks: <b>the combat HUD is not entered until a unit is
+        /// selected</b>, and arriving in combat by <i>loading a save</i> selects
+        /// nothing. So a freshly-loaded machine sits in combat with no HUD, and
+        /// <see cref="Execute"/> refuses with "the execution view is not open"
+        /// forever. It looked like a client-side bug; it is simply how the game
+        /// starts a loaded fight, and a client follows a host in by loading a
+        /// save.
+        /// <para>
+        /// <c>CIViewCombatMode.OnUnitSelectionByIndex</c> is the very method the
+        /// F1–F6 bindings call (<c>InputCombatShared.cs:153-157</c>) — the
+        /// player's own path, per this file's discipline, not
+        /// <c>ReplaceUnitSelected</c> underneath it.
+        /// </para>
+        /// <para>
+        /// It reports what happened rather than that it pressed. Both
+        /// <c>OnUnitSelectionByIndex</c> and the <c>OnUnitClick</c> beneath it
+        /// return void and refuse silently — on an out-of-range index, on a
+        /// locked feature, on an open tutorial — which is exactly the shape that
+        /// made <c>pbj.briefing-deploy</c> report success for a briefing that had
+        /// refused.
+        /// </para>
+        /// </remarks>
+        public static string SelectUnit(int index = 0)
+        {
+            if (!IDUtility.IsGameState("combat"))
+            {
+                return "[pb-and-j] not in combat — nothing to select";
+            }
+
+            var view = CIViewCombatMode.ins;
+            if (view == null)
+            {
+                return "[pb-and-j] the combat unit bar does not exist";
+            }
+
+            var before = SelectedUnitId();
+            view.OnUnitSelectionByIndex(index);
+            var after = SelectedUnitId();
+
+            if (after == -1)
+            {
+                return "[pb-and-j] unit selection refused — index " + index
+                    + " of " + DisplayedUnitCount() + " on the bar";
+            }
+
+            var unit = IDUtility.GetCombatEntity(after);
+            var persistent = unit != null ? IDUtility.GetLinkedPersistentEntity(unit) : null;
+            var name = persistent != null && persistent.hasNameInternal
+                ? persistent.nameInternal.s
+                : "?";
+            return "[pb-and-j] selected unit " + index + ": " + name
+                + (after == before ? " (already selected)" : string.Empty);
+        }
+
+        private static int SelectedUnitId()
+        {
+            var combat = Contexts.sharedInstance.combat;
+            return combat.hasUnitSelected ? combat.unitSelected.id : -1;
+        }
+
+        // The list OnUnitSelectionByIndex actually indexes is private, and the
+        // public GetUnitSortedList is a DIFFERENT list — reporting that one
+        // would make an out-of-range index look in-range. Reflection, or say
+        // nothing at all; never a number that might be a lie.
+        private static string DisplayedUnitCount()
+        {
+            var field = typeof(CIViewCombatMode).GetField(
+                "unitCombatIDsDisplayed", BindingFlags.Instance | BindingFlags.NonPublic);
+            var value = field?.GetValue(CIViewCombatMode.ins) as System.Collections.ICollection;
+            return value != null ? value.Count.ToString() : "an unknown number";
+        }
+
+        /// <summary>
         /// Presses Deploy on the mission briefing, which raises the confirmation
         /// dialog rather than committing.
         /// </summary>
@@ -278,8 +355,33 @@ namespace PBAndJ.Mod.Net
                 "turn=" + turn,
                 "simulating=" + combat.Simulating,
                 "session=" + NetStatusShort(),
+                // The launch splash — logos, then the seizure warning. It sits
+                // OVER the main menu while the game already reports
+                // state=mainmenu, so a script that treats that state as "ready"
+                // drives commands into a game whose intro has not finished. A
+                // load sent into that gap succeeds and then the pending intro
+                // drops CIViewPauseRoot on top of the loaded battle, which no
+                // other field here can see.
+                "splash=" + (CIViewSplashScreen.ins != null
+                    && CIViewSplashScreen.ins.IsEntered()),
+                // ⚠️ WAIT ON THIS ONE, NOT ON splash. `splash` is false twice —
+                // before the view enters as well as after it leaves — so a poll
+                // that starts early passes instantly and drives a game that has
+                // not finished starting. The title menu going up is monotonic
+                // in the direction that matters, and it is what the splash is
+                // holding back.
+                "menu=" + (CIViewPauseRoot.ins != null
+                    && CIViewPauseRoot.ins.IsEntered() && CIViewPauseRoot.ins.mainMode),
                 "patched=" + PatchedMethodCount(),
                 "canSave=" + SafeCanSave(),
+                // M8. A script must never commit a turn while a window is
+                // still playing — the units are asleep and their animators are
+                // off until the unwind runs, and the only lever that would let
+                // it happen anyway is the barrier bypass this rig already knows
+                // not to use.
+                "replay=" + (KeyframePlayer.IsPlaying
+                    ? "turn" + KeyframePlayer.Turn + "/" + KeyframePlayer.PosedUnits + "posed"
+                    : "idle"),
             });
         }
 
@@ -335,6 +437,7 @@ namespace PBAndJ.Mod.Net
         internal static void RegisterConsoleCommands()
         {
             Add(nameof(Execute), "pbj.execute");
+            Add(nameof(SelectUnit), new[] { typeof(int) }, "pbj.select-unit");
             Add(nameof(BriefingDeploy), "pbj.briefing-deploy");
             Add(nameof(DialogConfirm), "pbj.dialog-confirm");
             Add(nameof(NavWorld), "pbj.nav-world");
@@ -345,8 +448,13 @@ namespace PBAndJ.Mod.Net
 
         private static void Add(string methodName, string command)
         {
+            Add(methodName, new Type[0], command);
+        }
+
+        private static void Add(string methodName, Type[] parameters, string command)
+        {
             var method = typeof(ActuatorGlue).GetMethod(
-                methodName, BindingFlags.Static | BindingFlags.Public, null, new Type[0], null);
+                methodName, BindingFlags.Static | BindingFlags.Public, null, parameters, null);
             QuantumConsoleProcessor.TryAddCommand(new CommandData(method, command));
         }
     }
