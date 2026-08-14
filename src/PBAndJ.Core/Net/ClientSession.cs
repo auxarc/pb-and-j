@@ -41,6 +41,7 @@ namespace PBAndJ.Core.Net
         private static readonly string[] NoUnits = new string[0];
         private static readonly LobbyPeerState[] NoLobbyPeers = new LobbyPeerState[0];
 
+        private readonly PoseBuffer poses = new PoseBuffer();
         private readonly IPbjGameBridge bridge;
         private readonly string playerName;
         private readonly string modVersion;
@@ -475,6 +476,7 @@ namespace PBAndJ.Core.Net
                     OwnedUnits = NoUnits;
                     submittedThisTurn = false;
                     effects.Add(new LogEffect(NetLog.CombatEndedByHost()));
+                    poses.Clear();
                     effects.Add(new StopKeyframesEffect());
                     effects.Add(new SetExecutionLockEffect(false));
                     break;
@@ -494,6 +496,12 @@ namespace PBAndJ.Core.Net
 
                 case SnapshotMessage snapshot:
                     HandleSnapshot(snapshot, effects);
+                    break;
+
+                // M8. Poses precede the keyframes that terminate them, so this
+                // only ever accumulates — nothing here decides to play.
+                case PosesMessage posesPart:
+                    poses.Accept(posesPart);
                     break;
 
                 case KeyframesMessage keyframes:
@@ -538,6 +546,7 @@ namespace PBAndJ.Core.Net
                     effects.Add(new LogEffect(NetLog.PeerLeft(
                         PbjPeerRegistry.HostPeerId, HostName, Describe(bye.Reason))));
                     State = ClientSessionState.Closed;
+                    poses.Clear();
                     effects.Add(new StopKeyframesEffect());
                     effects.Add(new SetExecutionLockEffect(false));
                     break;
@@ -897,8 +906,20 @@ namespace PBAndJ.Core.Net
             effects.Add(new LogEffect(NetLog.KeyframesReceived(
                 keyframes.Turn, keyframes.Tracks.Count, keyCount,
                 keyframes.WindowStart, keyframes.WindowEnd)));
+
+            // The terminator. Whatever poses are held now are all there will
+            // ever be for this turn, so the decision can be made here and needs
+            // no deadline: an ordered stream and a single send site mean an
+            // incomplete set is a host that never finished sending one.
+            var held = poses.PartsHeld;
+            var expected = poses.PartsExpected;
+            var posed = poses.Take(keyframes.Turn);
+            effects.Add(new LogEffect(posed.Count > 0
+                ? NetLog.PosesReceived(keyframes.Turn, posed.Count)
+                : NetLog.PosesIncomplete(keyframes.Turn, held, expected)));
+
             effects.Add(new PlayKeyframesEffect(keyframes.Turn, new KeyframeCapture(
-                keyframes.WindowStart, keyframes.WindowEnd, keyframes.Tracks)));
+                keyframes.WindowStart, keyframes.WindowEnd, keyframes.Tracks, posed)));
         }
 
         /// <summary>
@@ -1082,7 +1103,11 @@ namespace PBAndJ.Core.Net
             State = ClientSessionState.Faulted;
             // A faulted session handles nothing further, so a playback left
             // running here would never be stopped by anything else — units would
-            // slide along last turn's path into single-player.
+            // slide along last turn's path into single-player. The held poses go
+            // with it: nothing will ever send the terminator that would consume
+            // them, and a fault is followed by a rejoin often enough that
+            // leaving them is a real hazard rather than a tidy-up.
+            poses.Clear();
             effects.Add(new StopKeyframesEffect());
             // A lost host must never leave the local execute button disabled —
             // the player continues single-player from here.

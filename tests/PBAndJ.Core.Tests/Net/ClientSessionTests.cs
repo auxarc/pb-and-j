@@ -881,6 +881,135 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(turn, client.Turn);
         }
 
+        // --- poses (M8) ---
+
+        private static PosesMessage Pose(int turn, int index, int count, string unit) =>
+            new PosesMessage(turn, index, count, new UnitPoseTrack(unit, new[] { "j" }, new[]
+            {
+                new PoseKey(15f, false, false, new[] { new JointPose(default, default) }),
+                new PoseKey(17f, true, false, new[] { new JointPose(default, default) }),
+                new PoseKey(20f, false, true, new[] { new JointPose(default, default) }),
+            }));
+
+        [Fact]
+        public void Poses_ArrivingBeforeTheKeyframes_ReachPlaybackWithThem()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Pose(3, 0, 1, "unit_b"));
+
+            var play = Single<PlayKeyframesEffect>(
+                client.HandleMessage(ClientSession.HostConnectionId, Motion()));
+
+            Assert.Equal("unit_b", Assert.Single(play.Capture.Poses).Name);
+        }
+
+        // Poses accumulate and decide nothing. Playback begins on the
+        // terminator, because a unit slept for replay while its pose has not
+        // landed is a rigid statue, which is worse than M6's slide rather than
+        // equal to it.
+        [Fact]
+        public void Poses_AloneStartNoPlayback()
+        {
+            var effects = Welcomed().HandleMessage(
+                ClientSession.HostConnectionId, Pose(3, 0, 1, "unit_b"));
+
+            Assert.Empty(All<PlayKeyframesEffect>(effects));
+        }
+
+        [Fact]
+        public void Poses_ThatNeverCompleted_FallBackToTransformOnly()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Pose(3, 0, 3, "unit_b"));
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, Motion());
+
+            Assert.Empty(Single<PlayKeyframesEffect>(effects).Capture.Poses);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("poses incomplete"));
+        }
+
+        [Fact]
+        public void Poses_ThatCompleted_AreReported()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Pose(3, 0, 1, "unit_b"));
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, Motion());
+
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("poses complete"));
+        }
+
+        [Fact]
+        public void Poses_ForADifferentTurnThanTheKeyframes_AreNotPlayed()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Pose(2, 0, 1, "unit_b"));
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, Motion(3));
+
+            Assert.Empty(Single<PlayKeyframesEffect>(effects).Capture.Poses);
+        }
+
+        // The trap this design nearly walked into. TurnComplete travels ahead of
+        // the poses and advances the session's own turn, so parts labelled T
+        // always arrive while the session already reads T+1. Anything comparing
+        // against session state would discard every part of every turn, and the
+        // only symptom would be that poses silently never appear.
+        [Fact]
+        public void Poses_ArrivingAfterTurnCompleteHasAdvancedTheTurn_StillPlay()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, new TurnCompleteMessage(3, "d"));
+            Assert.Equal(4, client.Turn);
+
+            client.HandleMessage(ClientSession.HostConnectionId, Pose(3, 0, 1, "unit_b"));
+            var play = Single<PlayKeyframesEffect>(
+                client.HandleMessage(ClientSession.HostConnectionId, Motion(3)));
+
+            Assert.Single(play.Capture.Poses);
+        }
+
+        [Fact]
+        public void Poses_HeldWhenCombatEnds_AreForgotten()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Pose(3, 0, 1, "unit_b"));
+            client.HandleMessage(ClientSession.HostConnectionId, new CombatEndMessage());
+
+            var play = Single<PlayKeyframesEffect>(
+                client.HandleMessage(ClientSession.HostConnectionId, Motion()));
+
+            Assert.Empty(play.Capture.Poses);
+        }
+
+        // Bye and a fault both drop the held poses too, but neither can be
+        // asserted the way the CombatEnd case above is: those two end the
+        // session, so nothing afterwards is handled at all and no later playback
+        // exists to inspect. The clearing is memory hygiene there rather than
+        // correctness — a quarter of a megabyte per turn, held by a session that
+        // will never be spoken to again. What is worth pinning is that the
+        // session really has gone inert, since that is the premise.
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void Poses_AfterTheSessionEnds_CanReachNoPlaybackAtAll(bool byGoodbye)
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Pose(3, 0, 1, "unit_b"));
+
+            if (byGoodbye)
+            {
+                client.HandleMessage(ClientSession.HostConnectionId, new ByeMessage("done"));
+            }
+            else
+            {
+                client.Handle(new TransportFailedEvent("socket died"));
+            }
+
+            Assert.Empty(All<PlayKeyframesEffect>(
+                client.HandleMessage(ClientSession.HostConnectionId, Motion())));
+        }
+
         // A turn ending, a host vanishing or a session closing all leave a
         // playback mid-flight. Each one has to stop it, or units keep sliding
         // through whatever comes next.

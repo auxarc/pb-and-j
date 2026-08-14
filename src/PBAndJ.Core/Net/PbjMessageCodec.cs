@@ -50,6 +50,54 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public const int MaxKeysPerTrack = 192;
 
+        /// <summary>
+        /// Cap on joints in one <see cref="PoseKey"/>.
+        /// </summary>
+        /// <remarks>
+        /// Measured mech skeletons carry 26, identically across every loadout
+        /// sampled; tanks carry 3. Sixty-four leaves room for a legged frame
+        /// whose joint list grows with its leg count without leaving the bound
+        /// below meaningless.
+        /// </remarks>
+        public const int MaxJointsPerPose = 64;
+
+        /// <summary>Cap on pose keys in one <see cref="UnitPoseTrack"/>.</summary>
+        /// <remarks>
+        /// Matches <see cref="MaxKeysPerTrack"/>: poses and transforms come off
+        /// the same sampler, so the same bound describes both. Note this is a
+        /// real bound and not a comfortable one — the sampling interval is a
+        /// player-facing setting with a 0.016 s floor, which puts a five-second
+        /// turn past three hundred keys. <see cref="PoseTracks.Thin"/> is what
+        /// keeps that a repair rather than a dropped peer.
+        /// </remarks>
+        public const int MaxPoseKeysPerTrack = 192;
+
+        /// <summary>
+        /// Cap on the parts one turn's poses may split into.
+        /// </summary>
+        /// <remarks>
+        /// One part per unit, so this mirrors <see cref="MaxTracksPerKeyframes"/>
+        /// for the same reason it mirrors <see cref="MaxUnitsPerSnapshot"/>.
+        /// Enforced at decode because a client sizes its accumulator from it: an
+        /// unvalidated count off the wire is an allocation a peer chooses for us.
+        /// </remarks>
+        public const int MaxPosePartsPerTurn = 128;
+
+        /// <summary>
+        /// Longest unit or joint name a pose track may carry, in characters.
+        /// </summary>
+        /// <remarks>
+        /// Far below <see cref="PbjWriter.MaxStringLength"/>, and deliberately
+        /// counted in characters so that even all-multi-byte text stays inside
+        /// it — 128 characters cannot exceed 512 UTF-8 bytes. That margin is the
+        /// point: <c>PbjWriter</c> <i>throws</i> above its own limit, and
+        /// <c>PbjRuntime.SendTo</c> encodes outside its try block, so a name
+        /// that oversteps would not fail the message, it would empty the effect
+        /// pump behind it. Capping here means encode cannot be the place it is
+        /// discovered.
+        /// </remarks>
+        public const int MaxPoseNameLength = 128;
+
         public static byte[] Encode(PbjMessage message)
         {
             if (message == null)
@@ -193,6 +241,13 @@ namespace PBAndJ.Core.Net
                             WriteTransformKey(writer, track.Transforms[k]);
                         }
                     }
+                    break;
+
+                case PosesMessage poses:
+                    writer.WriteInt32(poses.Turn);
+                    writer.WriteInt32(poses.PartIndex);
+                    writer.WriteInt32(poses.PartCount);
+                    WriteUnitPoseTrack(writer, poses.Track);
                     break;
 
                 case ScenarioOfferMessage offer:
@@ -441,6 +496,14 @@ namespace PBAndJ.Core.Net
                     return new KeyframesMessage(turn, windowStart, windowEnd, tracks);
                 }
 
+                case PbjMessageType.Poses:
+                {
+                    var turn = reader.ReadInt32();
+                    var partIndex = reader.ReadInt32();
+                    var partCount = ReadCount(reader, MaxPosePartsPerTurn, "pose part");
+                    return new PosesMessage(turn, partIndex, partCount, ReadUnitPoseTrack(reader));
+                }
+
                 case PbjMessageType.ScenarioOffer:
                 {
                     var saveName = reader.ReadString();
@@ -585,6 +648,81 @@ namespace PBAndJ.Core.Net
                 reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()));
         }
 
+        private static void WriteUnitPoseTrack(PbjWriter writer, UnitPoseTrack? track)
+        {
+            // A null track is a real shape rather than a defect: it is what a
+            // decoded part carrying no unit reads back as, and encode has to be
+            // able to reproduce whatever decode can produce or the round-trip
+            // tests are asserting on a narrower type than the wire admits.
+            var joints = track == null ? EmptyNames : track.Joints;
+            var keys = track == null ? NoPoseKeys : track.Keys;
+
+            writer.WriteString(track?.Name);
+            writer.WriteInt32(joints.Count);
+            for (var i = 0; i < joints.Count; i++)
+            {
+                writer.WriteString(joints[i]);
+            }
+
+            writer.WriteInt32(keys.Count);
+            for (var k = 0; k < keys.Count; k++)
+            {
+                var key = keys[k];
+                writer.WriteSingle(key.Time);
+                writer.WriteBool(key.SyncLeftEquipment);
+                writer.WriteBool(key.SyncRightEquipment);
+                writer.WriteInt32(key.Joints.Count);
+                for (var j = 0; j < key.Joints.Count; j++)
+                {
+                    WriteVec3(writer, key.Joints[j].Position);
+                    var rotation = key.Joints[j].Rotation;
+                    writer.WriteSingle(rotation.X);
+                    writer.WriteSingle(rotation.Y);
+                    writer.WriteSingle(rotation.Z);
+                    writer.WriteSingle(rotation.W);
+                }
+            }
+        }
+
+        private static UnitPoseTrack ReadUnitPoseTrack(PbjReader reader)
+        {
+            var name = reader.ReadString();
+
+            var jointCount = ReadCount(reader, MaxJointsPerPose, "joint");
+            var joints = new string?[jointCount];
+            for (var i = 0; i < jointCount; i++)
+            {
+                joints[i] = reader.ReadString();
+            }
+
+            var keyCount = ReadCount(reader, MaxPoseKeysPerTrack, "pose key");
+            var keys = new PoseKey[keyCount];
+            for (var k = 0; k < keyCount; k++)
+            {
+                var time = reader.ReadSingle();
+                var syncLeft = reader.ReadBool();
+                var syncRight = reader.ReadBool();
+
+                // Bounded by the same cap as the name list, not by that list's
+                // own length: a track whose keys disagree with its names is
+                // malformed, but it is the sender's fault and not a reason to
+                // drop the peer mid-fight. PoseTracks rejects the disagreement
+                // where it can be reported, and the array stays bounded here.
+                var poseJointCount = ReadCount(reader, MaxJointsPerPose, "pose joint");
+                var poseJoints = new JointPose[poseJointCount];
+                for (var j = 0; j < poseJointCount; j++)
+                {
+                    poseJoints[j] = new JointPose(ReadVec3(reader), new Vec4(
+                        reader.ReadSingle(), reader.ReadSingle(),
+                        reader.ReadSingle(), reader.ReadSingle()));
+                }
+
+                keys[k] = new PoseKey(time, syncLeft, syncRight, poseJoints);
+            }
+
+            return new UnitPoseTrack(name, joints!, keys);
+        }
+
         private static void WriteVec3(PbjWriter writer, Vec3 value)
         {
             writer.WriteSingle(value.X);
@@ -596,6 +734,9 @@ namespace PBAndJ.Core.Net
         {
             return new Vec3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
         }
+
+        private static readonly string[] EmptyNames = new string[0];
+        private static readonly PoseKey[] NoPoseKeys = new PoseKey[0];
 
         private static int ReadCount(PbjReader reader, int max, string what)
         {

@@ -434,6 +434,61 @@ namespace PBAndJ.Core.Net
                 captured, cap, thinned);
         }
 
+        // --- poses (M8) ---
+
+        public static string PosesSent(int turn, int partCount, int peerCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} poses | {1} unit track{2} | broadcast to {3} peer{4}",
+                turn, partCount, Plural(partCount), peerCount, Plural(peerCount));
+        }
+
+        /// <summary>
+        /// The turn plays with skeletal animation.
+        /// </summary>
+        public static string PosesReceived(int turn, int trackCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} poses complete | {1} unit track{2} | playing the battle",
+                turn, trackCount, Plural(trackCount));
+        }
+
+        /// <summary>
+        /// The turn falls back to M6's transform-only playback.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately logged every time rather than only on the interesting
+        /// arm. A turn that slides instead of walking is the one symptom a
+        /// player can see and cannot explain, and "poses 3 of 8" is the
+        /// difference between a bug report and a diagnosis. The wording says
+        /// what the player is looking at, not what the code did.
+        /// </remarks>
+        public static string PosesIncomplete(int turn, int held, int expected)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} poses incomplete — {1} of {2} arrived | units will slide, not walk",
+                turn, held, expected);
+        }
+
+        /// <summary>
+        /// The host could not put this turn's poses on the wire at all.
+        /// </summary>
+        /// <remarks>
+        /// Names the whole turn, because that is the unit of the decision: one
+        /// unrepairable track demotes every unit to sliding rather than leaving
+        /// one statue among walkers.
+        /// </remarks>
+        public static string PosesUnsendable(int turn, PoseTrackFault fault, string? unit)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} poses dropped: {1} on '{2}' — the whole turn plays transform-only",
+                turn, fault, unit ?? "(unnamed)");
+        }
+
         // --- scenario transfer (M9) ---
 
         public static string ScenarioOffered(int peerId, string? saveName, int totalBytes, string? digest)
