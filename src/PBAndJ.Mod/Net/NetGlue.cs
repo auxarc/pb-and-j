@@ -816,11 +816,6 @@ namespace PBAndJ.Mod.Net
             // never answered. Goes with ReplayProbeGlue.
             ReplayProbeGlue.SampleDuringPlayback();
 
-            // THROWAWAY (M14 recon) — drives one standalone effect's
-            // SampleForReplay from here so the spike runs on exactly the seam
-            // M14's playback would. Goes with TimeSimProbeGlue.
-            TimeSimProbeGlue.Advance(Time.unscaledDeltaTime);
-
             // Also outside the session guard: the connect screen exists in order
             // to start a session, so it must run when there is none.
             ConnectScreenGlue.Tick();
