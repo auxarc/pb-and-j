@@ -39,6 +39,7 @@ namespace PBAndJ.Peer
                 ("backpressure", RunBackpressure),
                 ("reconnect", RunReconnect),
                 ("keyframe stream", RunKeyframeStream),
+                ("pose fallbacks", RunPoseFallbacks),
                 ("remote guards", RunRemoteGuards),
                 ("scenario transfer", RunScenarioTransfer),
                 ("lobby barrier", RunLobbyBarrier),
@@ -641,7 +642,17 @@ namespace PBAndJ.Peer
                         new TransformKey(windowEnd, unit.Position, unit.Rotation),
                     }));
                 }
-                hostBridge.Keyframes = new KeyframeCapture(windowStart, windowEnd, tracks);
+                // M8's poses ride the same capture. They are a separate wire
+                // message split one part per unit, and until this leg existed
+                // nothing outside the game exercised that split at all — the
+                // gate would have passed with the whole pose path broken.
+                var poseTracks = new List<UnitPoseTrack>();
+                for (var i = 0; i < hostBridge.Units.Count; i++)
+                {
+                    poseTracks.Add(BuildPoseTrack(
+                        hostBridge.Units[i].Name, i + 1, windowStart, windowEnd, keyCount: 4, jointCount: 3));
+                }
+                hostBridge.Keyframes = new KeyframeCapture(windowStart, windowEnd, tracks, poseTracks);
 
                 var hostDigest = hostBridge.ComputeStateDigest();
                 var snapshot = hostBridge.CaptureSnapshot();
@@ -695,6 +706,92 @@ namespace PBAndJ.Peer
                     }
                 }
                 Console.WriteLine($"[selftest] OK   {played.Tracks.Count} tracks survived the wire key for key");
+
+                // The ordering proof, and the reason this assertion sits here
+                // rather than in a wait of its own. The poses are already inside
+                // the capture the terminator built, so they must have arrived
+                // and been reassembled BEFORE the Keyframes message landed. Were
+                // the send order reversed, the buffer would be empty at the
+                // terminator and every part after it would be an orphan the
+                // client can never resolve — and the count assertion below is
+                // what makes that visible instead of silent.
+                if (played.Poses.Count != poseTracks.Count)
+                {
+                    Console.WriteLine(
+                        $"[selftest] FAIL expected {poseTracks.Count} pose tracks reassembled, " +
+                        $"got {played.Poses.Count}");
+                    return 1;
+                }
+
+                for (var i = 0; i < poseTracks.Count; i++)
+                {
+                    var sent = poseTracks[i];
+                    UnitPoseTrack? got = null;
+                    foreach (var candidate in played.Poses)
+                    {
+                        if (candidate.Name == sent.Name)
+                        {
+                            got = candidate;
+                        }
+                    }
+                    if (got == null)
+                    {
+                        Console.WriteLine($"[selftest] FAIL no pose track arrived for {sent.Name}");
+                        return 1;
+                    }
+                    if (!SamePoseTrack(sent, got, out var why))
+                    {
+                        Console.WriteLine($"[selftest] FAIL pose track {sent.Name} {why}");
+                        return 1;
+                    }
+                }
+                Console.WriteLine(
+                    $"[selftest] OK   {played.Poses.Count} pose tracks reassembled, joint for joint");
+
+                // The sampler, on the data that actually crossed. Clamped at the
+                // window's end to the final key, which is the pose invariant that
+                // matches the transform one above: playback finishes in the pose
+                // the host finished in, not part-way through a stride.
+                var posed = played.Poses[0];
+                if (!KeyframePlayback.TryBracket(posed, windowEnd, out var atEnd))
+                {
+                    Console.WriteLine("[selftest] FAIL the reassembled pose track would not bracket");
+                    return 1;
+                }
+                var finalKey = posed.Keys[posed.Keys.Count - 1];
+                KeyframePlayback.SampleJoint(atEnd, 0, out var jointEnd, out _);
+                if (atEnd.T != 0f
+                    || jointEnd.X != finalKey.Joints[0].Position.X
+                    || jointEnd.Y != finalKey.Joints[0].Position.Y
+                    || jointEnd.Z != finalKey.Joints[0].Position.Z
+                    || atEnd.SyncLeftEquipment != finalKey.SyncLeftEquipment
+                    || atEnd.SyncRightEquipment != finalKey.SyncRightEquipment)
+                {
+                    Console.WriteLine("[selftest] FAIL the pose at the window's end is not the final key");
+                    return 1;
+                }
+
+                // And it interpolates rather than clamping everywhere, which is
+                // the failure the check above cannot see on its own: a bracket
+                // that always returned an endpoint would satisfy it and animate
+                // nothing.
+                var midway = (posed.Keys[0].Time + posed.Keys[1].Time) / 2f;
+                if (!KeyframePlayback.TryBracket(posed, midway, out var atMid)
+                    || atMid.T <= 0f || atMid.T >= 1f)
+                {
+                    Console.WriteLine("[selftest] FAIL a mid-span pose bracketed to an endpoint");
+                    return 1;
+                }
+                KeyframePlayback.SampleJoint(atMid, 0, out var jointMid, out _);
+                var low = posed.Keys[0].Joints[0].Position.X;
+                var high = posed.Keys[1].Joints[0].Position.X;
+                if (jointMid.X <= low || jointMid.X >= high)
+                {
+                    Console.WriteLine(
+                        $"[selftest] FAIL a joint sampled mid-span reads {jointMid.X}, outside ({low}, {high})");
+                    return 1;
+                }
+                Console.WriteLine("[selftest] OK   poses clamp to the final key and interpolate between");
 
                 // The load-bearing assertion: sampling at the end of the window
                 // reproduces the snapshot exactly, so playback finishes where the
@@ -778,6 +875,405 @@ namespace PBAndJ.Peer
                 client.Stop();
                 host.Stop();
             }
+        }
+
+        /// <summary>
+        /// The three ways a turn's poses fail, and what each one costs.
+        /// </summary>
+        /// <remarks>
+        /// Its own scenario rather than more of <see cref="RunKeyframeStream"/>
+        /// because each arm needs a whole executed turn of its own, and because
+        /// a failure here means something different: the happy path proves poses
+        /// arrive, this proves the host decides correctly when they cannot.
+        /// <para>
+        /// Every arm is invisible from inside the game. An over-cap track does
+        /// not look wrong, it makes the receiver reject the frame and drop the
+        /// host — silently, every turn. A dropped track and a demoted turn both
+        /// just look like units sliding. So the ordering is deliberate: the
+        /// over-cap turn goes first and two more turns follow it, which is what
+        /// proves the peer survived it rather than merely that one message
+        /// decoded.
+        /// </para>
+        /// <para>
+        /// One shape is deliberately absent. An <i>incomplete</i> set — parts
+        /// sent that never arrive — cannot be staged here, because TCP does not
+        /// lose them and there is one send site. It is reachable only from a
+        /// host that stopped mid-burst, and the client's response to it (fall
+        /// back, log the count) is unit-tested on <c>PoseBuffer</c> directly.
+        /// </para>
+        /// </remarks>
+        private static int RunPoseFallbacks()
+        {
+            var hostBridge = new ScriptedGameBridge { CurrentTurn = 3 };
+            var hostMailbox = new PbjMailbox(4096);
+            var hostTransport = new TcpHostTransport(hostMailbox, IPAddress.Loopback, 0);
+            hostTransport.Start();
+            var hostSession = new HostSession("host", "selftest", 3, hostBridge, "secret", SessionRequirements.None);
+            var hostLog = new PrefixedLog("host");
+            var host = new PbjRuntime(hostTransport, hostBridge, hostLog, hostMailbox, hostSession);
+
+            var clientBridge = new ScriptedGameBridge { CurrentTurn = 3 };
+            var clientMailbox = new PbjMailbox(4096);
+            var clientTransport = new TcpClientTransport(clientMailbox);
+            var clientSession = new ClientSession("ally", "0.2.0", clientBridge);
+            var client = new PbjRuntime(
+                clientTransport, clientBridge, new PrefixedLog("ally"), clientMailbox, clientSession);
+
+            var clock = Stopwatch.StartNew();
+            double Now() => clock.Elapsed.TotalSeconds;
+
+            bool WaitFor(string what, Func<bool> condition)
+            {
+                var deadline = Now() + TimeoutSeconds;
+                while (Now() < deadline)
+                {
+                    host.Pump(Now());
+                    client.Pump(Now());
+                    if (condition())
+                    {
+                        Console.WriteLine($"[selftest] OK   {what}");
+                        return true;
+                    }
+                    Thread.Sleep(5);
+                }
+                Console.WriteLine($"[selftest] FAIL {what}");
+                return false;
+            }
+
+            const float windowStart = 0f;
+            const float windowEnd = 5f;
+
+            // Transform tracks are the constant across all three turns, and they
+            // have to be present: poses ride inside the host's
+            // Tracks.Count > 0 guard, so a turn with no transforms sends no
+            // poses at all and would prove nothing about the fault paths.
+            List<UnitTrack> Transforms()
+            {
+                var tracks = new List<UnitTrack>();
+                foreach (var unit in hostBridge.Units)
+                {
+                    tracks.Add(new UnitTrack(unit.Name, new[]
+                    {
+                        new TransformKey(windowStart, unit.Position, unit.Rotation),
+                        new TransformKey(windowEnd, unit.Position, unit.Rotation),
+                    }));
+                }
+                return tracks;
+            }
+
+            bool DriveTurn(string what, int label, IReadOnlyList<UnitPoseTrack> poses)
+            {
+                client.Post(new LocalReadyEvent());
+                host.Post(new LocalReadyEvent());
+                if (!WaitFor($"{what}: turn {label} began executing",
+                        () => hostSession.State == HostSessionState.Executing))
+                {
+                    return false;
+                }
+
+                hostBridge.Keyframes = new KeyframeCapture(windowStart, windowEnd, Transforms(), poses);
+                host.Post(new LocalTurnCompleteEvent(
+                    hostBridge.ComputeStateDigest(),
+                    hostBridge.CaptureSnapshot(),
+                    hostBridge.CaptureKeyframes()));
+
+                return WaitFor($"{what}: turn {label} reached the client",
+                    () => clientBridge.PlayedTurn == label);
+            }
+
+            try
+            {
+                clientTransport.Connect("127.0.0.1", hostTransport.Port);
+                if (!WaitFor("handshake completed",
+                        () => clientSession.State == ClientSessionState.Planning && hostSession.Peers.Count == 1))
+                {
+                    return 1;
+                }
+
+                // --- turn 3: a track past the key cap is thinned, not dropped.
+                // The sampling interval is a player-facing setting with a
+                // 0.016 s floor, so a five-second turn really does record past
+                // three hundred keys on a host that only moved a slider.
+                var overCap = new List<UnitPoseTrack>
+                {
+                    BuildPoseTrack(hostBridge.Units[0].Name, 1, windowStart, windowEnd, 300, 3),
+                    BuildPoseTrack(hostBridge.Units[1].Name, 2, windowStart, windowEnd, 4, 3),
+                    BuildPoseTrack(hostBridge.Units[2].Name, 3, windowStart, windowEnd, 4, 3),
+                };
+                if (!DriveTurn("over-cap", 3, overCap))
+                {
+                    return 1;
+                }
+
+                var played = clientBridge.Played!;
+                if (played.Poses.Count != 3)
+                {
+                    Console.WriteLine(
+                        $"[selftest] FAIL thinning lost tracks: {played.Poses.Count} of 3 arrived");
+                    return 1;
+                }
+
+                var thinned = FindPose(played.Poses, hostBridge.Units[0].Name);
+                var original = overCap[0];
+                if (thinned == null || thinned.Keys.Count != PbjMessageCodec.MaxPoseKeysPerTrack)
+                {
+                    Console.WriteLine(
+                        $"[selftest] FAIL the over-cap track arrived with {thinned?.Keys.Count} keys, "
+                        + $"not {PbjMessageCodec.MaxPoseKeysPerTrack}");
+                    return 1;
+                }
+
+                var lastSent = original.Keys[original.Keys.Count - 1];
+                var lastGot = thinned.Keys[thinned.Keys.Count - 1];
+                if (thinned.Keys[0].Time != original.Keys[0].Time
+                    || lastGot.Time != lastSent.Time
+                    || lastGot.Joints[0].Position.X != lastSent.Joints[0].Position.X)
+                {
+                    Console.WriteLine("[selftest] FAIL thinning did not keep both endpoints");
+                    return 1;
+                }
+                Console.WriteLine(
+                    $"[selftest] OK   300 keys thinned to {thinned.Keys.Count}, both endpoints intact");
+
+                // --- turn 4: a track too short to animate is dropped alone.
+                // The host's own replay gates its pose block on more than two
+                // keys, so skipping it shows the client exactly what the host
+                // shows — which is why this one fault is per-track.
+                var oneShort = new List<UnitPoseTrack>
+                {
+                    BuildPoseTrack(hostBridge.Units[0].Name, 1, windowStart, windowEnd, 4, 3),
+                    BuildPoseTrack(hostBridge.Units[1].Name, 2, windowStart, windowEnd, 2, 3),
+                    BuildPoseTrack(hostBridge.Units[2].Name, 3, windowStart, windowEnd, 4, 3),
+                };
+                if (!DriveTurn("one short track", 4, oneShort))
+                {
+                    return 1;
+                }
+
+                played = clientBridge.Played!;
+                if (played.Poses.Count != 2
+                    || FindPose(played.Poses, hostBridge.Units[1].Name) != null
+                    || FindPose(played.Poses, hostBridge.Units[0].Name) == null
+                    || FindPose(played.Poses, hostBridge.Units[2].Name) == null)
+                {
+                    Console.WriteLine(
+                        $"[selftest] FAIL a two-key track should be dropped alone, "
+                        + $"but {played.Poses.Count} of 3 arrived");
+                    return 1;
+                }
+                if (played.Tracks.Count != 3)
+                {
+                    Console.WriteLine("[selftest] FAIL dropping a pose track disturbed the transform tracks");
+                    return 1;
+                }
+                Console.WriteLine("[selftest] OK   the unanimatable track alone was dropped");
+
+                // --- turn 5: one unrepairable track demotes the whole turn.
+                // All-or-nothing on purpose: one statue among walking mechs
+                // reads as a broken game, where everyone sliding reads as the
+                // lower-fidelity mode it is.
+                var raggedSource = BuildPoseTrack(
+                    hostBridge.Units[1].Name, 2, windowStart, windowEnd, 4, 3);
+                var raggedKeys = new List<PoseKey>(raggedSource.Keys);
+                raggedKeys[2] = new PoseKey(raggedKeys[2].Time, true, true, new[]
+                {
+                    new JointPose(new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f)),
+                });
+                var ragged = new List<UnitPoseTrack>
+                {
+                    BuildPoseTrack(hostBridge.Units[0].Name, 1, windowStart, windowEnd, 4, 3),
+                    new UnitPoseTrack(raggedSource.Name, raggedSource.Joints, raggedKeys),
+                    BuildPoseTrack(hostBridge.Units[2].Name, 3, windowStart, windowEnd, 4, 3),
+                };
+                if (!DriveTurn("one ragged track", 5, ragged))
+                {
+                    return 1;
+                }
+
+                played = clientBridge.Played!;
+                if (played.Poses.Count != 0)
+                {
+                    Console.WriteLine(
+                        $"[selftest] FAIL a ragged track should demote the whole turn, "
+                        + $"but {played.Poses.Count} tracks still played");
+                    return 1;
+                }
+                if (played.Tracks.Count != 3)
+                {
+                    Console.WriteLine("[selftest] FAIL the demoted turn lost its transform tracks too");
+                    return 1;
+                }
+                if (!hostLog.Saw($"turn 5 poses dropped: {PoseTrackFault.Ragged}"))
+                {
+                    Console.WriteLine("[selftest] FAIL the demotion was never explained in the log");
+                    return 1;
+                }
+                Console.WriteLine("[selftest] OK   one ragged track demoted the turn, transforms intact");
+
+                // Three turns of pose faults and the session is still whole,
+                // which is the assertion the over-cap turn exists for.
+                if (clientSession.State != ClientSessionState.Planning || hostSession.Peers.Count != 1)
+                {
+                    Console.WriteLine("[selftest] FAIL the session did not survive the fault turns");
+                    return 1;
+                }
+                Console.WriteLine("[selftest] OK   the session survived every pose fault");
+
+                Console.WriteLine("[selftest] PASS");
+                return 0;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"[selftest] FAIL {e.GetType().Name}: {e.Message}");
+                return 1;
+            }
+            finally
+            {
+                client.Stop();
+                host.Stop();
+            }
+        }
+
+        private static UnitPoseTrack? FindPose(IReadOnlyList<UnitPoseTrack> tracks, string? name)
+        {
+            foreach (var track in tracks)
+            {
+                if (track.Name == name)
+                {
+                    return track;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// A synthetic pose track whose every value is distinct.
+        /// </summary>
+        /// <remarks>
+        /// Distinctness is the whole design of it. A codec that transposed two
+        /// joints, two keys or two tracks would round-trip a track built from
+        /// repeated values perfectly, and the wire assertions would pass while
+        /// the client put a mech's elbow on its knee.
+        /// <para>
+        /// The last joint name deliberately repeats the one before it. Duplicate
+        /// joint names are not a malformed input — a leg group appends its joints
+        /// per leg from cloned prefabs, so every multi-legged unit carries them —
+        /// and <see cref="PoseTracks.Remap"/> matches them ordinally. A harness
+        /// that only ever sent unique names would leave that untested.
+        /// </para>
+        /// <para>
+        /// Rotations come from the four axis-aligned unit quaternions rather than
+        /// from anything computed, because the sampler normalises: a rotation
+        /// that is only nearly unit-length would come back nearly equal, and this
+        /// scenario compares exactly.
+        /// </para>
+        /// </remarks>
+        private static UnitPoseTrack BuildPoseTrack(
+            string? name, int seed, float windowStart, float windowEnd, int keyCount, int jointCount)
+        {
+            var joints = new string[jointCount];
+            for (var j = 0; j < jointCount; j++)
+            {
+                joints[j] = j == jointCount - 1 && jointCount > 1
+                    ? joints[j - 1]
+                    : $"joint_{j}";
+            }
+
+            var keys = new PoseKey[keyCount];
+            for (var k = 0; k < keyCount; k++)
+            {
+                var time = keyCount > 1
+                    ? windowStart + ((windowEnd - windowStart) * k / (keyCount - 1f))
+                    : windowStart;
+
+                var poses = new JointPose[jointCount];
+                for (var j = 0; j < jointCount; j++)
+                {
+                    var v = (seed * 100f) + (k * 10f) + (j * 0.5f);
+                    poses[j] = new JointPose(
+                        new Vec3(v, v + 0.25f, v + 0.5f),
+                        UnitRotations[(k + j) % UnitRotations.Length]);
+                }
+
+                // Both flags vary, and independently: they pin the weapons to the
+                // palms, so a codec that dropped or conflated one bit would leave
+                // a rifle hanging in mid-air through the firing animation.
+                keys[k] = new PoseKey(time, k % 2 == 0, k >= keyCount / 2, poses);
+            }
+
+            return new UnitPoseTrack(name, joints, keys);
+        }
+
+        private static readonly Vec4[] UnitRotations =
+        {
+            new Vec4(0f, 0f, 0f, 1f),
+            new Vec4(0f, 1f, 0f, 0f),
+            new Vec4(1f, 0f, 0f, 0f),
+            new Vec4(0f, 0f, 1f, 0f),
+        };
+
+        /// <summary>
+        /// Whether a pose track came back exactly as it went out.
+        /// </summary>
+        private static bool SamePoseTrack(UnitPoseTrack sent, UnitPoseTrack got, out string why)
+        {
+            why = string.Empty;
+
+            if (got.Joints.Count != sent.Joints.Count)
+            {
+                why = $"arrived with {got.Joints.Count} joint names, not {sent.Joints.Count}";
+                return false;
+            }
+            for (var j = 0; j < sent.Joints.Count; j++)
+            {
+                if (got.Joints[j] != sent.Joints[j])
+                {
+                    why = $"joint name {j} became '{got.Joints[j]}', not '{sent.Joints[j]}'";
+                    return false;
+                }
+            }
+
+            if (got.Keys.Count != sent.Keys.Count)
+            {
+                why = $"arrived with {got.Keys.Count} keys, not {sent.Keys.Count}";
+                return false;
+            }
+            for (var k = 0; k < sent.Keys.Count; k++)
+            {
+                var a = sent.Keys[k];
+                var b = got.Keys[k];
+                if (a.Time != b.Time)
+                {
+                    why = $"key {k} is stamped {b.Time}, not {a.Time}";
+                    return false;
+                }
+                if (a.SyncLeftEquipment != b.SyncLeftEquipment
+                    || a.SyncRightEquipment != b.SyncRightEquipment)
+                {
+                    why = $"key {k} lost an equipment flag";
+                    return false;
+                }
+                if (b.Joints.Count != a.Joints.Count)
+                {
+                    why = $"key {k} arrived with {b.Joints.Count} joints, not {a.Joints.Count}";
+                    return false;
+                }
+                for (var j = 0; j < a.Joints.Count; j++)
+                {
+                    var from = a.Joints[j];
+                    var to = b.Joints[j];
+                    if (from.Position.X != to.Position.X || from.Position.Y != to.Position.Y
+                        || from.Position.Z != to.Position.Z
+                        || from.Rotation.X != to.Rotation.X || from.Rotation.Y != to.Rotation.Y
+                        || from.Rotation.Z != to.Rotation.Z || from.Rotation.W != to.Rotation.W)
+                    {
+                        why = $"key {k} joint {j} changed crossing the wire";
+                        return false;
+                    }
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
