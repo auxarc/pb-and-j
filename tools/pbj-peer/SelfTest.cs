@@ -40,6 +40,7 @@ namespace PBAndJ.Peer
                 ("reconnect", RunReconnect),
                 ("keyframe stream", RunKeyframeStream),
                 ("pose fallbacks", RunPoseFallbacks),
+                ("asset fallbacks", RunAssetFallbacks),
                 ("remote guards", RunRemoteGuards),
                 ("scenario transfer", RunScenarioTransfer),
                 ("lobby barrier", RunLobbyBarrier),
@@ -652,7 +653,16 @@ namespace PBAndJ.Peer
                     poseTracks.Add(BuildPoseTrack(
                         hostBridge.Units[i].Name, i + 1, windowStart, windowEnd, keyCount: 4, jointCount: 3));
                 }
-                hostBridge.Keyframes = new KeyframeCapture(windowStart, windowEnd, tracks, poseTracks);
+                // M14's effects ride the same capture and the same terminator.
+                // Three kinds in one part here — the split itself is exercised
+                // by the "asset fallbacks" scenario, which is where it can be
+                // driven past a part boundary without inventing a 65-effect
+                // turn in the middle of a motion test.
+                var assetCapture = BuildAssetCapture(
+                    seed: 1, windowStart, windowEnd,
+                    standaloneCount: 4, projectileCount: 2, beamCount: 2);
+                hostBridge.Keyframes = new KeyframeCapture(
+                    windowStart, windowEnd, tracks, poseTracks, assetCapture);
 
                 var hostDigest = hostBridge.ComputeStateDigest();
                 var snapshot = hostBridge.CaptureSnapshot();
@@ -792,6 +802,50 @@ namespace PBAndJ.Peer
                     return 1;
                 }
                 Console.WriteLine("[selftest] OK   poses clamp to the final key and interpolate between");
+
+                // M14, and the same ordering proof as the poses above: these are
+                // already inside the capture the terminator built, so they must
+                // have arrived and been reassembled before the Keyframes message
+                // landed.
+                if (!SameAssets(assetCapture, played.Assets, out var assetWhy))
+                {
+                    Console.WriteLine($"[selftest] FAIL replayed effects: {assetWhy}");
+                    return 1;
+                }
+                Console.WriteLine(
+                    $"[selftest] OK   {played.Assets.Standalone.Count} effects, "
+                    + $"{played.Assets.Projectiles.Count} projectiles and "
+                    + $"{played.Assets.Beams.Count} beams survived the wire field for field");
+
+                // The activation arithmetic, on the data that actually crossed.
+                // A point test here would look right and be wrong: a muzzle
+                // flash lives under a tenth of a second and a frame is a
+                // thirtieth, so a cursor sampled only at instants steps straight
+                // over effects the host showed. Both are checked, because it is
+                // the difference between them that is the design.
+                var flash = played.Assets.Standalone[0];
+                var brief = flash.Head.TimeStart + 0.001f;
+                if (ReplayAssetPlayback.PhaseAt(flash.Head.TimeStart, brief, flash.Head.TimeStart - 1f)
+                        != AssetTrackPhase.Pending
+                    || ReplayAssetPlayback.PhaseAt(flash.Head.TimeStart, brief, flash.Head.TimeStart)
+                        != AssetTrackPhase.Active
+                    || ReplayAssetPlayback.PhaseAt(flash.Head.TimeStart, brief, brief + 1f)
+                        != AssetTrackPhase.Expired)
+                {
+                    Console.WriteLine("[selftest] FAIL an effect's three phases are not distinguished");
+                    return 1;
+                }
+                if (ReplayAssetPlayback.IsActiveAt(flash.Head.TimeStart, brief, brief + 0.5f)
+                    || !ReplayAssetPlayback.CrossedDuring(
+                        flash.Head.TimeStart, brief, flash.Head.TimeStart - 0.5f, brief + 0.5f))
+                {
+                    Console.WriteLine(
+                        "[selftest] FAIL a sub-frame effect was stepped over — the interval test "
+                        + "degraded to a point test");
+                    return 1;
+                }
+                Console.WriteLine(
+                    "[selftest] OK   a sub-frame effect is caught by the interval test a point test misses");
 
                 // The load-bearing assertion: sampling at the end of the window
                 // reproduces the snapshot exactly, so playback finishes where the
@@ -1132,6 +1186,552 @@ namespace PBAndJ.Peer
                 client.Stop();
                 host.Stop();
             }
+        }
+
+        /// <summary>
+        /// A turn of effects too large for one part, and the ways one fails.
+        /// </summary>
+        /// <remarks>
+        /// The split is the half of M14 that no eyeball can check. A part
+        /// boundary off by one is not a wrong-looking effect, it is a turn the
+        /// client can never reassemble — so nothing fires, which looks exactly
+        /// like the feature not being built. Nothing outside this scenario
+        /// drives more than one part.
+        /// <para>
+        /// The dropping arm is the deliberate opposite of
+        /// <see cref="RunPoseFallbacks"/>'s: effects drop <b>per track</b> and
+        /// the rest of the turn plays. One impact missing from a turn's worth of
+        /// impacts is invisible — and is a shape the game's own pool exhaustion
+        /// produces anyway — where one unit sliding among walking ones reads as
+        /// a broken game.
+        /// </para>
+        /// </remarks>
+        private static int RunAssetFallbacks()
+        {
+            var hostBridge = new ScriptedGameBridge { CurrentTurn = 3 };
+            var hostMailbox = new PbjMailbox(4096);
+            var hostTransport = new TcpHostTransport(hostMailbox, IPAddress.Loopback, 0);
+            hostTransport.Start();
+            var hostSession = new HostSession("host", "selftest", 3, hostBridge, "secret", SessionRequirements.None);
+            var hostLog = new PrefixedLog("host");
+            var host = new PbjRuntime(hostTransport, hostBridge, hostLog, hostMailbox, hostSession);
+
+            var clientBridge = new ScriptedGameBridge { CurrentTurn = 3 };
+            var clientMailbox = new PbjMailbox(4096);
+            var clientTransport = new TcpClientTransport(clientMailbox);
+            var clientSession = new ClientSession("ally", "0.2.0", clientBridge);
+            var client = new PbjRuntime(
+                clientTransport, clientBridge, new PrefixedLog("ally"), clientMailbox, clientSession);
+
+            var clock = Stopwatch.StartNew();
+            double Now() => clock.Elapsed.TotalSeconds;
+
+            bool WaitFor(string what, Func<bool> condition)
+            {
+                var deadline = Now() + TimeoutSeconds;
+                while (Now() < deadline)
+                {
+                    host.Pump(Now());
+                    client.Pump(Now());
+                    if (condition())
+                    {
+                        Console.WriteLine($"[selftest] OK   {what}");
+                        return true;
+                    }
+                    Thread.Sleep(5);
+                }
+                Console.WriteLine($"[selftest] FAIL {what}");
+                return false;
+            }
+
+            const float windowStart = 0f;
+            const float windowEnd = 5f;
+
+            // Effects ride inside the host's Tracks.Count > 0 guard, so a turn
+            // with no transform tracks sends none of them and would prove
+            // nothing about any of the arms below.
+            List<UnitTrack> Transforms()
+            {
+                var tracks = new List<UnitTrack>();
+                foreach (var unit in hostBridge.Units)
+                {
+                    tracks.Add(new UnitTrack(unit.Name, new[]
+                    {
+                        new TransformKey(windowStart, unit.Position, unit.Rotation),
+                        new TransformKey(windowEnd, unit.Position, unit.Rotation),
+                    }));
+                }
+                return tracks;
+            }
+
+            bool DriveTurn(string what, int label, AssetCapture assets)
+            {
+                client.Post(new LocalReadyEvent());
+                host.Post(new LocalReadyEvent());
+                if (!WaitFor($"{what}: turn {label} began executing",
+                        () => hostSession.State == HostSessionState.Executing))
+                {
+                    return false;
+                }
+
+                hostBridge.Keyframes = new KeyframeCapture(
+                    windowStart, windowEnd, Transforms(), null, assets);
+                host.Post(new LocalTurnCompleteEvent(
+                    hostBridge.ComputeStateDigest(),
+                    hostBridge.CaptureSnapshot(),
+                    hostBridge.CaptureKeyframes()));
+
+                return WaitFor($"{what}: turn {label} reached the client",
+                    () => clientBridge.PlayedTurn == label);
+            }
+
+            try
+            {
+                clientTransport.Connect("127.0.0.1", hostTransport.Port);
+                if (!WaitFor("handshake completed",
+                        () => clientSession.State == ClientSessionState.Planning && hostSession.Peers.Count == 1))
+                {
+                    return 1;
+                }
+
+                // --- turn 3: more effects than one part holds. The measured
+                // fight carried 727 standalone effects in a turn, so several
+                // parts is the ordinary case rather than the exotic one — and a
+                // part carries a slice of the three collections CONCATENATED, so
+                // this also drives a part that straddles two kinds.
+                var perPart = PbjMessageCodec.MaxAssetsPerPart;
+                var many = BuildAssetCapture(
+                    seed: 2, windowStart, windowEnd,
+                    standaloneCount: perPart - 1, projectileCount: 3, beamCount: 2);
+                if (!DriveTurn("multi-part", 3, many))
+                {
+                    return 1;
+                }
+
+                var played = clientBridge.Played!;
+                if (!SameAssets(many, played.Assets, out var why))
+                {
+                    Console.WriteLine($"[selftest] FAIL a split turn did not reassemble: {why}");
+                    return 1;
+                }
+                Console.WriteLine(
+                    $"[selftest] OK   {perPart + 4} effects crossed in parts and reassembled in order");
+
+                // --- turn 4: an unsendable track goes alone. Three faults at
+                // once, one of each kind, so the per-kind checks cannot pass by
+                // sharing one code path.
+                var mixed = BuildAssetCapture(
+                    seed: 3, windowStart, windowEnd,
+                    standaloneCount: 2, projectileCount: 2, beamCount: 2);
+                var faulted = new AssetCapture(
+                    new[]
+                    {
+                        mixed.Standalone[0],
+
+                        // No pool key: nothing on the client could resolve it.
+                        new StandaloneAssetTrack(
+                            99, new AssetTrackHead(null, windowStart, windowEnd),
+                            default, default, new Vec3(1f, 1f, 1f), default, default),
+                    },
+                    new[]
+                    {
+                        mixed.Projectiles[0],
+
+                        // One key. AssignAsset would already have placed and
+                        // shown the instance before ApplyTime's early return —
+                        // at keyframes[0], or at the world origin with none.
+                        new ProjectileAssetTrack(
+                            98, new AssetTrackHead("fx_bullet_short", windowStart, windowEnd),
+                            new Vec3(1f, 1f, 1f),
+                            new[] { new TransformKey(windowStart, default, default) }),
+                    },
+                    new[]
+                    {
+                        mixed.Beams[0],
+                        new BeamAssetTrack(
+                            97, new AssetTrackHead("fx_beam_empty", windowStart, windowEnd), null),
+                    });
+                if (!DriveTurn("one bad track of each kind", 4, faulted))
+                {
+                    return 1;
+                }
+
+                played = clientBridge.Played!;
+                var kept = new AssetCapture(
+                    new[] { mixed.Standalone[0] },
+                    new[] { mixed.Projectiles[0] },
+                    new[] { mixed.Beams[0] });
+                if (!SameAssets(kept, played.Assets, out why))
+                {
+                    Console.WriteLine($"[selftest] FAIL the good tracks did not survive the bad ones: {why}");
+                    return 1;
+                }
+                if (played.Tracks.Count != 3)
+                {
+                    Console.WriteLine("[selftest] FAIL dropping effects disturbed the transform tracks");
+                    return 1;
+                }
+                if (!hostLog.Saw("turn 4 effects: 3 tracks dropped"))
+                {
+                    Console.WriteLine("[selftest] FAIL the dropped effects were never explained in the log");
+                    return 1;
+                }
+                Console.WriteLine("[selftest] OK   three bad tracks dropped alone, the rest of the turn played");
+
+                // --- turn 5: an oversampled projectile is thinned, not dropped.
+                // These come off the same player-configurable sampler the poses
+                // do, so this is a slider away rather than a hypothetical.
+                var oversampled = BuildAssetCapture(
+                    seed: 4, windowStart, windowEnd,
+                    standaloneCount: 0, projectileCount: 1, beamCount: 1,
+                    keyCount: PbjMessageCodec.MaxAssetKeysPerTrack + 40);
+                if (!DriveTurn("oversampled", 5, oversampled))
+                {
+                    return 1;
+                }
+
+                played = clientBridge.Played!;
+                if (played.Assets.Projectiles.Count != 1 || played.Assets.Beams.Count != 1)
+                {
+                    Console.WriteLine("[selftest] FAIL thinning dropped a track instead of repairing it");
+                    return 1;
+                }
+
+                var thinnedShot = played.Assets.Projectiles[0];
+                var thinnedBeam = played.Assets.Beams[0];
+                if (thinnedShot.Keys.Count != PbjMessageCodec.MaxAssetKeysPerTrack
+                    || thinnedBeam.Keys.Count != PbjMessageCodec.MaxAssetKeysPerTrack)
+                {
+                    Console.WriteLine(
+                        $"[selftest] FAIL thinned to {thinnedShot.Keys.Count}/{thinnedBeam.Keys.Count} keys, "
+                        + $"not {PbjMessageCodec.MaxAssetKeysPerTrack}");
+                    return 1;
+                }
+
+                var sentShot = oversampled.Projectiles[0];
+                if (thinnedShot.Keys[0].Time != sentShot.Keys[0].Time
+                    || thinnedShot.Keys[thinnedShot.Keys.Count - 1].Time
+                        != sentShot.Keys[sentShot.Keys.Count - 1].Time)
+                {
+                    Console.WriteLine("[selftest] FAIL thinning did not keep both endpoints");
+                    return 1;
+                }
+                Console.WriteLine(
+                    $"[selftest] OK   {sentShot.Keys.Count} keys thinned to {thinnedShot.Keys.Count}, "
+                    + "both endpoints intact");
+
+                // Three turns of effect faults and the session is still whole.
+                // This is the assertion the multi-part turn exists for: an
+                // over-long frame is not a wrong-looking effect, it is a frame
+                // the receiver rejects as malformed, which drops the host.
+                if (clientSession.State != ClientSessionState.Planning || hostSession.Peers.Count != 1)
+                {
+                    Console.WriteLine("[selftest] FAIL the session did not survive the effect turns");
+                    return 1;
+                }
+                Console.WriteLine("[selftest] OK   the session survived every effect fault");
+
+                Console.WriteLine("[selftest] PASS");
+                return 0;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"[selftest] FAIL {e.GetType().Name}: {e.Message}");
+                return 1;
+            }
+            finally
+            {
+                client.Stop();
+                host.Stop();
+            }
+        }
+
+        /// <summary>
+        /// A synthetic turn of replayed effects, every value distinct. M14.
+        /// </summary>
+        /// <remarks>
+        /// Distinctness for the reason <see cref="BuildPoseTrack"/> needs it, and
+        /// more sharply: a projectile whose position and rotation were
+        /// transposed flies sideways, and a standalone effect whose scale was
+        /// lost renders at zero size — invisible, and indistinguishable from the
+        /// feature not working. Neither shows in a count or a log line, so the
+        /// comparison has to be field for field on values that cannot coincide.
+        /// <para>
+        /// The hue and colour blocks alternate present and absent across the
+        /// standalone tracks on purpose. Absence is a real instruction — leave
+        /// the prefab's own hue alone — and it is carried by a flag rather than
+        /// a sentinel, so a codec that wrote the flag and forgot the payload
+        /// would round-trip every present block and silently flatten the absent
+        /// ones into zeroes.
+        /// </para>
+        /// </remarks>
+        private static AssetCapture BuildAssetCapture(
+            int seed,
+            float windowStart,
+            float windowEnd,
+            int standaloneCount,
+            int projectileCount,
+            int beamCount,
+            int keyCount = 3)
+        {
+            float At(int k) => keyCount > 1
+                ? windowStart + ((windowEnd - windowStart) * k / (keyCount - 1f))
+                : windowStart;
+
+            var standalone = new StandaloneAssetTrack[standaloneCount];
+            for (var i = 0; i < standaloneCount; i++)
+            {
+                var v = (seed * 1000f) + (i * 7f);
+                standalone[i] = new StandaloneAssetTrack(
+                    i,
+                    new AssetTrackHead(
+                        $"fx_impact_{seed}_{i}", windowStart + i, windowEnd + i,
+                        i % 2 == 0 ? (float?)(i * 0.125f) : null,
+                        i % 3 == 0
+                            ? new AssetColour(
+                                new Vec4(v, v + 1f, v + 2f, v + 3f),
+                                new Vec4(v + 4f, v + 5f, v + 6f, v + 7f))
+                            : (AssetColour?)null),
+                    new Vec3(v, v + 0.25f, v + 0.5f),
+                    UnitRotations[i % UnitRotations.Length],
+                    new Vec3(v + 1f, v + 1.25f, v + 1.5f),
+                    new Vec4(v + 2f, v + 2.25f, v + 2.5f, v + 2.75f),
+                    new Vec3(v + 3f, v + 3.25f, v + 3.5f));
+            }
+
+            var projectiles = new ProjectileAssetTrack[projectileCount];
+            for (var i = 0; i < projectileCount; i++)
+            {
+                var keys = new TransformKey[keyCount];
+                for (var k = 0; k < keyCount; k++)
+                {
+                    var v = (seed * 1000f) + (i * 7f) + (k * 0.75f);
+                    keys[k] = new TransformKey(
+                        At(k), new Vec3(v, v + 0.25f, v + 0.5f),
+                        UnitRotations[(i + k) % UnitRotations.Length]);
+                }
+                projectiles[i] = new ProjectileAssetTrack(
+                    i,
+                    new AssetTrackHead($"fx_bullet_{seed}_{i}", windowStart, windowEnd + 1f),
+                    new Vec3(1f + i, 2f + i, 3f + i),
+                    keys);
+            }
+
+            var beams = new BeamAssetTrack[beamCount];
+            for (var i = 0; i < beamCount; i++)
+            {
+                var keys = new BeamKey[keyCount];
+                for (var k = 0; k < keyCount; k++)
+                {
+                    var v = (seed * 1000f) + (i * 7f) + (k * 0.75f);
+                    keys[k] = new BeamKey(
+                        At(k), new Vec3(v, v + 0.25f, v + 0.5f),
+                        UnitRotations[(i + k) % UnitRotations.Length],
+                        new Vec3(v + 5f, v + 5.25f, v + 5.5f));
+                }
+                beams[i] = new BeamAssetTrack(
+                    i, new AssetTrackHead($"fx_beam_{seed}_{i}", windowStart, windowEnd), keys);
+            }
+
+            return new AssetCapture(standalone, projectiles, beams);
+        }
+
+        /// <summary>
+        /// Whether a turn's effects came back exactly as they went out.
+        /// </summary>
+        /// <remarks>
+        /// Matched by id rather than by position, because the parts they
+        /// travelled in are reassembled by concatenation and an ordering bug is
+        /// one of the things this is here to catch — comparing positionally
+        /// would make the assertion agree with the bug.
+        /// </remarks>
+        private static bool SameAssets(AssetCapture sent, AssetCapture got, out string why)
+        {
+            why = string.Empty;
+
+            if (got.Standalone.Count != sent.Standalone.Count
+                || got.Projectiles.Count != sent.Projectiles.Count
+                || got.Beams.Count != sent.Beams.Count)
+            {
+                why = $"arrived as {got.Standalone.Count}/{got.Projectiles.Count}/{got.Beams.Count} "
+                    + $"tracks, not {sent.Standalone.Count}/{sent.Projectiles.Count}/{sent.Beams.Count}";
+                return false;
+            }
+
+            foreach (var a in sent.Standalone)
+            {
+                StandaloneAssetTrack? b = null;
+                foreach (var candidate in got.Standalone)
+                {
+                    if (candidate.Id == a.Id)
+                    {
+                        b = candidate;
+                    }
+                }
+                if (b == null)
+                {
+                    why = $"standalone {a.Id} never arrived";
+                    return false;
+                }
+                if (!SameHead(a.Head, b.Head, $"standalone {a.Id}", ref why)
+                    || !SameVec3(a.Position, b.Position, $"standalone {a.Id} position", ref why)
+                    || !SameVec4(a.Rotation, b.Rotation, $"standalone {a.Id} rotation", ref why)
+                    || !SameVec3(a.Scale, b.Scale, $"standalone {a.Id} scale", ref why)
+                    || !SameVec4(
+                        a.VelocityAndDecay, b.VelocityAndDecay, $"standalone {a.Id} velocity", ref why)
+                    || !SameVec3(
+                        a.PositionLocal, b.PositionLocal, $"standalone {a.Id} local position", ref why))
+                {
+                    return false;
+                }
+            }
+
+            foreach (var a in sent.Projectiles)
+            {
+                ProjectileAssetTrack? b = null;
+                foreach (var candidate in got.Projectiles)
+                {
+                    if (candidate.Id == a.Id)
+                    {
+                        b = candidate;
+                    }
+                }
+                if (b == null)
+                {
+                    why = $"projectile {a.Id} never arrived";
+                    return false;
+                }
+                if (!SameHead(a.Head, b.Head, $"projectile {a.Id}", ref why)
+                    || !SameVec3(a.Scale, b.Scale, $"projectile {a.Id} scale", ref why))
+                {
+                    return false;
+                }
+                if (b.Keys.Count != a.Keys.Count)
+                {
+                    why = $"projectile {a.Id} arrived with {b.Keys.Count} keys, not {a.Keys.Count}";
+                    return false;
+                }
+                for (var k = 0; k < a.Keys.Count; k++)
+                {
+                    if (a.Keys[k].Time != b.Keys[k].Time
+                        || !SameVec3(
+                            a.Keys[k].Position, b.Keys[k].Position,
+                            $"projectile {a.Id} key {k} position", ref why)
+                        || !SameVec4(
+                            a.Keys[k].Rotation, b.Keys[k].Rotation,
+                            $"projectile {a.Id} key {k} rotation", ref why))
+                    {
+                        if (why.Length == 0)
+                        {
+                            why = $"projectile {a.Id} key {k} is stamped {b.Keys[k].Time}";
+                        }
+                        return false;
+                    }
+                }
+            }
+
+            foreach (var a in sent.Beams)
+            {
+                BeamAssetTrack? b = null;
+                foreach (var candidate in got.Beams)
+                {
+                    if (candidate.Id == a.Id)
+                    {
+                        b = candidate;
+                    }
+                }
+                if (b == null)
+                {
+                    why = $"beam {a.Id} never arrived";
+                    return false;
+                }
+                if (!SameHead(a.Head, b.Head, $"beam {a.Id}", ref why))
+                {
+                    return false;
+                }
+                if (b.Keys.Count != a.Keys.Count)
+                {
+                    why = $"beam {a.Id} arrived with {b.Keys.Count} keys, not {a.Keys.Count}";
+                    return false;
+                }
+                for (var k = 0; k < a.Keys.Count; k++)
+                {
+                    if (a.Keys[k].Time != b.Keys[k].Time
+                        || !SameVec3(
+                            a.Keys[k].Position, b.Keys[k].Position,
+                            $"beam {a.Id} key {k} position", ref why)
+                        || !SameVec4(
+                            a.Keys[k].Rotation, b.Keys[k].Rotation,
+                            $"beam {a.Id} key {k} rotation", ref why)
+                        || !SameVec3(
+                            a.Keys[k].Parameters, b.Keys[k].Parameters,
+                            $"beam {a.Id} key {k} parameters", ref why))
+                    {
+                        if (why.Length == 0)
+                        {
+                            why = $"beam {a.Id} key {k} is stamped {b.Keys[k].Time}";
+                        }
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private static bool SameHead(AssetTrackHead a, AssetTrackHead b, string what, ref string why)
+        {
+            if (a.AssetKey != b.AssetKey)
+            {
+                why = $"{what} arrived keyed '{b.AssetKey}', not '{a.AssetKey}'";
+                return false;
+            }
+            if (a.TimeStart != b.TimeStart || a.TimeEnd != b.TimeEnd)
+            {
+                why = $"{what} arrived spanning {b.TimeStart}..{b.TimeEnd}, not {a.TimeStart}..{a.TimeEnd}";
+                return false;
+            }
+
+            // Absence and zero are different instructions, so HasValue is
+            // compared before the value ever is.
+            if (a.Hue.HasValue != b.Hue.HasValue
+                || (a.Hue.HasValue && a.Hue!.Value != b.Hue!.Value))
+            {
+                why = $"{what} lost or invented a hue offset";
+                return false;
+            }
+            if (a.Colour.HasValue != b.Colour.HasValue)
+            {
+                why = $"{what} lost or invented a colour";
+                return false;
+            }
+            if (a.Colour.HasValue
+                && (!SameVec4(a.Colour!.Value.From, b.Colour!.Value.From, $"{what} colour from", ref why)
+                    || !SameVec4(a.Colour.Value.To, b.Colour.Value.To, $"{what} colour to", ref why)))
+            {
+                return false;
+            }
+            return true;
+        }
+
+        private static bool SameVec3(Vec3 a, Vec3 b, string what, ref string why)
+        {
+            if (a.X == b.X && a.Y == b.Y && a.Z == b.Z)
+            {
+                return true;
+            }
+            why = $"{what} became {b.X},{b.Y},{b.Z}, not {a.X},{a.Y},{a.Z}";
+            return false;
+        }
+
+        private static bool SameVec4(Vec4 a, Vec4 b, string what, ref string why)
+        {
+            if (a.X == b.X && a.Y == b.Y && a.Z == b.Z && a.W == b.W)
+            {
+                return true;
+            }
+            why = $"{what} became {b.X},{b.Y},{b.Z},{b.W}, not {a.X},{a.Y},{a.Z},{a.W}";
+            return false;
         }
 
         private static UnitPoseTrack? FindPose(IReadOnlyList<UnitPoseTrack> tracks, string? name)

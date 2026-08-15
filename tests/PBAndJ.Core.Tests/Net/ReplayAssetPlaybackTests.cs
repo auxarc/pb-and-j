@@ -37,6 +37,25 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(expected, ReplayAssetPlayback.PhaseAt(start, end, time));
         }
 
+        // Times are raw float bits on the wire with no decode validation — the
+        // codec bounds hostile counts, not hostile floats — so a NaN can arrive.
+        // Written the obvious way, PhaseAt has both comparisons come out false
+        // and falls through to Active, permanently, while the other two
+        // predicates call the same track inactive. That disagreement is a glue
+        // that activates an effect it will never expire, and expiry is what
+        // hands the pooled instance back.
+        [Fact]
+        public void A_track_with_a_nonsense_time_never_activates_and_is_never_held()
+        {
+            var nan = float.NaN;
+
+            Assert.False(ReplayAssetPlayback.IsActiveAt(nan, 3f, 2f));
+            Assert.False(ReplayAssetPlayback.CrossedDuring(nan, 3f, 1f, 2f));
+            Assert.Equal(AssetTrackPhase.Expired, ReplayAssetPlayback.PhaseAt(nan, 3f, 2f));
+            Assert.Equal(AssetTrackPhase.Expired, ReplayAssetPlayback.PhaseAt(1f, nan, 2f));
+            Assert.Equal(AssetTrackPhase.Expired, ReplayAssetPlayback.PhaseAt(1f, 3f, nan));
+        }
+
         [Fact]
         public void An_effect_that_lives_entirely_between_two_frames_is_still_shown()
         {

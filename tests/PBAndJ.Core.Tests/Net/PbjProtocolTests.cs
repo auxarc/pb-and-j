@@ -204,7 +204,12 @@ namespace PBAndJ.Core.Tests.Net
             // 0.15.0 for M8's leftovers, which moves the wire version for the
             // same reason a second time: the arrival time a client needs both to
             // stop diverging and to know when the host revealed a unit.
-            Assert.Equal("0.15.0", PbjProtocol.ModVersion);
+            // 0.16.0 for M14's ReplayAssets. This one does NOT move
+            // PbjProtocol.Version — a new message type leaves every existing
+            // layout alone — so the mod version is the only thing standing
+            // between a peer built without the type and a host that broadcasts
+            // it on every executed turn.
+            Assert.Equal("0.16.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

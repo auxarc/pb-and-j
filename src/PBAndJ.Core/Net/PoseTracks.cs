@@ -212,35 +212,16 @@ namespace PBAndJ.Core.Net
         /// Drops interior keys until a track fits, keeping both endpoints.
         /// </summary>
         /// <remarks>
-        /// Not a theoretical guard, which is why it repairs rather than
-        /// rejecting. Replay sampling frequency is a <b>player-facing graphics
-        /// setting</b> whose floor is 0.016 s, so a five-second turn can record
-        /// well over three hundred poses — far past the cap — on a host that has
-        /// done nothing but move a slider. Left un-thinned, the receiving peer
-        /// rejects the frame as malformed and drops the host, every turn.
-        /// <para>
-        /// The tail is what must survive: the last key is where the snapshot has
-        /// already corrected everyone to, and a track truncated at the end would
-        /// finish somewhere the unit no longer is.
-        /// </para>
+        /// Kept as a named entry point on this type — the callers and the tests
+        /// that pin the pose contract read better for it — while the arithmetic
+        /// itself lives in <see cref="TrackThinning"/>, shared with the asset
+        /// tracks M14 sends. They come off the same recorder at the same
+        /// player-configurable interval, so two copies of this rule could only
+        /// ever drift apart.
         /// </remarks>
         public static IReadOnlyList<PoseKey> Thin(IReadOnlyList<PoseKey> keys, int cap)
         {
-            if (keys.Count <= cap)
-            {
-                return keys;
-            }
-
-            var kept = new PoseKey[cap];
-            kept[0] = keys[0];
-            var interior = cap - 2;
-            var step = (keys.Count - 2) / (double)interior;
-            for (var i = 0; i < interior; i++)
-            {
-                kept[1 + i] = keys[1 + (int)(i * step)];
-            }
-            kept[cap - 1] = keys[keys.Count - 1];
-            return kept;
+            return TrackThinning.Thin(keys, cap);
         }
 
         private static bool Overlong(string? name)

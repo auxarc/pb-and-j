@@ -42,6 +42,7 @@ namespace PBAndJ.Core.Net
         private static readonly LobbyPeerState[] NoLobbyPeers = new LobbyPeerState[0];
 
         private readonly PoseBuffer poses = new PoseBuffer();
+        private readonly AssetBuffer assets = new AssetBuffer();
         private readonly IPbjGameBridge bridge;
         private readonly string playerName;
         private readonly string modVersion;
@@ -476,7 +477,7 @@ namespace PBAndJ.Core.Net
                     OwnedUnits = NoUnits;
                     submittedThisTurn = false;
                     effects.Add(new LogEffect(NetLog.CombatEndedByHost()));
-                    poses.Clear();
+                    ForgetReplayBuffers();
                     effects.Add(new StopKeyframesEffect());
                     effects.Add(new SetExecutionLockEffect(false));
                     break;
@@ -502,6 +503,13 @@ namespace PBAndJ.Core.Net
                 // only ever accumulates — nothing here decides to play.
                 case PosesMessage posesPart:
                     poses.Accept(posesPart);
+                    break;
+
+                // M14, and the same shape for the same reason: these precede
+                // the keyframes that terminate them, so nothing here decides to
+                // play.
+                case ReplayAssetsMessage assetsPart:
+                    assets.Accept(assetsPart);
                     break;
 
                 case KeyframesMessage keyframes:
@@ -546,7 +554,7 @@ namespace PBAndJ.Core.Net
                     effects.Add(new LogEffect(NetLog.PeerLeft(
                         PbjPeerRegistry.HostPeerId, HostName, Describe(bye.Reason))));
                     State = ClientSessionState.Closed;
-                    poses.Clear();
+                    ForgetReplayBuffers();
                     effects.Add(new StopKeyframesEffect());
                     effects.Add(new SetExecutionLockEffect(false));
                     break;
@@ -918,8 +926,37 @@ namespace PBAndJ.Core.Net
                 ? NetLog.PosesReceived(keyframes.Turn, posed.Count)
                 : NetLog.PosesIncomplete(keyframes.Turn, held, expected)));
 
+            // The same terminator serves M14's effects. Taking them here rather
+            // than on their own schedule is what lets one ordered stream carry
+            // two independent sets without either needing a deadline.
+            var assetsHeld = assets.PartsHeld;
+            var assetsExpected = assets.PartsExpected;
+            var effectsCaptured = assets.Take(keyframes.Turn);
+            var assetTracks = effectsCaptured.Standalone.Count
+                + effectsCaptured.Projectiles.Count
+                + effectsCaptured.Beams.Count;
+            // Three outcomes rather than two. A turn with no effects is usually
+            // an ordinary quiet turn, so calling it incomplete would cry wolf on
+            // most of a fight — the difference from the pose pair above, where
+            // no poses always does mean the units will slide.
+            string assetLine;
+            if (assetTracks > 0)
+            {
+                assetLine = NetLog.AssetsReceived(keyframes.Turn, assetTracks);
+            }
+            else if (assetsExpected == 0)
+            {
+                assetLine = NetLog.AssetsNoneSent(keyframes.Turn);
+            }
+            else
+            {
+                assetLine = NetLog.AssetsIncomplete(keyframes.Turn, assetsHeld, assetsExpected);
+            }
+            effects.Add(new LogEffect(assetLine));
+
             effects.Add(new PlayKeyframesEffect(keyframes.Turn, new KeyframeCapture(
-                keyframes.WindowStart, keyframes.WindowEnd, keyframes.Tracks, posed)));
+                keyframes.WindowStart, keyframes.WindowEnd, keyframes.Tracks, posed,
+                effectsCaptured)));
         }
 
         /// <summary>
@@ -1097,6 +1134,23 @@ namespace PBAndJ.Core.Net
                     applied.Turn, applied.ExpectedDigest, applied.ActualDigest)));
         }
 
+        /// <summary>
+        /// Drops everything held for a turn that will never be terminated.
+        /// </summary>
+        /// <remarks>
+        /// One call rather than two, because the two buffers are terminated by
+        /// the same message and must therefore be abandoned by the same events.
+        /// A site that remembered one and forgot the other would leave a turn's
+        /// effects waiting on a <c>Keyframes</c> that a rejoin's first turn
+        /// would then consume — replaying the previous session's explosions
+        /// over the new one's opening move.
+        /// </remarks>
+        private void ForgetReplayBuffers()
+        {
+            poses.Clear();
+            assets.Clear();
+        }
+
         private void Fault(string line, List<PbjEffect> effects)
         {
             effects.Add(new LogEffect(line));
@@ -1107,7 +1161,7 @@ namespace PBAndJ.Core.Net
             // with it: nothing will ever send the terminator that would consume
             // them, and a fault is followed by a rejoin often enough that
             // leaving them is a real hazard rather than a tidy-up.
-            poses.Clear();
+            ForgetReplayBuffers();
             effects.Add(new StopKeyframesEffect());
             // A lost host must never leave the local execute button disabled —
             // the player continues single-player from here.

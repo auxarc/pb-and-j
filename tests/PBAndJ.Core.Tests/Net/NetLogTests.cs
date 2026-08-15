@@ -531,6 +531,102 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void AssetsSent_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 effects | 130 tracks in 3 parts | broadcast to 2 peers",
+                NetLog.AssetsSent(4, 3, 130, 2));
+        }
+
+        [Fact]
+        public void AssetsSent_SpeaksOfOneOfEachInTheSingular()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 effects | 1 track in 1 part | broadcast to 1 peer",
+                NetLog.AssetsSent(4, 1, 1, 1));
+        }
+
+        [Fact]
+        public void AssetsReceived_ComposesTheLine()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 effects complete | 130 tracks | "
+                    + "the battle will be shot as well as walked",
+                NetLog.AssetsReceived(4, 130));
+        }
+
+        [Fact]
+        public void AssetsIncomplete_SaysWhatArrivedAndWhatItWillLookLike()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 effects incomplete — 3 of 8 arrived | "
+                    + "nothing will fire this turn",
+                NetLog.AssetsIncomplete(4, 3, 8));
+        }
+
+        // Per-track and non-fatal, so the line names a count rather than a
+        // demotion — and names one reason rather than claiming to be the whole
+        // story, which the wording has to carry because the count can cover
+        // several different faults.
+        // The line that keeps the one above from crying wolf. A turn with no
+        // effects is usually just a quiet turn, and a reader with no line at all
+        // cannot tell that from a broken feature.
+        [Fact]
+        public void AssetsNoneSent_SeparatesAQuietTurnFromALostOne()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 effects: none sent — a quiet turn, or a host that recorded none",
+                NetLog.AssetsNoneSent(4));
+        }
+
+        [Fact]
+        public void AssetsDropped_NamesTheCountAndAReason()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 effects: 2 tracks dropped, one of them for TooFewKeys",
+                NetLog.AssetsDropped(4, 2, AssetTrackFault.TooFewKeys));
+        }
+
+        [Fact]
+        public void AssetsDropped_SpeaksOfOneTrackInTheSingular()
+        {
+            Assert.Contains("1 track dropped", NetLog.AssetsDropped(4, 1, AssetTrackFault.NoKey));
+        }
+
+        // The only place this loss can be reported at all: the client never gets
+        // the terminator it would report against.
+        [Fact]
+        public void AssetsWithoutTracks_ExplainsTheOneLossTheClientCannotSee()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 recorded 12 effect tracks but no unit motion — "
+                    + "none of it can be sent, because the keyframes that would end the burst "
+                    + "are what is missing",
+                NetLog.AssetsWithoutTracks(4, 12));
+        }
+
+        [Fact]
+        public void AssetsWithoutTracks_SpeaksOfOneTrackInTheSingular()
+        {
+            Assert.Contains("1 effect track ", NetLog.AssetsWithoutTracks(4, 1));
+        }
+
+        [Fact]
+        public void AssetsOverCapacity_SaysTheFightOutgrewTheCaps()
+        {
+            Assert.Equal(
+                "[pb-and-j] turn 4 effects past the per-turn cap — 5 tracks dropped | "
+                    + "this fight is bigger than the caps were measured for",
+                NetLog.AssetsOverCapacity(4, 5));
+        }
+
+        [Fact]
+        public void AssetsOverCapacity_SpeaksOfOneTrackInTheSingular()
+        {
+            Assert.Contains("1 track dropped", NetLog.AssetsOverCapacity(4, 1));
+        }
+
+        [Fact]
         public void VisibilityCorrected_ComposesTheLine()
         {
             Assert.Equal(

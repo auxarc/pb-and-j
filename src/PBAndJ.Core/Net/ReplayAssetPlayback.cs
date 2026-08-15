@@ -55,13 +55,32 @@ namespace PBAndJ.Core.Net
         }
 
         /// <summary>Which of the three states the cursor puts this track in.</summary>
+        /// <remarks>
+        /// Defined in terms of <see cref="IsActiveAt"/> rather than by its own
+        /// pair of comparisons, and that is not a tidy-up. Written the obvious
+        /// way — <c>time &lt; timeStart</c> then <c>time &gt; timeEnd</c> — a
+        /// <b>NaN</b> anywhere makes both comparisons false and the track falls
+        /// through to <see cref="AssetTrackPhase.Active"/>, permanently, while
+        /// <see cref="IsActiveAt"/> and <see cref="CrossedDuring"/> both call
+        /// the same track inactive. Two predicates over one track disagreeing
+        /// is a glue that activates an effect it will never expire, and expiry
+        /// is what hands the pooled instance back.
+        /// <para>
+        /// NaN is not hypothetical here. Times are raw float bits on the wire
+        /// with no decode validation — the codec bounds hostile <i>counts</i>
+        /// and not hostile <i>floats</i> — so a malformed or hostile host can
+        /// put one in. Falling to <see cref="AssetTrackPhase.Expired"/> is the
+        /// safe end: nothing renders, and anything already assigned is
+        /// released.
+        /// </para>
+        /// </remarks>
         public static AssetTrackPhase PhaseAt(float timeStart, float timeEnd, float time)
         {
-            if (time < timeStart)
+            if (IsActiveAt(timeStart, timeEnd, time))
             {
-                return AssetTrackPhase.Pending;
+                return AssetTrackPhase.Active;
             }
-            return time > timeEnd ? AssetTrackPhase.Expired : AssetTrackPhase.Active;
+            return time < timeStart ? AssetTrackPhase.Pending : AssetTrackPhase.Expired;
         }
 
         /// <summary>
@@ -69,13 +88,33 @@ namespace PBAndJ.Core.Net
         /// <paramref name="previousTime"/> to <paramref name="currentTime"/>.
         /// </summary>
         /// <remarks>
-        /// <b>The rule that <see cref="IsActiveAt"/> alone gets wrong.</b> An
-        /// effect can begin and end entirely between two frames — a muzzle flash
-        /// is under a tenth of a second and a frame at 30fps is a thirtieth — and
-        /// a cursor sampled only at instants would step straight over it and
-        /// never show it at all. The host, whose recorder ran at simulation rate,
-        /// did show it. So the test is an <i>interval</i> overlap, not a point
-        /// test.
+        /// <b>A deliberate divergence from the game, not a transcription of
+        /// it</b> — and the two predicates are here to be chosen between rather
+        /// than to be equivalent, so the glue must pick on purpose:
+        /// <b>activate on <see cref="CrossedDuring"/>, expire on
+        /// <see cref="PhaseAt"/>.</b>
+        /// <para>
+        /// An effect can begin and end entirely between two frames — a muzzle
+        /// flash is under a tenth of a second and a frame at 30fps is a
+        /// thirtieth — and a cursor sampled only at instants steps straight over
+        /// it. The game's own replay (<c>CombatReplayHelper.cs:1469</c>) is that
+        /// point test and does skip them, so <see cref="IsActiveAt"/> is exact
+        /// parity with the host's <i>replay</i>. It is <b>not</b> parity with
+        /// what the host's player watched: during live simulation the effect was
+        /// fired at its real moment and seen. That is the case for the interval
+        /// test, and it is the whole of the case.
+        /// </para>
+        /// <para>
+        /// ⚠️ <b>What is not established</b> is whether an effect activated a
+        /// frame after it ended renders anything at all.
+        /// <c>AssetLinker.SampleForReplay</c> calls
+        /// <c>ParticleSystem.Simulate</c> at the effect's local time, which for
+        /// these is past its own duration — so this may be paying an
+        /// instantiate, a <c>Setup</c> and a destroy per skipped flash to show
+        /// nothing. It is one measurement in the two-instance playtest: fire a
+        /// sub-frame effect and look. If it shows nothing, drop back to
+        /// <see cref="IsActiveAt"/> and take the game's own behaviour.
+        /// </para>
         /// <para>
         /// Callers pass the cursor's own previous value, so the very first frame
         /// of a window asks about a zero-length interval and this degrades to

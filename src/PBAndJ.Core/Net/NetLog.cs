@@ -532,6 +532,138 @@ namespace PBAndJ.Core.Net
                 turn, fault, unit ?? "(unnamed)");
         }
 
+        // --- replayed effects (M14) ---
+
+        public static string AssetsSent(
+            int turn, int partCount, int trackCount, int peerCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} effects | {1} track{2} in {3} part{4} | broadcast to {5} peer{6}",
+                turn, trackCount, Plural(trackCount), partCount, Plural(partCount),
+                peerCount, Plural(peerCount));
+        }
+
+        /// <summary>
+        /// The turn plays with its projectiles, beams and impacts.
+        /// </summary>
+        public static string AssetsReceived(int turn, int trackCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} effects complete | {1} track{2} | the battle will be shot as well as walked",
+                turn, trackCount, Plural(trackCount));
+        }
+
+        /// <summary>
+        /// The host announced effects and not all of them arrived.
+        /// </summary>
+        /// <remarks>
+        /// Kept apart from <see cref="AssetsNoneSent"/>, which is the deliberate
+        /// difference from the pose pair above. A turn with no poses always
+        /// means the units will slide, so <see cref="PosesIncomplete"/> is
+        /// truthful on every turn it fires. A turn with no <i>effects</i> is
+        /// usually just a quiet turn — the measured fight's first turn had no
+        /// contact at all — so reporting one as incomplete would cry wolf on
+        /// ordinary play and teach the reader to skip the line that matters.
+        /// </remarks>
+        public static string AssetsIncomplete(int turn, int held, int expected)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} effects incomplete — {1} of {2} arrived | nothing will fire this turn",
+                turn, held, expected);
+        }
+
+        /// <summary>
+        /// The host sent no effects for this turn at all.
+        /// </summary>
+        /// <remarks>
+        /// Said rather than left silent, because "nothing shoots on the client"
+        /// is the symptom a player can see and cannot explain, and this line is
+        /// what separates its two causes: a quiet turn, or a host that recorded
+        /// nothing. Both are ordinary; neither is a defect; and a reader with no
+        /// line at all cannot tell either of them from a broken feature.
+        /// </remarks>
+        public static string AssetsNoneSent(int turn)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} effects: none sent — a quiet turn, or a host that recorded none",
+                turn);
+        }
+
+        /// <summary>
+        /// Tracks the host captured but could not put on the wire.
+        /// </summary>
+        /// <remarks>
+        /// Per-track and non-fatal, unlike <see cref="PosesUnsendable"/>: one
+        /// absent effect among a turn's effects is invisible, so these are
+        /// dropped individually rather than demoting the turn. That is exactly
+        /// why the count is said out loud — an invisible loss with no line in
+        /// the log is a loss nobody can ever investigate.
+        /// <para>
+        /// <paramref name="reason"/> is <i>a</i> reason and not <i>the</i>
+        /// reason: the count can cover several faults and the line names the
+        /// last one seen. Naming one cheaply is worth more than either
+        /// tallying all of them or picking a "worst" by an ordering the enum
+        /// does not actually have.
+        /// </para>
+        /// </remarks>
+        public static string AssetsDropped(int turn, int dropped, AssetTrackFault reason)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} effects: {1} track{2} dropped, one of them for {3}",
+                turn, dropped, Plural(dropped), reason);
+        }
+
+        /// <summary>
+        /// The turn held more effects than the wire format admits.
+        /// </summary>
+        /// <remarks>
+        /// Separate from <see cref="AssetsDropped"/> because it means something
+        /// different: not "these tracks were malformed" but "this fight is
+        /// larger than anything the caps were measured against". The right
+        /// response is to raise the caps, and that decision needs to know it is
+        /// being asked for.
+        /// </remarks>
+        public static string AssetsOverCapacity(int turn, int dropped)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} effects past the per-turn cap — {1} track{2} dropped | "
+                    + "this fight is bigger than the caps were measured for",
+                turn, dropped, Plural(dropped));
+        }
+
+        /// <summary>
+        /// A turn recorded effects but no unit tracks, so none of it can go.
+        /// </summary>
+        /// <remarks>
+        /// Effects ride inside the host's "this turn recorded motion" guard,
+        /// because the transform keyframes are what terminate them and parts
+        /// nothing terminates are the one shape a client cannot resolve. That
+        /// guard was priced for poses, where its cost is genuinely zero — a turn
+        /// with no unit tracks has no units to pose.
+        /// <para>
+        /// For effects the cost is not zero, which is why this line exists.
+        /// Capture drops destroyed units, so a mutual-destruction final volley
+        /// records a turn full of explosions with no surviving unit to carry a
+        /// track — the fight's climax, discarded. The client cannot report it
+        /// either, since it never receives the terminator it would report
+        /// against, so this is the only place it can be said at all.
+        /// </para>
+        /// </remarks>
+        public static string AssetsWithoutTracks(int turn, int trackCount)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "turn {0} recorded {1} effect track{2} but no unit motion — none of it can be sent, "
+                    + "because the keyframes that would end the burst are what is missing",
+                turn, trackCount, Plural(trackCount));
+        }
+
         // --- scenario transfer (M9) ---
 
         public static string ScenarioOffered(int peerId, string? saveName, int totalBytes, string? digest)

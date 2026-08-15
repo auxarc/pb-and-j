@@ -35,7 +35,7 @@ PKG_DIR     := dist/package
 # Neither is observable by a peer, so bumping the version for them is noise.
 WIRE_FILES  := $(addprefix src/PBAndJ.Core/Net/, \
                  PbjMessage.cs PbjMessageCodec.cs OrderPayload.cs OrderPayloadCodec.cs \
-                 UnitSnapshot.cs Keyframes.cs ScenarioPayload.cs \
+                 UnitSnapshot.cs Keyframes.cs ReplayAssets.cs ScenarioPayload.cs \
                  PbjWriter.cs PbjReader.cs FloatBits.cs FrameEncoder.cs FrameDecoder.cs \
                  PbjProtocol.cs Seams.cs)
 

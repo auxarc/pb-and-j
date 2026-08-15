@@ -105,12 +105,25 @@ namespace PBAndJ.Core.Net
     /// one fight, though that figure is the host's unpruned accumulation rather
     /// than a per-turn slice.
     /// <para>
-    /// <b>These have no identity of their own.</b> The game keeps them in a bare
-    /// list, unlike projectiles and beams which are keyed by entity id, so an
-    /// effect spanning two windows would be sent twice with nothing to dedupe
-    /// against. <see cref="Id"/> is therefore synthesised at capture — a
-    /// capture-side sequence number, not anything the game knows about — purely
-    /// so a client can tell "the same burst, still burning" from "another burst".
+    /// <b>These have no identity of their own</b>, and no identity is invented
+    /// for them either. The game keeps them in a bare list, unlike projectiles
+    /// and beams which are keyed by entity id. <see cref="Id"/> is a
+    /// <i>within-one-turn label</i> synthesised at capture, and nothing more.
+    /// </para>
+    /// <para>
+    /// ⚠️ <b>It is not cross-turn identity and cannot be made into any.</b> An
+    /// earlier revision of this comment claimed it let a client tell "the same
+    /// burst, still burning" from "another burst"; the decompile refutes that.
+    /// <c>CombatReplayHelper.OnExecutionStart</c> prunes <c>assetsStandalone</c>
+    /// by index (<c>:244-253</c>), so positions shift every turn: the same
+    /// still-burning entry gets a different number next turn, and a different
+    /// entry inherits this one's. Worse, the prune is gated on
+    /// <c>experimentalMode</c> — a player setting — so whether it shifts at all
+    /// differs between machines. Cross-turn identity would need a persistent map
+    /// keyed on the game's own track objects, which nothing here has.
+    /// <b>Do not dedupe on this across turns.</b> A long effect straddling a
+    /// window boundary is simply sent again next turn, which is correct for a
+    /// playback that builds a fresh track set per turn and unwinds it at stop.
     /// </para>
     /// <para>
     /// <c>parentPresent</c> deliberately does not travel. It is a live
@@ -140,7 +153,10 @@ namespace PBAndJ.Core.Net
             PositionLocal = positionLocal;
         }
 
-        /// <summary>Synthesised at capture. Not a game id.</summary>
+        /// <summary>
+        /// A label within one turn. Synthesised at capture, not a game id, and
+        /// <b>not</b> stable across turns — see the type's remarks.
+        /// </summary>
         public int Id { get; }
 
         public AssetTrackHead Head { get; }
