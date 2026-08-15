@@ -74,6 +74,11 @@ namespace PBAndJ.Mod
             // screen, so it must be run on both machines and diffed. Goes once
             // the answer is in docs/notes/enemy-previews-recon.md.
             Net.ActionProbeGlue.RegisterConsoleCommands();
+            // THROWAWAY (M14 revision 4) — the one open question that could
+            // still reshape M14: whether a client can render a replayed pooled
+            // effect, and whether the frozen _TimeSimulation global spoils it.
+            // Unknowable from source — the shaders are compiled assets.
+            Net.TimeSimProbeGlue.RegisterConsoleCommands();
         }
     }
 
