@@ -68,6 +68,12 @@ namespace PBAndJ.Mod
             // unmeasured volume is how M6 nearly shipped a frame the receiver
             // would have rejected. Goes once the number is in the recon file.
             Net.VfxProbeGlue.RegisterConsoleCommands();
+            // THROWAWAY (enemy previews recon) — whether the enemy's plan on a
+            // client is the host's, the client's own, or nothing at all. Three
+            // outcomes that look identical in a log and completely different on
+            // screen, so it must be run on both machines and diffed. Goes once
+            // the answer is in docs/notes/enemy-previews-recon.md.
+            Net.ActionProbeGlue.RegisterConsoleCommands();
         }
     }
 
