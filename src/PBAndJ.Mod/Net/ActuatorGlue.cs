@@ -385,6 +385,22 @@ namespace PBAndJ.Mod.Net
                 // could just mean these effects are sparse.
                 "late=" + KeyframePlayer.LateDrawing + "/" + KeyframePlayer.LateReveals
                     + " ontime=" + KeyframePlayer.OnTimeDrawing + "/" + KeyframePlayer.OnTimeReveals,
+                // M14 measurement 2. beams= is the precondition check — a run
+                // whose turn carried no beams answers nothing about beams and
+                // must not be mistaken for a clean result. tsim= is the shader
+                // global's value at the window's two ends, which with the mirror
+                // OFF is the client's real precondition. overwrites= is the one
+                // that decides whether the run counts at all: any frame on which
+                // something else wrote the global means another writer is
+                // competing with the mirror, and a confounded A/B looks exactly
+                // like the answer we hope for.
+                "beams=" + KeyframePlayer.BeamsRevealed + "/" + KeyframePlayer.BeamsBuilt
+                    + " tsim=" + KeyframePlayer.TimeSimAtStart.ToString(
+                        "0.00", CultureInfo.InvariantCulture)
+                    + "->" + KeyframePlayer.TimeSimAtEnd.ToString(
+                        "0.00", CultureInfo.InvariantCulture)
+                    + " overwrites=" + KeyframePlayer.TimeSimOverwrites
+                    + " mirror=" + (KeyframePlayer.MirrorTimeSimulation ? "on" : "off"),
                 // The launch splash — logos, then the seizure warning. It sits
                 // OVER the main menu while the game already reports
                 // state=mainmenu, so a script that treats that state as "ready"
@@ -409,9 +425,16 @@ namespace PBAndJ.Mod.Net
                 // off until the unwind runs, and the only lever that would let
                 // it happen anyway is the barrier bypass this rig already knows
                 // not to use.
-                "replay=" + (KeyframePlayer.IsPlaying
-                    ? "turn" + KeyframePlayer.Turn + "/" + KeyframePlayer.PosedUnits + "posed"
-                    : "idle"),
+                // "held" rather than a turn label when playback is frozen at a
+                // hold point: a held window never reaches its end, so it would
+                // otherwise be indistinguishable from one still playing — and
+                // every await_idle in the playtest scripts would sit on it until
+                // it timed out with no clue why.
+                "replay=" + (KeyframePlayer.Holding
+                    ? "held@" + KeyframePlayer.HoldAt.ToString("0.00", CultureInfo.InvariantCulture)
+                    : KeyframePlayer.IsPlaying
+                        ? "turn" + KeyframePlayer.Turn + "/" + KeyframePlayer.PosedUnits + "posed"
+                        : "idle"),
             });
         }
 

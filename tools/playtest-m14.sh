@@ -18,6 +18,14 @@
 #             playback runs and unwinds cleanly
 #   again     a second turn, which is the one that proves the unwind — the
 #             first turn can look perfect and still leak every instance
+#   beam      inject a beam into the host's NEXT turn, because no mech in this
+#             campaign carries a beam weapon and measurement 2 is about beams
+#             specifically. Run between `fight` and `turn`.
+#   measure   measurements 2 and 3 — the _TimeSimulation beam A/B and the pool
+#             key-set diff. Run it after `turn`, on the same fight. It refuses
+#             unless the host recorded a beam, so `beam` comes first.
+#             Client-side by construction: see the stage's own header for why
+#             a solo host measures this at its blind spot.
 #   down      close both instances
 #   all       up → session → lobby → fight → turn → again
 #
@@ -180,16 +188,23 @@ effects_of() {
   drive "$1" "pbj.drive-state" | grep -o 'effects=[0-9]*/[0-9]*/[0-9]*' | cut -d= -f2
 }
 
+# ⚠️ Every note here goes to STDERR, and that is not style. This function is
+# called as `revealed="$(report_effects 3)"`, and `note` tees to STDOUT — so
+# without the redirects the caller captures the note text along with the number,
+# and `[ "$revealed" -gt 0 ]` compares a paragraph against zero. It fails, so a
+# turn that put 378 effects on screen reports "the client put NONE on screen".
+# Cost a real run on 2026-08-16. The notes still reach the terminal and the log,
+# because `tee -a` is inside `note`.
 report_effects() {
   local n="$1" trio shown revealed unplayable
   trio="$(effects_of "$n")"
   shown="${trio%%/*}"
   revealed="$(printf '%s' "$trio" | cut -d/ -f2)"
   unplayable="${trio##*/}"
-  note "instance $n effects: $revealed shown this window, $shown on screen now, $unplayable unplayable"
+  note "instance $n effects: $revealed shown this window, $shown on screen now, $unplayable unplayable" >&2
   if [ "${unplayable:-0}" -gt 0 ]; then
-    note "WARNING: $unplayable effect(s) could not be shown at all — grep the log for 'cannot show effect'"
-    note "         that is measurement 3: the two machines disagree about their asset pools"
+    note "WARNING: $unplayable effect(s) could not be shown at all — grep the log for 'cannot show effect'" >&2
+    note "         that is measurement 3: the two machines disagree about their asset pools" >&2
   fi
   printf '%s' "${revealed:-0}"
 }
@@ -310,6 +325,203 @@ stage_turn() {
     && note "WARNING: the client could not resolve an asset key — that is measurement 3, and it means the pools differ"
 }
 
+# ---------------------------------------------------------------------------
+# Injects a beam into the turn about to be fought, because measurement 2 needs
+# one and no mech in this campaign carries a beam weapon.
+#
+# Run it AFTER `fight` and BEFORE `turn`, on the HOST — the host is the only
+# machine that records (every recording path is gated on recordingAllowed,
+# which is only ever true during the host's own simulation).
+#
+# Why a spawned entity rather than a re-equipped mech: BeamVizSystem.cs:31
+# guards its subsystem-to-asset lookup on !item.hasAssetLink, so attaching the
+# asset up front skips the equipment graph entirely while :74 still records
+# through CombatReplayHelper.OnBeamTransform. The recorded track is the real
+# thing. See BeamInjectGlue for the full argument.
+# ---------------------------------------------------------------------------
+stage_beam() {
+  say "beam — inject a beam into the host's next turn"
+
+  await_ready "$HOST_N"
+  await_idle "$HOST_N" 60
+
+  local keys key
+  keys="$(drive "$HOST_N" "pbj.fx-beam-keys")"
+  note "$keys"
+
+  # Prefer a friendly-looking pool over an enemy one purely so the colour is
+  # the one a player would normally see; either records identically.
+  # Checked before parsing, not after: with no keys the line has no ' | ' tail
+  # for the sed below to strip, so the whole log line would survive as the
+  # "key" and fail much later as a missing asset pool.
+  printf '%s' "$keys" | grep -q '| 0 beam pool(s)' \
+    && fail "no beam asset pools on this install — pbj.fx-beam-keys found none"
+
+  key="${PBJ_BEAM_KEY:-}"
+  if [ -z "$key" ]; then
+    key="$(printf '%s' "$keys" | sed 's/.*beam pool(s) | //' | tr ',' '\n' \
+           | sed 's/^ *//;s/ *$//' | grep -v 'enemy' | head -1)"
+  fi
+  [ -n "$key" ] || fail "could not pick a beam key out of: $keys"
+  pass "using beam pool '$key'"
+
+  # A unit must be selected for the beam to have somewhere to fire from, and
+  # arriving in combat by loading a save selects nothing.
+  wake_hud "$HOST_N"
+
+  local out
+  out="$(drive "$HOST_N" "pbj.fx-beam-inject $key 4")"
+  note "$out"
+  printf '%s' "$out" | grep -q "fx-beam-inject |" \
+    || fail "the beam was not injected: $out"
+  pass "a beam is live on the host and will be recorded when the turn executes"
+
+  eyes "on the HOST: there should be a beam coming out of one of your mechs right now, standing still. It is inert — it deals no damage (EnergyBeamEmission is deliberately not added) and it sweeps only once the turn runs."
+  note "now run:  tools/playtest-m14.sh turn    then:  tools/playtest-m14.sh measure"
+}
+
+# ---------------------------------------------------------------------------
+# Measurements 2 and 3 from plan revision 5. Run AFTER `turn`, on the same
+# fight, without executing anything else — it replays the turn the client has
+# already been sent, twice, which is the only way the two arms of an A/B are
+# the same turn rather than two different ones.
+#
+# ⚠️ THIS STAGE MUST RUN ON THE CLIENT AND NOWHERE ELSE. A solo host measures
+# the question at its blind spot: a host that has just executed leaves
+# _TimeSimulation at its own end-of-turn simulationTime, which IS windowEnd
+# (capture reads the same field) — so the mirror-off arm's baseline is already
+# nearly right, both arms look alike whatever the shaders do, and the
+# confounder detector reads clean because on a solo host nothing else is
+# writing. A beam shader that genuinely samples the global would pass there and
+# render wrong on every client.
+# ---------------------------------------------------------------------------
+stage_measure() {
+  say "measure — the _TimeSimulation beam A/B, and the pool key-set diff"
+
+  await_ready "$HOST_N"
+  await_ready "$PEER_N"
+  await_idle "$HOST_N" 60
+  await_idle "$PEER_N" 60
+
+  local peer_log; peer_log="$(prefix_log "$PEER_N")"
+
+  # --- the precondition, and it is a hard gate -----------------------------
+  # A run whose turn carried no beams answers nothing about beams, and looks
+  # exactly like a clean result. Read on the HOST: every recording path is
+  # gated on recordingAllowed, so a client reports zeroes for all of it.
+  say "precondition — did this turn actually fire a beam?"
+  local probe beams
+  probe="$(drive "$HOST_N" "pbj.vfx-probe")"
+  note "$probe"
+  beams="$(printf '%s' "$probe" | grep -o 'beams=[0-9]*' | head -1 | cut -d= -f2)"
+  if [ "${beams:-0}" -eq 0 ]; then
+    note "the host recorded NO beam tracks for this turn."
+    note "measurement 2 is about beams specifically: ReplayEntityAssetBeam.ApplyTime never"
+    note "calls SampleForReplay, so the particle-immunity argument that closed this worry"
+    note "for standalone effects does not reach beams at all."
+    note "run the 'beam' stage before 'turn' — it injects one:"
+    note "    tools/playtest-m14.sh beam && tools/playtest-m14.sh turn"
+    fail "no beams in this turn — inject one and refight, then re-run measure"
+  fi
+  pass "the host recorded $beams beam track(s)"
+
+  # --- measurement 3, taken first because it needs no replay ---------------
+  say "measurement 3 — do the two installs agree on their asset pool table?"
+  local host_pools peer_pools
+  host_pools="$(drive "$HOST_N" "pbj.fx-pools")"
+  peer_pools="$(drive "$PEER_N" "pbj.fx-pools")"
+  note "host:   $host_pools"
+  note "client: $peer_pools"
+
+  local host_digest peer_digest host_null peer_null
+  host_digest="$(printf '%s' "$host_pools" | grep -o 'digest=[0-9a-f]*' | cut -d= -f2)"
+  peer_digest="$(printf '%s' "$peer_pools" | grep -o 'digest=[0-9a-f]*' | cut -d= -f2)"
+  host_null="$(printf '%s' "$host_pools" | grep -o 'prefabNull=[0-9]*' | cut -d= -f2)"
+  peer_null="$(printf '%s' "$peer_pools" | grep -o 'prefabNull=[0-9]*' | cut -d= -f2)"
+
+  if [ "$host_digest" = "$peer_digest" ]; then
+    pass "the key sets agree — digest $host_digest"
+  else
+    note "DIGESTS DIFFER: host $host_digest, client $peer_digest"
+    note "diff the two pb-and-j.asset-pools.txt files named in the lines above"
+  fi
+
+  # A digest match is NOT a clean bill of health, and this is the field that
+  # says so. DataContainerAssetPool.OnAfterDeserialization keeps its entry when
+  # Resources.Load fails — it warns and moves on with a null prefab — so two
+  # machines can agree on every key while one cannot instantiate a pool at all.
+  if [ "${host_null:-0}" != "${peer_null:-0}" ]; then
+    note "prefabNull DIFFERS: host ${host_null}, client ${peer_null}"
+    note "the key sets can still match here. This is the case a digest alone would MISS:"
+    note "one install cannot instantiate pools the other can. Grep both logs for"
+    note "'Failed to load pooled asset prefab'."
+  else
+    pass "both installs failed to load the same ${host_null:-0} prefab(s)"
+  fi
+
+  # --- measurement 2 -------------------------------------------------------
+  say "measurement 2 — the client's real _TimeSimulation baseline"
+  local baseline
+  baseline="$(drive "$PEER_N" "pbj.fx-tsim")"
+  note "$baseline"
+  note "THIS NUMBER IS WHAT THE MEASUREMENT IS ABOUT. A client reaches none of the"
+  note "writers that keep the global current, so it holds whatever was last left there"
+  note "— measured once as a stale OVERWORLD value of 49.12. If it instead sits within"
+  note "a second or two of the turn's end time, this is not the stale case and the run"
+  note "proves less than it appears to; stage it with pbj.fx-tsim-set and say so."
+
+  local arm
+  for arm in 0 1; do
+    say "arm mirror=$arm"
+    note "$(drive "$PEER_N" "pbj.fx-mirror $arm")"
+
+    # Same stored capture both times. NetGlue.RememberPlayed exists precisely
+    # so this is one turn replayed twice rather than two different turns.
+    note "$(drive "$PEER_N" "pbj.replay-last")"
+    sleep 3
+    await_idle "$PEER_N" 90
+
+    local state
+    state="$(drive "$PEER_N" "pbj.drive-state")"
+    note "     $(printf '%s' "$state" | grep -o 'beams=[0-9]*/[0-9]* tsim=[^ ]* overwrites=[0-9]* mirror=[a-z]*')"
+
+    local shown_beams overwrites
+    shown_beams="$(printf '%s' "$state" | grep -o 'beams=[0-9]*/[0-9]*' | cut -d= -f2)"
+    overwrites="$(printf '%s' "$state" | grep -o 'overwrites=[0-9]*' | cut -d= -f2)"
+
+    [ "${shown_beams%%/*}" -gt 0 ] \
+      || note "WARNING: the client put NO beams on screen this arm — check for 'no beam helper' in $peer_log"
+
+    # The detector the whole A/B is trusted on. Sampling the global at the
+    # window's two ends cannot catch a writer that writes the same value every
+    # frame, and such a writer still wins at render time on every frame.
+    if [ "${overwrites:-0}" -gt 0 ]; then
+      note "OVERWRITES=$overwrites — something else wrote _TimeSimulation during the window."
+      note "THE RUN IS VOID. That is not a defect in the mirror; it IS the finding."
+      note "Suspects, in order: SimulationTimeSystem.cs:117 (fires only while sim time is"
+      note "advancing, and sets combat.Simulating at :63 — so if it fired, the"
+      note "ActionRecordingSystem row falls with it), and CombatIntroStartupSystem.cs:367."
+    else
+      pass "arm mirror=$arm ran unconfounded (overwrites=0)"
+    fi
+
+    eyes "arm mirror=$arm — WATCH THE BEAM. Its motion, thickness and any scrolling along its length. Do not judge the flare or ember particles: those are frozen at timeScale 0 in BOTH arms and in vanilla host replay too, so they are parity-safe and outside this measurement."
+  done
+
+  # Left OFF, which is the shipped behaviour. A run that walked away with the
+  # mirror on would silently change what every later measurement means.
+  note "$(drive "$PEER_N" "pbj.fx-mirror 0")"
+
+  say "the verdict is what you SAW across the two arms"
+  note "identical beams + overwrites=0 + a genuinely stale baseline"
+  note "    -> no shader in that beam samples _TimeSimulation. The mirror stays out."
+  note "different beams"
+  note "    -> the mirror is load-bearing and ships, with the restore-on-unwind."
+  note "either way: the finding is about _TimeSimulation SPECIFICALLY. _GlobalSimulationTime"
+  note "(4 writers) and _GlobalUnscaledTime are unmeasured neighbours — see"
+  note "docs/notes/timesim-measurement.md, which is where the readings go."
+}
+
 stage_again() {
   say "again — a second turn, which is what proves the sweep"
 
@@ -363,6 +575,8 @@ case "$STAGE" in
   fight)    delegate fight ;;
   turn)     stage_turn ;;
   again)    stage_again ;;
+  beam)     stage_beam ;;
+  measure)  stage_measure ;;
   down)     delegate down ;;
   all)      delegate up; delegate session; delegate lobby "$SAVE_KEY"; delegate fight
             stage_turn; stage_again
