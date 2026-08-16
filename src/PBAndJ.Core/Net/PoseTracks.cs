@@ -204,8 +204,51 @@ namespace PBAndJ.Core.Net
             }
 
             prepared = new UnitPoseTrack(
-                track.Name, track.Joints, Thin(kept, PbjMessageCodec.MaxPoseKeysPerTrack));
+                track.Name,
+                track.Joints,
+                Thin(kept, PbjMessageCodec.MaxPoseKeysPerTrack),
+                PrepareLights(track.Lights));
             return PoseTrackFault.None;
+        }
+
+        /// <summary>
+        /// Drops unusable weapon lights and caps the rest. Never faults the track.
+        /// </summary>
+        /// <remarks>
+        /// <b>A bad light must not cost a unit its poses.</b> That is the same
+        /// asymmetry stage A drew between asset faults and pose faults, and it
+        /// points the same way here: a missing muzzle flash among muzzle flashes
+        /// is invisible, while a mech that slides instead of walking reads as
+        /// broken. So this filters rather than returning a fault, and the caller
+        /// reports the difference by comparing counts.
+        /// <para>
+        /// Thinning a light list is <i>not</i> the same operation as thinning a
+        /// pose track, and the difference is worth stating: these are discrete
+        /// events, so anything dropped is a flash that never happens rather than
+        /// a path sampled more coarsely. Uniform thinning is still the right
+        /// degradation — it keeps flashes spread across the whole turn, where
+        /// truncating at the cap would put every surviving flash in the opening
+        /// moments and leave the rest of the turn silent.
+        /// </para>
+        /// </remarks>
+        private static IReadOnlyList<UnitLightKey> PrepareLights(
+            IReadOnlyList<UnitLightKey> lights)
+        {
+            var usable = new List<UnitLightKey>(lights.Count);
+            for (var i = 0; i < lights.Count; i++)
+            {
+                // The socket is the client's only route to the right Light:
+                // weaponLightsLookup is keyed by it. A light that cannot name
+                // its socket can never be placed, so it is dead weight rather
+                // than a degraded flash.
+                var socket = lights[i].Socket;
+                if (!string.IsNullOrEmpty(socket) && !Overlong(socket))
+                {
+                    usable.Add(lights[i]);
+                }
+            }
+
+            return TrackThinning.Thin(usable, PbjMessageCodec.MaxLightKeysPerUnit);
         }
 
         /// <summary>

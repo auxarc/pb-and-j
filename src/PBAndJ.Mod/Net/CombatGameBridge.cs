@@ -588,7 +588,56 @@ namespace PBAndJ.Mod.Net
                     tracks.Count, PbjMessageCodec.MaxTracksPerKeyframes, clamped));
             }
             ReportUncaptured(bonelessUnits, strandedKeys);
+            ReportOrphanedLights(poses);
+            WeaponLightPatches.Clear();
             return new KeyframeCapture(windowStart, windowEnd, tracks, poses, assets);
+        }
+
+        /// <summary>
+        /// Names the flashes that fired but found no pose track to ride.
+        /// </summary>
+        /// <remarks>
+        /// The one cost of joining lights to poses, made loud instead of silent.
+        /// A unit the recorder gave no bones — or one clamped off the end of the
+        /// track list — drops its flashes with it, and a missing muzzle flash
+        /// among muzzle flashes is invisible on screen. This project has learned
+        /// twice that a loss only a count can see has to be counted.
+        /// <para>
+        /// Deliberately walks the captured cache rather than the pose list: the
+        /// loss is a unit that is <b>not</b> in the collection the harvest
+        /// walked, so it cannot be found by looking at what was harvested.
+        /// </para>
+        /// </remarks>
+        private static void ReportOrphanedLights(List<UnitPoseTrack> poses)
+        {
+            var carried = 0;
+            for (var i = 0; i < poses.Count; i++)
+            {
+                carried += poses[i].Lights.Count;
+            }
+
+            var fired = 0;
+            var firedUnits = 0;
+            foreach (var pair in WeaponLightPatches.All())
+            {
+                fired += pair.Value.Count;
+                firedUnits++;
+            }
+
+            var orphaned = fired - carried;
+            if (orphaned > 0)
+            {
+                // Units, not flashes, is the honest denominator for the first
+                // number: we know how many flashes were stranded but not how
+                // many distinct units stranded them, so the unit count is the
+                // upper bound and is reported as such.
+                Debug.LogWarning(NetLog.LightsWithoutPoseTrack(firedUnits, orphaned));
+            }
+
+            if (WeaponLightPatches.SkippedNoTransform > 0)
+            {
+                Debug.Log(NetLog.LightsUnusable(WeaponLightPatches.SkippedNoTransform));
+            }
         }
 
         /// <summary>
@@ -702,7 +751,19 @@ namespace PBAndJ.Mod.Net
                     key.time, key.syncLeftEquipment, key.syncRightEquipment, posed));
             }
 
-            return new UnitPoseTrack(name, joints, keys);
+            // The flashes this unit fired, resolved at fire time by
+            // WeaponLightPatches and merely collected here. They ride the pose
+            // track because a light is meaningless without the unit whose
+            // UnitLightManager owns the Light it drives — the same join key
+            // serves both — and because the game hangs keyframesLightsWeapons
+            // off ReplayUnit for that reason too.
+            //
+            // Note this returns before here on a boneless unit, which is exactly
+            // the orphan case CaptureKeyframes reports: those flashes have no
+            // ride and would otherwise vanish without a word.
+            var lights = WeaponLightPatches.For(unit.id.id);
+
+            return new UnitPoseTrack(name, joints, keys, lights);
         }
 
         /// <summary>
@@ -732,6 +793,7 @@ namespace PBAndJ.Mod.Net
             var projectiles = new List<ProjectileAssetTrack>();
             var beams = new List<BeamAssetTrack>();
             var trailed = 0;
+            var trailPoints = 0;
 
             var recorded = CombatReplayHelper.assetsStandalone;
             if (recorded != null)
@@ -770,11 +832,6 @@ namespace PBAndJ.Mod.Net
                     {
                         continue;
                     }
-                    if (entry.keyframesTrail != null && entry.keyframesTrail.Count > 0)
-                    {
-                        trailed++;
-                    }
-
                     var keys = new List<TransformKey>();
                     var recordedKeys = entry.keyframesTransform;
                     WindowRange(
@@ -788,8 +845,15 @@ namespace PBAndJ.Mod.Net
                             ToVec4(recordedKeys[i].rotation)));
                     }
 
+                    var trail = SliceTrail(entry.keyframesTrail, windowStart, windowEnd);
+                    if (trail.Count > 0)
+                    {
+                        trailed++;
+                        trailPoints += trail.Count;
+                    }
+
                     projectiles.Add(new ProjectileAssetTrack(
-                        pair.Key, Head(entry), ToVec3(entry.scale), keys));
+                        pair.Key, Head(entry), ToVec3(entry.scale), keys, trail));
                 }
             }
 
@@ -823,15 +887,72 @@ namespace PBAndJ.Mod.Net
 
             if (trailed > 0)
             {
-                // Trails are stage B and their absence is invisible: the
-                // projectile still flies, it just leaves no wake. Said out loud
-                // because "unmeasured" is not "absent" — every sample taken so
-                // far had none, and this is the line that would tell us that
-                // sample was unrepresentative.
-                Debug.Log(NetLog.AssetTrailsNotCaptured(trailed));
+                // Points per turn is the number MaxTrailPointsPerTrack is sized
+                // against, and the only one that would show a weapon far heavier
+                // than the ~32-points-per-trail this was measured on.
+                Debug.Log(NetLog.AssetTrailsSent(trailed, trailPoints));
             }
 
             return new AssetCapture(standalone, projectiles, beams);
+        }
+
+        /// <summary>
+        /// The trail points alive at any moment of the window, in emission order.
+        /// </summary>
+        /// <remarks>
+        /// <b>Interval overlap, never the point test the transform keys use.</b>
+        /// A trail point's <c>timeStart</c>/<c>timeEnd</c> are on an absolute
+        /// clock of their own, and a point emitted before the window opens is
+        /// still part of the visible ribbon until its life runs out. Slicing on
+        /// <c>timeStart</c> with <see cref="WindowRange"/> would drop exactly
+        /// those, and the trail would pop in bald at every turn boundary on any
+        /// projectile that spans two turns — a loss no count and no log would
+        /// show.
+        /// <para>
+        /// <see cref="ReplayAssetPlayback.OverlapsWindow"/> is the predicate,
+        /// reused rather than restated: stage A wrote it under the coverage gate
+        /// for track activation and it generalises here unchanged.
+        /// </para>
+        /// <para>
+        /// No bracketing key on either side, unlike the transform slice. Trail
+        /// points are not interpolated between — the game rebuilds each one into
+        /// an <c>AraTrail.Point</c> and hands the list over as a polyline — so a
+        /// neighbour outside the window is simply a point that should not be
+        /// drawn.
+        /// </para>
+        /// </remarks>
+        private static List<TrailKey> SliceTrail(
+            List<ReplayKeyframeTrailPoint>? recorded, float windowStart, float windowEnd)
+        {
+            var trail = new List<TrailKey>();
+            if (recorded == null)
+            {
+                return trail;
+            }
+
+            for (var i = 0; i < recorded.Count; i++)
+            {
+                var point = recorded[i];
+                if (!ReplayAssetPlayback.OverlapsWindow(
+                        point.timeStart, point.timeEnd, windowStart, windowEnd))
+                {
+                    continue;
+                }
+
+                trail.Add(new TrailKey(
+                    point.timeStart,
+                    point.timeEnd,
+                    ToVec3(point.position),
+                    ToVec3(point.velocity),
+                    ToVec3(point.perlinDirection),
+                    ToVec3(point.tangent),
+                    ToVec3(point.normal),
+                    ToVec4(point.color),
+                    point.thickness,
+                    point.texcoord));
+            }
+
+            return trail;
         }
 
         private static bool InWindow(ReplayEntityAsset entry, float windowStart, float windowEnd) =>

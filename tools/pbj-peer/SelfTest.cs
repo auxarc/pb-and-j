@@ -1510,11 +1510,37 @@ namespace PBAndJ.Peer
                         At(k), new Vec3(v, v + 0.25f, v + 0.5f),
                         UnitRotations[(i + k) % UnitRotations.Length]);
                 }
+                // Stage B: only some projectiles carry a trail, matching the
+                // measured 3-in-109 rather than giving every projectile one. A
+                // codec that mixed the trail list up with the transform list
+                // would pass a suite where every track looked alike.
+                TrailKey[]? trail = null;
+                if (i % 2 == 0)
+                {
+                    trail = new TrailKey[keyCount + 1];
+                    for (var t = 0; t < trail.Length; t++)
+                    {
+                        var w = (seed * 100f) + (i * 13f) + (t * 1.5f);
+                        trail[t] = new TrailKey(
+                            windowStart + (t * 0.05f),
+                            windowStart + (t * 0.05f) + 0.4f,
+                            new Vec3(w, w + 1f, w + 2f),
+                            new Vec3(w + 3f, w + 4f, w + 5f),
+                            new Vec3(w + 6f, w + 7f, w + 8f),
+                            new Vec3(w + 9f, w + 10f, w + 11f),
+                            new Vec3(w + 12f, w + 13f, w + 14f),
+                            new Vec4(w + 15f, w + 16f, w + 17f, w + 18f),
+                            w + 19f,
+                            w + 20f);
+                    }
+                }
+
                 projectiles[i] = new ProjectileAssetTrack(
                     i,
                     new AssetTrackHead($"fx_bullet_{seed}_{i}", windowStart, windowEnd + 1f),
                     new Vec3(1f + i, 2f + i, 3f + i),
-                    keys);
+                    keys,
+                    trail);
             }
 
             var beams = new BeamAssetTrack[beamCount];
@@ -1624,6 +1650,50 @@ namespace PBAndJ.Peer
                         if (why.Length == 0)
                         {
                             why = $"projectile {a.Id} key {k} is stamped {b.Keys[k].Time}";
+                        }
+                        return false;
+                    }
+                }
+
+                // Stage B. Compared point by point and in order, because order
+                // IS the ribbon's geometry here: SetPoints treats the last point
+                // as the head and snaps it to the instance, so a trail that
+                // arrived reversed would match on every count and still render
+                // inside out.
+                if (b.Trail.Count != a.Trail.Count)
+                {
+                    why = $"projectile {a.Id} arrived with {b.Trail.Count} trail points, "
+                        + $"not {a.Trail.Count}";
+                    return false;
+                }
+                for (var t = 0; t < a.Trail.Count; t++)
+                {
+                    if (a.Trail[t].Time != b.Trail[t].Time
+                        || a.Trail[t].TimeEnd != b.Trail[t].TimeEnd
+                        || a.Trail[t].Thickness != b.Trail[t].Thickness
+                        || a.Trail[t].Texcoord != b.Trail[t].Texcoord
+                        || !SameVec3(
+                            a.Trail[t].Position, b.Trail[t].Position,
+                            $"projectile {a.Id} trail {t} position", ref why)
+                        || !SameVec3(
+                            a.Trail[t].Velocity, b.Trail[t].Velocity,
+                            $"projectile {a.Id} trail {t} velocity", ref why)
+                        || !SameVec3(
+                            a.Trail[t].PerlinDirection, b.Trail[t].PerlinDirection,
+                            $"projectile {a.Id} trail {t} perlin direction", ref why)
+                        || !SameVec3(
+                            a.Trail[t].Tangent, b.Trail[t].Tangent,
+                            $"projectile {a.Id} trail {t} tangent", ref why)
+                        || !SameVec3(
+                            a.Trail[t].Normal, b.Trail[t].Normal,
+                            $"projectile {a.Id} trail {t} normal", ref why)
+                        || !SameVec4(
+                            a.Trail[t].Colour, b.Trail[t].Colour,
+                            $"projectile {a.Id} trail {t} colour", ref why))
+                    {
+                        if (why.Length == 0)
+                        {
+                            why = $"projectile {a.Id} trail {t} is stamped {b.Trail[t].Time}";
                         }
                         return false;
                     }
