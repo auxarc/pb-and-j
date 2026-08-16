@@ -1010,6 +1010,123 @@ namespace PBAndJ.Core.Tests.Net
                 client.HandleMessage(ClientSession.HostConnectionId, Motion())));
         }
 
+        // --- replayed effects (M14) ---
+
+        private static ReplayAssetsMessage Effects(int turn, int index, int count, int id) =>
+            new ReplayAssetsMessage(turn, index, count, new AssetCapture(
+                new[]
+                {
+                    new StandaloneAssetTrack(
+                        id, new AssetTrackHead("fx_impact", 15f, 16f), default, default,
+                        new Vec3(1f, 1f, 1f), default, default),
+                },
+                null,
+                null));
+
+        [Fact]
+        public void Effects_ArrivingBeforeTheKeyframes_ReachPlaybackWithThem()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Effects(3, 0, 1, 7));
+
+            var play = Single<PlayKeyframesEffect>(
+                client.HandleMessage(ClientSession.HostConnectionId, Motion()));
+
+            Assert.Equal(7, Assert.Single(play.Capture.Assets.Standalone).Id);
+        }
+
+        [Fact]
+        public void Effects_AloneStartNoPlayback()
+        {
+            var effects = Welcomed().HandleMessage(
+                ClientSession.HostConnectionId, Effects(3, 0, 1, 7));
+
+            Assert.Empty(All<PlayKeyframesEffect>(effects));
+        }
+
+        [Fact]
+        public void Effects_ThatCompleted_AreReported()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Effects(3, 0, 1, 7));
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, Motion());
+
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("effects complete"));
+        }
+
+        // An arbitrary slice of a turn's effects is worse than none: shots that
+        // stop in mid air, with nothing in the log to say why. The line is
+        // logged on both arms so "nothing shoots" always has an explanation.
+        [Fact]
+        public void Effects_ThatNeverCompleted_PlayNoneOfThemAndSayWhy()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Effects(3, 0, 3, 7));
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, Motion());
+
+            Assert.True(Single<PlayKeyframesEffect>(effects).Capture.Assets.IsEmpty);
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("effects incomplete"));
+        }
+
+        // A turn where the host simply had nothing to send is the common case —
+        // the measured fight's first turn had no contact at all — so it must
+        // not be reported as a loss, or the line that reports a real one stops
+        // being read.
+        [Fact]
+        public void Effects_ThatWereNeverSent_AreReportedAsAQuietTurnNotALoss()
+        {
+            var effects = Welcomed().HandleMessage(ClientSession.HostConnectionId, Motion());
+
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("effects: none sent"));
+            Assert.DoesNotContain(All<LogEffect>(effects), l => l.Line.Contains("effects incomplete"));
+        }
+
+        [Fact]
+        public void Effects_ForADifferentTurnThanTheKeyframes_AreNotPlayed()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Effects(2, 0, 1, 7));
+
+            var effects = client.HandleMessage(ClientSession.HostConnectionId, Motion(3));
+
+            Assert.True(Single<PlayKeyframesEffect>(effects).Capture.Assets.IsEmpty);
+        }
+
+        // The same trap the poses documented, and the reason both buffers
+        // compare message labels against message labels: TurnComplete travels
+        // ahead of these parts and advances the session's own turn.
+        [Fact]
+        public void Effects_ArrivingAfterTurnCompleteHasAdvancedTheTurn_StillPlay()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, new TurnCompleteMessage(3, "d"));
+
+            client.HandleMessage(ClientSession.HostConnectionId, Effects(3, 0, 1, 7));
+            var play = Single<PlayKeyframesEffect>(
+                client.HandleMessage(ClientSession.HostConnectionId, Motion(3)));
+
+            Assert.Single(play.Capture.Assets.Standalone);
+        }
+
+        // Both buffers are terminated by the same message, so they must be
+        // abandoned by the same events. Forgetting one and not the other would
+        // let a rejoin's first terminator consume the previous session's
+        // explosions over the new one's opening move.
+        [Fact]
+        public void Effects_HeldWhenCombatEnds_AreForgotten()
+        {
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, Effects(3, 0, 1, 7));
+            client.HandleMessage(ClientSession.HostConnectionId, new CombatEndMessage());
+
+            var play = Single<PlayKeyframesEffect>(
+                client.HandleMessage(ClientSession.HostConnectionId, Motion()));
+
+            Assert.True(play.Capture.Assets.IsEmpty);
+        }
+
         // A turn ending, a host vanishing or a session closing all leave a
         // playback mid-flight. Each one has to stop it, or units keep sliding
         // through whatever comes next.

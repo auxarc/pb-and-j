@@ -86,6 +86,54 @@ namespace PBAndJ.Core.Tests.Net
             // assembles parts from captured data and a null there must not
             // throw inside SendTo, which encodes outside its own try block.
             yield return new object[] { new PosesMessage(3, 0, 1, null) };
+
+            yield return new object[]
+            {
+                new ReplayAssetsMessage(3, 0, 2, new AssetCapture(
+                    new[] { StandaloneAsset(1) },
+                    new[] { ProjectileAsset(2, 3) },
+                    new[] { BeamAsset(3, 3) })),
+            };
+
+            // A part carrying nothing. The host never sends one — Split emits
+            // no parts at all for an empty turn — but a null capture must not
+            // throw inside SendTo, which encodes outside its own try block.
+            yield return new object[] { new ReplayAssetsMessage(3, 0, 1, null) };
+        }
+
+        private static AssetTrackHead AssetHead(string key, float? hue = null, AssetColour? colour = null) =>
+            new AssetTrackHead(key, 1.5f, 3.25f, hue, colour);
+
+        private static StandaloneAssetTrack StandaloneAsset(
+            int id, float? hue = null, AssetColour? colour = null) =>
+            new StandaloneAssetTrack(
+                id, AssetHead("fx_impact_" + id, hue, colour),
+                new Vec3(1f, 2f, 3f), new Vec4(0.1f, 0.2f, 0.3f, 0.4f),
+                new Vec3(1.5f, 1.5f, 1.5f), new Vec4(4f, 5f, 6f, 0.75f),
+                new Vec3(7f, 8f, 9f));
+
+        private static ProjectileAssetTrack ProjectileAsset(int id, int keys)
+        {
+            var frames = new TransformKey[keys];
+            for (var i = 0; i < keys; i++)
+            {
+                frames[i] = new TransformKey(
+                    i * 0.05f, new Vec3(i, i + 1, i + 2), new Vec4(0.1f, 0.2f, 0.3f, 0.4f));
+            }
+            return new ProjectileAssetTrack(
+                id, AssetHead("fx_bullet_" + id), new Vec3(2f, 2f, 2f), frames);
+        }
+
+        private static BeamAssetTrack BeamAsset(int id, int keys)
+        {
+            var frames = new BeamKey[keys];
+            for (var i = 0; i < keys; i++)
+            {
+                frames[i] = new BeamKey(
+                    i * 0.05f, new Vec3(i, i + 1, i + 2), new Vec4(0.1f, 0.2f, 0.3f, 0.4f),
+                    new Vec3(0.5f, 0.25f, i * 3f));
+            }
+            return new BeamAssetTrack(id, AssetHead("fx_beam_" + id), frames);
         }
 
         private static UnitPoseTrack PoseTrack(string name, int joints, int keys)
@@ -899,6 +947,265 @@ namespace PBAndJ.Core.Tests.Net
 
             Assert.True(bytes.Length < PbjRuntime.MaxFrameLength,
                 $"a fully capped pose part was {bytes.Length} bytes, over the frame limit");
+        }
+
+        // --- replayed effects (M14) ---
+
+        // Exhaustive on purpose. A swapped position and rotation is a
+        // projectile flying sideways and a swapped scale is an effect nobody
+        // can see, and no count, log line or round-trip-the-type test would
+        // show either.
+        [Fact]
+        public void RoundTrip_ReplayAssets_PreservesEveryFieldOfAStandaloneTrack()
+        {
+            var decoded = RoundTrip(new ReplayAssetsMessage(9, 2, 5, new AssetCapture(
+                new[] { StandaloneAsset(11) }, null, null)));
+
+            Assert.Equal(9, decoded.Turn);
+            Assert.Equal(2, decoded.PartIndex);
+            Assert.Equal(5, decoded.PartCount);
+
+            var track = Assert.Single(decoded.Assets.Standalone);
+            Assert.Equal(11, track.Id);
+            Assert.Equal("fx_impact_11", track.Head.AssetKey);
+            Assert.Equal(1.5f, track.Head.TimeStart);
+            Assert.Equal(3.25f, track.Head.TimeEnd);
+            Assert.Null(track.Head.Hue);
+            Assert.Null(track.Head.Colour);
+            Assert.Equal(new[] { 1f, 2f, 3f }, new[] { track.Position.X, track.Position.Y, track.Position.Z });
+            Assert.Equal(
+                new[] { 0.1f, 0.2f, 0.3f, 0.4f },
+                new[] { track.Rotation.X, track.Rotation.Y, track.Rotation.Z, track.Rotation.W });
+            Assert.Equal(new[] { 1.5f, 1.5f, 1.5f }, new[] { track.Scale.X, track.Scale.Y, track.Scale.Z });
+            Assert.Equal(
+                new[] { 4f, 5f, 6f, 0.75f },
+                new[]
+                {
+                    track.VelocityAndDecay.X, track.VelocityAndDecay.Y,
+                    track.VelocityAndDecay.Z, track.VelocityAndDecay.W,
+                });
+            Assert.Equal(
+                new[] { 7f, 8f, 9f },
+                new[] { track.PositionLocal.X, track.PositionLocal.Y, track.PositionLocal.Z });
+        }
+
+        [Fact]
+        public void RoundTrip_ReplayAssets_PreservesEveryFieldOfAProjectileKey()
+        {
+            var decoded = RoundTrip(new ReplayAssetsMessage(1, 0, 1, new AssetCapture(
+                null, new[] { ProjectileAsset(7, 2) }, null)));
+
+            var track = Assert.Single(decoded.Assets.Projectiles);
+            Assert.Equal(7, track.Id);
+            Assert.Equal("fx_bullet_7", track.Head.AssetKey);
+            Assert.Equal(new[] { 2f, 2f, 2f }, new[] { track.Scale.X, track.Scale.Y, track.Scale.Z });
+            Assert.Equal(2, track.Keys.Count);
+
+            var key = track.Keys[1];
+            Assert.Equal(0.05f, key.Time);
+            Assert.Equal(new[] { 1f, 2f, 3f }, new[] { key.Position.X, key.Position.Y, key.Position.Z });
+            Assert.Equal(
+                new[] { 0.1f, 0.2f, 0.3f, 0.4f },
+                new[] { key.Rotation.X, key.Rotation.Y, key.Rotation.Z, key.Rotation.W });
+        }
+
+        [Fact]
+        public void RoundTrip_ReplayAssets_PreservesEveryFieldOfABeamKey()
+        {
+            var decoded = RoundTrip(new ReplayAssetsMessage(1, 0, 1, new AssetCapture(
+                null, null, new[] { BeamAsset(8, 2) })));
+
+            var track = Assert.Single(decoded.Assets.Beams);
+            Assert.Equal(8, track.Id);
+            Assert.Equal("fx_beam_8", track.Head.AssetKey);
+            Assert.Equal(2, track.Keys.Count);
+
+            var key = track.Keys[1];
+            Assert.Equal(0.05f, key.Time);
+            Assert.Equal(new[] { 1f, 2f, 3f }, new[] { key.Position.X, key.Position.Y, key.Position.Z });
+            Assert.Equal(
+                new[] { 0.1f, 0.2f, 0.3f, 0.4f },
+                new[] { key.Rotation.X, key.Rotation.Y, key.Rotation.Z, key.Rotation.W });
+            Assert.Equal(
+                new[] { 0.5f, 0.25f, 3f },
+                new[] { key.Parameters.X, key.Parameters.Y, key.Parameters.Z });
+        }
+
+        // Absence and zero are different instructions: an absent hue leaves the
+        // prefab's own alone, a hue of zero flattens it. A sentinel float could
+        // not tell them apart inside a 0..1 block, which is why both blocks are
+        // present-flagged.
+        [Fact]
+        public void RoundTrip_ReplayAssets_KeepsAnAbsentHueApartFromAZeroOne()
+        {
+            var zero = RoundTrip(new ReplayAssetsMessage(1, 0, 1, new AssetCapture(
+                new[] { StandaloneAsset(1, hue: 0f) }, null, null)));
+            var absent = RoundTrip(new ReplayAssetsMessage(1, 0, 1, new AssetCapture(
+                new[] { StandaloneAsset(1) }, null, null)));
+
+            Assert.Equal(0f, zero.Assets.Standalone[0].Head.Hue);
+            Assert.Null(absent.Assets.Standalone[0].Head.Hue);
+        }
+
+        [Fact]
+        public void RoundTrip_ReplayAssets_PreservesBothEndsOfAColour()
+        {
+            var colour = new AssetColour(
+                new Vec4(0.1f, 0.2f, 0.3f, 1f), new Vec4(0.9f, 0.8f, 0.7f, 0.5f));
+
+            var decoded = RoundTrip(new ReplayAssetsMessage(1, 0, 1, new AssetCapture(
+                new[] { StandaloneAsset(1, hue: 0.25f, colour: colour) }, null, null)));
+
+            var head = decoded.Assets.Standalone[0].Head;
+            Assert.Equal(0.25f, head.Hue);
+            Assert.NotNull(head.Colour);
+            Assert.Equal(
+                new[] { 0.1f, 0.2f, 0.3f, 1f },
+                new[]
+                {
+                    head.Colour!.Value.From.X, head.Colour.Value.From.Y,
+                    head.Colour.Value.From.Z, head.Colour.Value.From.W,
+                });
+            Assert.Equal(
+                new[] { 0.9f, 0.8f, 0.7f, 0.5f },
+                new[]
+                {
+                    head.Colour.Value.To.X, head.Colour.Value.To.Y,
+                    head.Colour.Value.To.Z, head.Colour.Value.To.W,
+                });
+        }
+
+        [Fact]
+        public void RoundTrip_ReplayAssetsWithNoCapture_ReadsBackAsAnEmptyOne()
+        {
+            var decoded = RoundTrip(new ReplayAssetsMessage(1, 0, 1, null));
+
+            Assert.True(decoded.Assets.IsEmpty);
+        }
+
+        [Fact]
+        public void Decode_ReplayAssetsWithTooManyParts_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.ReplayAssets);
+            writer.WriteInt32(1);
+            writer.WriteInt32(0);
+            writer.WriteInt32(PbjMessageCodec.MaxAssetPartsPerTurn + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(1)]
+        [InlineData(2)]
+        public void Decode_ReplayAssetsWithTooManyTracksOfOneKind_Throws(int kind)
+        {
+            var writer = ReplayAssetsHeader();
+            for (var i = 0; i < kind; i++)
+            {
+                writer.WriteInt32(0);
+            }
+            writer.WriteInt32(PbjMessageCodec.MaxAssetsPerPart + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        [Fact]
+        public void Decode_AProjectileWithTooManyKeys_Throws()
+        {
+            var writer = ReplayAssetsHeader();
+            writer.WriteInt32(0);
+            writer.WriteInt32(1);
+            WriteAssetTrackHeadForTest(writer);
+            writer.WriteSingle(1f);
+            writer.WriteSingle(1f);
+            writer.WriteSingle(1f);
+            writer.WriteInt32(PbjMessageCodec.MaxAssetKeysPerTrack + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        [Fact]
+        public void Decode_ABeamWithTooManyKeys_Throws()
+        {
+            var writer = ReplayAssetsHeader();
+            writer.WriteInt32(0);
+            writer.WriteInt32(0);
+            writer.WriteInt32(1);
+            WriteAssetTrackHeadForTest(writer);
+            writer.WriteInt32(PbjMessageCodec.MaxAssetKeysPerTrack + 1);
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        private static PbjWriter ReplayAssetsHeader()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.ReplayAssets);
+            writer.WriteInt32(1);
+            writer.WriteInt32(0);
+            writer.WriteInt32(1);
+            return writer;
+        }
+
+        // id, then the head: key, start, end, and both present-flags clear.
+        private static void WriteAssetTrackHeadForTest(PbjWriter writer)
+        {
+            writer.WriteInt32(1);
+            writer.WriteString("fx");
+            writer.WriteSingle(0f);
+            writer.WriteSingle(1f);
+            writer.WriteBool(false);
+            writer.WriteBool(false);
+        }
+
+        // The size claim the counted-parts decision rests on, proved at three
+        // full lists rather than at the one a sender packs — a decoder cannot
+        // assume the sender packed the way we do, so the bound has to hold for
+        // anything it will accept. Names are at their cap too, for the reason
+        // the pose sibling above spells out.
+        [Fact]
+        public void Encode_ReplayAssetsAtEveryCap_StaysUnderTheFrameLimit()
+        {
+            var key = new string('k', PbjMessageCodec.MaxAssetKeyLength);
+            var colour = new AssetColour(
+                new Vec4(1f, 1f, 1f, 1f), new Vec4(1f, 1f, 1f, 1f));
+            var head = new AssetTrackHead(key, 0f, 5f, 0.5f, colour);
+
+            var standalone = new StandaloneAssetTrack[PbjMessageCodec.MaxAssetsPerPart];
+            for (var i = 0; i < standalone.Length; i++)
+            {
+                standalone[i] = new StandaloneAssetTrack(
+                    i, head, new Vec3(1f, 1f, 1f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(1f, 1f, 1f), new Vec4(0f, 0f, 0f, 0f), new Vec3(0f, 0f, 0f));
+            }
+
+            var transforms = new TransformKey[PbjMessageCodec.MaxAssetKeysPerTrack];
+            for (var i = 0; i < transforms.Length; i++)
+            {
+                transforms[i] = new TransformKey(i, new Vec3(1f, 1f, 1f), new Vec4(0f, 0f, 0f, 1f));
+            }
+            var projectiles = new ProjectileAssetTrack[PbjMessageCodec.MaxAssetsPerPart];
+            for (var i = 0; i < projectiles.Length; i++)
+            {
+                projectiles[i] = new ProjectileAssetTrack(i, head, new Vec3(1f, 1f, 1f), transforms);
+            }
+
+            var beamKeys = new BeamKey[PbjMessageCodec.MaxAssetKeysPerTrack];
+            for (var i = 0; i < beamKeys.Length; i++)
+            {
+                beamKeys[i] = new BeamKey(
+                    i, new Vec3(1f, 1f, 1f), new Vec4(0f, 0f, 0f, 1f), new Vec3(1f, 1f, 1f));
+            }
+            var beams = new BeamAssetTrack[PbjMessageCodec.MaxAssetsPerPart];
+            for (var i = 0; i < beams.Length; i++)
+            {
+                beams[i] = new BeamAssetTrack(i, head, beamKeys);
+            }
+
+            var bytes = PbjMessageCodec.Encode(new ReplayAssetsMessage(
+                1, 0, PbjMessageCodec.MaxAssetPartsPerTurn,
+                new AssetCapture(standalone, projectiles, beams)));
+
+            Assert.True(bytes.Length < PbjRuntime.MaxFrameLength,
+                $"a fully capped asset part was {bytes.Length} bytes, over the frame limit");
         }
 
         // --- scenario transfer (M9) ---

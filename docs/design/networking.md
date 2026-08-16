@@ -1135,7 +1135,7 @@ decision.
 
 Elsewhere a Harmony patch is a thin seam that delegates to a provider the mod owns, and a patch
 dying there degrades to cosmetically wrong. This mod is the inverse: it retrofits multiplayer onto a
-singleplayer game **through the patches themselves**. 35 `[HarmonyPatch]` classes over 31 distinct
+singleplayer game **through the patches themselves**. 36 `[HarmonyPatch]` classes over 32 distinct
 target methods, and eight of them are prefixes that return `false` to replace game behaviour
 outright.
 
@@ -1187,7 +1187,7 @@ obvious place. Put the check where being half-patched is actually fatal — **`p
 `pbj.join`** — count the methods this assembly's Harmony id owns, and refuse the session with both
 numbers named when it disagrees.
 
-**Count methods, not patch classes.** The 35 classes resolve to 31 distinct target methods, because
+**Count methods, not patch classes.** The 36 classes resolve to 32 distinct target methods, because
 four targets are patched twice: `CombatUtilities.ConfirmExecution` (`ActionDumpGlue` and
 `ExecutionPatches`), `DataHelperLoading.TryLoading` (`MainMenuGlue` and `SaveNamespacePatches`), and
 `OverworldUtility.OrderMovementToPosition` plus `ScenarioSetupUtility.EnterCombat` (`OverworldProbeGlue`

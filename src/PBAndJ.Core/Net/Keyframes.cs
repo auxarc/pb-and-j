@@ -242,12 +242,14 @@ namespace PBAndJ.Core.Net
             float windowStart,
             float windowEnd,
             IReadOnlyList<UnitTrack>? tracks,
-            IReadOnlyList<UnitPoseTrack>? poses = null)
+            IReadOnlyList<UnitPoseTrack>? poses = null,
+            AssetCapture? assets = null)
         {
             WindowStart = windowStart;
             WindowEnd = windowEnd;
             Tracks = tracks ?? NoTracks;
             Poses = poses ?? NoPoses;
+            Assets = assets ?? AssetCapture.None;
         }
 
         /// <summary>
@@ -276,5 +278,22 @@ namespace PBAndJ.Core.Net
         /// moving the same way as every other.
         /// </remarks>
         public IReadOnlyList<UnitPoseTrack> Poses { get; }
+
+        /// <summary>
+        /// The turn's projectiles, beams and one-shot effects, or nothing. M14.
+        /// </summary>
+        /// <remarks>
+        /// Travels on the same capture as the tracks and the poses because all
+        /// three are one walk over one recorder at one instant, and the window
+        /// above is the time base all three are played against. Letting a caller
+        /// obtain the effects separately from the window they are sliced to is
+        /// precisely how the two would drift apart.
+        /// <para>
+        /// Empty is a first-class outcome: a client never captures, a host with
+        /// prediction disabled records nothing, and a quiet turn genuinely has
+        /// no effects in it.
+        /// </para>
+        /// </remarks>
+        public AssetCapture Assets { get; }
     }
 }

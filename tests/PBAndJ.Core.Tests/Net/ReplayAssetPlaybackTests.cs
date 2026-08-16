@@ -37,6 +37,83 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(expected, ReplayAssetPlayback.PhaseAt(start, end, time));
         }
 
+        // Times are raw float bits on the wire with no decode validation — the
+        // codec bounds hostile counts, not hostile floats — so a NaN can arrive.
+        // Written the obvious way, PhaseAt has both comparisons come out false
+        // and falls through to Active, permanently, while the other two
+        // predicates call the same track inactive. That disagreement is a glue
+        // that activates an effect it will never expire, and expiry is what
+        // hands the pooled instance back.
+        [Fact]
+        public void A_track_with_a_nonsense_time_never_activates_and_is_never_held()
+        {
+            var nan = float.NaN;
+
+            Assert.False(ReplayAssetPlayback.IsActiveAt(nan, 3f, 2f));
+            Assert.False(ReplayAssetPlayback.CrossedDuring(nan, 3f, 1f, 2f));
+            Assert.Equal(AssetTrackPhase.Expired, ReplayAssetPlayback.PhaseAt(nan, 3f, 2f));
+            Assert.Equal(AssetTrackPhase.Expired, ReplayAssetPlayback.PhaseAt(1f, nan, 2f));
+            Assert.Equal(AssetTrackPhase.Expired, ReplayAssetPlayback.PhaseAt(1f, 3f, nan));
+        }
+
+        // --- the order of the two tests, which is the whole rule ---
+
+        // THE REGRESSION. Written the obvious way — expire first, then activate
+        // — a sub-frame effect is already Expired by the time the first frame
+        // asks about it and is retired before CrossedDuring is ever consulted,
+        // which defeats the interval test for precisely the effects it exists to
+        // save. Two real games, 828 effects across the wire, 826 on screen, and
+        // the two that vanished were neither pool failures nor bad keys.
+        [Fact]
+        public void ActionFor_AnEffectThatBeganAndEndedBetweenTwoFrames_IsRevealedNotRetired()
+        {
+            // Lives from 1.00 to 1.01; the cursor steps 0.99 -> 1.05 straight
+            // over it. It is Expired at 1.05 by any point test.
+            Assert.Equal(
+                AssetShowAction.Reveal,
+                ReplayAssetPlayback.ActionFor(1f, 1.01f, 0.99f, 1.05f, revealed: false));
+        }
+
+        [Fact]
+        public void ActionFor_AnEffectRevealedAndNowPast_IsRetired()
+        {
+            Assert.Equal(
+                AssetShowAction.Retire,
+                ReplayAssetPlayback.ActionFor(1f, 2f, 2.4f, 2.5f, revealed: true));
+        }
+
+        // The same track on the frame after it was revealed. `revealed` is the
+        // state BEFORE this frame, so a track revealed by one call is never also
+        // retired by it — it gets exactly one frame on screen and is swept next
+        // pass.
+        [Fact]
+        public void ActionFor_ARevealedEffectStillInsideItsWindow_IsLeftAlone()
+        {
+            Assert.Equal(
+                AssetShowAction.Nothing,
+                ReplayAssetPlayback.ActionFor(1f, 2f, 1.4f, 1.5f, revealed: true));
+        }
+
+        [Fact]
+        public void ActionFor_AnEffectTheCursorHasNotReached_IsLeftAlone()
+        {
+            Assert.Equal(
+                AssetShowAction.Nothing,
+                ReplayAssetPlayback.ActionFor(3f, 4f, 1f, 1.1f, revealed: false));
+        }
+
+        // An unrevealed track the cursor is already past does nothing rather
+        // than being retired: it holds no instance, so there is nothing to hand
+        // back, and saying Retire would invite a caller to treat "expired" and
+        // "was on screen" as the same thing.
+        [Fact]
+        public void ActionFor_AnUnrevealedEffectLongPast_IsLeftAlone()
+        {
+            Assert.Equal(
+                AssetShowAction.Nothing,
+                ReplayAssetPlayback.ActionFor(1f, 2f, 5f, 5.1f, revealed: false));
+        }
+
         [Fact]
         public void An_effect_that_lives_entirely_between_two_frames_is_still_shown()
         {

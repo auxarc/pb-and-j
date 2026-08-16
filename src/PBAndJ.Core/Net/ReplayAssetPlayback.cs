@@ -23,6 +23,21 @@ namespace PBAndJ.Core.Net
     }
 
     /// <summary>
+    /// What a playback frame should do with one asset track.
+    /// </summary>
+    public enum AssetShowAction
+    {
+        /// <summary>Leave it as it is. Sample it if it holds an instance.</summary>
+        Nothing = 0,
+
+        /// <summary>Check an instance out and put it on screen.</summary>
+        Reveal = 1,
+
+        /// <summary>Hand its instance back.</summary>
+        Retire = 2,
+    }
+
+    /// <summary>
     /// The arithmetic half of the game's <c>CheckAssetTrackActivation</c>.
     /// </summary>
     /// <remarks>
@@ -55,13 +70,32 @@ namespace PBAndJ.Core.Net
         }
 
         /// <summary>Which of the three states the cursor puts this track in.</summary>
+        /// <remarks>
+        /// Defined in terms of <see cref="IsActiveAt"/> rather than by its own
+        /// pair of comparisons, and that is not a tidy-up. Written the obvious
+        /// way — <c>time &lt; timeStart</c> then <c>time &gt; timeEnd</c> — a
+        /// <b>NaN</b> anywhere makes both comparisons false and the track falls
+        /// through to <see cref="AssetTrackPhase.Active"/>, permanently, while
+        /// <see cref="IsActiveAt"/> and <see cref="CrossedDuring"/> both call
+        /// the same track inactive. Two predicates over one track disagreeing
+        /// is a glue that activates an effect it will never expire, and expiry
+        /// is what hands the pooled instance back.
+        /// <para>
+        /// NaN is not hypothetical here. Times are raw float bits on the wire
+        /// with no decode validation — the codec bounds hostile <i>counts</i>
+        /// and not hostile <i>floats</i> — so a malformed or hostile host can
+        /// put one in. Falling to <see cref="AssetTrackPhase.Expired"/> is the
+        /// safe end: nothing renders, and anything already assigned is
+        /// released.
+        /// </para>
+        /// </remarks>
         public static AssetTrackPhase PhaseAt(float timeStart, float timeEnd, float time)
         {
-            if (time < timeStart)
+            if (IsActiveAt(timeStart, timeEnd, time))
             {
-                return AssetTrackPhase.Pending;
+                return AssetTrackPhase.Active;
             }
-            return time > timeEnd ? AssetTrackPhase.Expired : AssetTrackPhase.Active;
+            return time < timeStart ? AssetTrackPhase.Pending : AssetTrackPhase.Expired;
         }
 
         /// <summary>
@@ -69,13 +103,33 @@ namespace PBAndJ.Core.Net
         /// <paramref name="previousTime"/> to <paramref name="currentTime"/>.
         /// </summary>
         /// <remarks>
-        /// <b>The rule that <see cref="IsActiveAt"/> alone gets wrong.</b> An
-        /// effect can begin and end entirely between two frames — a muzzle flash
-        /// is under a tenth of a second and a frame at 30fps is a thirtieth — and
-        /// a cursor sampled only at instants would step straight over it and
-        /// never show it at all. The host, whose recorder ran at simulation rate,
-        /// did show it. So the test is an <i>interval</i> overlap, not a point
-        /// test.
+        /// <b>A deliberate divergence from the game, not a transcription of
+        /// it</b> — and the two predicates are here to be chosen between rather
+        /// than to be equivalent, so the glue must pick on purpose:
+        /// <b>activate on <see cref="CrossedDuring"/>, expire on
+        /// <see cref="PhaseAt"/>.</b>
+        /// <para>
+        /// An effect can begin and end entirely between two frames — a muzzle
+        /// flash is under a tenth of a second and a frame at 30fps is a
+        /// thirtieth — and a cursor sampled only at instants steps straight over
+        /// it. The game's own replay (<c>CombatReplayHelper.cs:1469</c>) is that
+        /// point test and does skip them, so <see cref="IsActiveAt"/> is exact
+        /// parity with the host's <i>replay</i>. It is <b>not</b> parity with
+        /// what the host's player watched: during live simulation the effect was
+        /// fired at its real moment and seen. That is the case for the interval
+        /// test, and it is the whole of the case.
+        /// </para>
+        /// <para>
+        /// ⚠️ <b>What is not established</b> is whether an effect activated a
+        /// frame after it ended renders anything at all.
+        /// <c>AssetLinker.SampleForReplay</c> calls
+        /// <c>ParticleSystem.Simulate</c> at the effect's local time, which for
+        /// these is past its own duration — so this may be paying an
+        /// instantiate, a <c>Setup</c> and a destroy per skipped flash to show
+        /// nothing. It is one measurement in the two-instance playtest: fire a
+        /// sub-frame effect and look. If it shows nothing, drop back to
+        /// <see cref="IsActiveAt"/> and take the game's own behaviour.
+        /// </para>
         /// <para>
         /// Callers pass the cursor's own previous value, so the very first frame
         /// of a window asks about a zero-length interval and this degrades to
@@ -105,6 +159,49 @@ namespace PBAndJ.Core.Net
             float timeStart, float timeEnd, float windowStart, float windowEnd)
         {
             return timeStart <= windowEnd && timeEnd >= windowStart;
+        }
+
+        /// <summary>
+        /// What this frame should do with a track, reveal before expiry.
+        /// </summary>
+        /// <remarks>
+        /// <b>Here, under the gate, because the ORDER of these two tests is the
+        /// whole rule and getting it backwards fails silently.</b> Written the
+        /// obvious way — expire first, then activate — an effect that begins and
+        /// ends between two frames is already
+        /// <see cref="AssetTrackPhase.Expired"/> by the time the first frame
+        /// asks about it, so it is retired before <see cref="CrossedDuring"/> is
+        /// ever consulted. That defeats the entire reason the interval test
+        /// exists, and it defeats it for precisely the short effects it was
+        /// written to save.
+        /// <para>
+        /// Not a hypothetical. Measured on two real games, 2026-08-15: 828
+        /// effects crossed the wire, 826 reached the screen, and the two that
+        /// vanished were neither pool failures nor unplayable keys — they were
+        /// sub-frame effects discarded by the wrong order. A count on a live
+        /// battle was the only thing that could have caught it; no test asserted
+        /// it and no eye could have seen two missing flashes among hundreds.
+        /// </para>
+        /// <para>
+        /// <paramref name="revealed"/> is the track's state <i>before</i> this
+        /// frame, so a track this call reveals is never also retired by it — it
+        /// gets exactly one frame on screen, which is what the host's player
+        /// effectively saw, and is swept on the following pass.
+        /// </para>
+        /// </remarks>
+        public static AssetShowAction ActionFor(
+            float timeStart, float timeEnd, float previousTime, float currentTime, bool revealed)
+        {
+            if (!revealed)
+            {
+                return CrossedDuring(timeStart, timeEnd, previousTime, currentTime)
+                    ? AssetShowAction.Reveal
+                    : AssetShowAction.Nothing;
+            }
+
+            return PhaseAt(timeStart, timeEnd, currentTime) == AssetTrackPhase.Expired
+                ? AssetShowAction.Retire
+                : AssetShowAction.Nothing;
         }
 
         /// <summary>

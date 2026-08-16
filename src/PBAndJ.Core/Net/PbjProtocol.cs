@@ -128,6 +128,19 @@ namespace PBAndJ.Core.Net
         /// <see cref="ModVersion"/> moved to 0.15.0 in the same commit.
         /// </para>
         /// <para>
+        /// <b>M14's <c>ReplayAssets</c> does NOT move it</b>, and that is worth
+        /// saying out loud after two consecutive bumps, because it is the
+        /// biggest single addition to the surface the project has made: a whole
+        /// new message type carrying a turn's projectiles, beams and effects,
+        /// in parts. It is still only a new type, and every existing layout is
+        /// untouched — which is the same reason M6's <c>Keyframes</c> and M9's
+        /// three types did not move it. <see cref="ModVersion"/> moved to
+        /// 0.16.0 in the same commit that added it, which is the guard that
+        /// actually bites: a host broadcasts these on every executed turn, so a
+        /// peer admitted on a matching version string but built without the
+        /// type would fault on its first one.
+        /// </para>
+        /// <para>
         /// Worth stating once, because it is easy to read this constant as
         /// belt-and-braces behind the mod-version gate: for the <b>harness</b>
         /// it is the only guard there is. <c>pbj-peer</c> announces no mod
@@ -151,7 +164,7 @@ namespace PBAndJ.Core.Net
         /// mod/metadata.yaml; the Makefile refuses to build a distributable when
         /// they disagree, since that is the one file this constant cannot reach.
         /// </remarks>
-        public const string ModVersion = "0.15.0";
+        public const string ModVersion = "0.16.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.

@@ -49,6 +49,11 @@ namespace PBAndJ.Core.Net
 
         /// <summary>One unit's skeletal animation for the turn just executed. M8.</summary>
         Poses = 31,
+
+        /// <summary>
+        /// Part of one turn's projectiles, beams and one-shot effects. M14.
+        /// </summary>
+        ReplayAssets = 32,
     }
 
     /// <summary>
@@ -666,6 +671,50 @@ namespace PBAndJ.Core.Net
         public int PartCount { get; }
 
         public UnitPoseTrack? Track { get; }
+    }
+
+    /// <summary>
+    /// Part of one turn's projectiles, beams and one-shot effects. M14.
+    /// </summary>
+    /// <remarks>
+    /// Rides beside <see cref="PosesMessage"/> and under the same terminator:
+    /// these go out after the poses and before the
+    /// <see cref="KeyframesMessage"/> that ends the burst, all three inside the
+    /// host's "this turn recorded something" guard. Sharing the terminator is
+    /// what keeps a client from needing a deadline for a second stream — the
+    /// arrival of the transform keyframes means every part of every kind that
+    /// will ever come has come.
+    /// <para>
+    /// <b>Several tracks per part, unlike poses.</b> M8 sends one pose track per
+    /// message because a single one can reach hundreds of kilobytes. Asset
+    /// tracks are many and small — a turn measured 727 standalone effects — so
+    /// one per message would be several hundred frames a turn for the same
+    /// bytes. <see cref="ReplayAssetParts.Split"/> owns the packing; a part is
+    /// simply an <see cref="AssetCapture"/> slice, which is why the same type
+    /// serves capture, wire and playback.
+    /// </para>
+    /// </remarks>
+    public sealed class ReplayAssetsMessage : PbjMessage
+    {
+        public ReplayAssetsMessage(int turn, int partIndex, int partCount, AssetCapture? assets)
+        {
+            Turn = turn;
+            PartIndex = partIndex;
+            PartCount = partCount;
+            Assets = assets ?? AssetCapture.None;
+        }
+
+        public override PbjMessageType Type => PbjMessageType.ReplayAssets;
+
+        /// <inheritdoc cref="PosesMessage.Turn"/>
+        public int Turn { get; }
+
+        public int PartIndex { get; }
+
+        public int PartCount { get; }
+
+        /// <summary>This part's slice of the turn. Never null.</summary>
+        public AssetCapture Assets { get; }
     }
 
     /// <summary>

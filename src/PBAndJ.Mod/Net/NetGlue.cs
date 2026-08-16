@@ -291,6 +291,29 @@ namespace PBAndJ.Mod.Net
         /// sees today.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// Keeps what a client was just told to play, so it can play it again.
+        /// </summary>
+        /// <remarks>
+        /// Without this <c>pbj.replay-last</c> is host-only, because
+        /// <c>lastCapture</c> is otherwise written solely by the host's own
+        /// capture path — and the client is the machine whose playback anyone
+        /// actually wants to inspect twice. Re-running a turn to look at it
+        /// again means re-authoring orders and re-executing on the host, which
+        /// makes any A/B comparison a comparison of two different turns.
+        /// <para>
+        /// The stored capture has already crossed the wire, so replaying it
+        /// sends it through the codec a second time. That is deliberate and
+        /// costs nothing: one code path, and a capture the encoder would now
+        /// refuse is worth learning about here.
+        /// </para>
+        /// </remarks>
+        internal static void RememberPlayed(int turn, KeyframeCapture capture)
+        {
+            lastCapture = capture;
+            lastCaptureTurn = turn;
+        }
+
         public static string ReplayLast()
         {
             if (lastCapture == null || lastCapture.Tracks.Count == 0)
@@ -343,8 +366,35 @@ namespace PBAndJ.Mod.Net
                 return "[pb-and-j] captured poses failed the codec round-trip: " + e.Message;
             }
 
+            // M14's effects take the same trip, and through the SPLIT and the
+            // client's own accumulator rather than a single message — that is
+            // the half a one-instance test can still prove, and the half that
+            // fails invisibly: a part boundary off by one is a turn that
+            // reassembles into nothing, which looks exactly like a client where
+            // the feature was never built.
+            var assets = AssetCapture.None;
+            try
+            {
+                var parts = ReplayAssetParts.Split(Sendable(lastCapture.Assets), out _);
+                if (parts.Count > 0)
+                {
+                    var buffer = new AssetBuffer();
+                    for (var i = 0; i < parts.Count; i++)
+                    {
+                        var wire = PbjMessageCodec.Encode(
+                            new ReplayAssetsMessage(lastCaptureTurn, i, parts.Count, parts[i]));
+                        buffer.Accept((ReplayAssetsMessage)PbjMessageCodec.Decode(wire));
+                    }
+                    assets = buffer.Take(lastCaptureTurn);
+                }
+            }
+            catch (PbjProtocolException e)
+            {
+                return "[pb-and-j] captured effects failed the codec round-trip: " + e.Message;
+            }
+
             KeyframePlayer.Play(decoded.Turn, new KeyframeCapture(
-                decoded.WindowStart, decoded.WindowEnd, decoded.Tracks, poses));
+                decoded.WindowStart, decoded.WindowEnd, decoded.Tracks, poses, assets));
             if (!KeyframePlayer.IsPlaying)
             {
                 return "[pb-and-j] replay: no recorded unit is present in this combat";
@@ -356,7 +406,58 @@ namespace PBAndJ.Mod.Net
             Debug.Log(KeyframePlayer.PosedUnits > 0
                 ? NetLog.PosesReceived(decoded.Turn, KeyframePlayer.PosedUnits)
                 : NetLog.PosesIncomplete(decoded.Turn, poses.Count, lastCapture.Poses.Count));
+
+            var effects = assets.Standalone.Count + assets.Projectiles.Count + assets.Beams.Count;
+            Debug.Log(effects > 0
+                ? NetLog.AssetsReceived(decoded.Turn, effects)
+                : NetLog.AssetsNoneSent(decoded.Turn));
             return line;
+        }
+
+        /// <summary>
+        /// The captured effects that could travel, checked the way the host
+        /// would check them.
+        /// </summary>
+        /// <remarks>
+        /// Applied here so <c>pbj.replay-last</c> shows what a client would
+        /// actually receive rather than what the recorder happened to hold. The
+        /// per-track drop is the point: a projectile stranded below two keys is
+        /// dropped by the host too, and a replay that showed it anyway would be
+        /// a more forgiving test than the wire.
+        /// </remarks>
+        private static AssetCapture Sendable(AssetCapture captured)
+        {
+            var standalone = new List<StandaloneAssetTrack>(captured.Standalone.Count);
+            for (var i = 0; i < captured.Standalone.Count; i++)
+            {
+                if (ReplayAssetParts.TryPrepare(captured.Standalone[i], out var prepared)
+                    == AssetTrackFault.None)
+                {
+                    standalone.Add(prepared!);
+                }
+            }
+
+            var projectiles = new List<ProjectileAssetTrack>(captured.Projectiles.Count);
+            for (var i = 0; i < captured.Projectiles.Count; i++)
+            {
+                if (ReplayAssetParts.TryPrepare(captured.Projectiles[i], out var prepared)
+                    == AssetTrackFault.None)
+                {
+                    projectiles.Add(prepared!);
+                }
+            }
+
+            var beams = new List<BeamAssetTrack>(captured.Beams.Count);
+            for (var i = 0; i < captured.Beams.Count; i++)
+            {
+                if (ReplayAssetParts.TryPrepare(captured.Beams[i], out var prepared)
+                    == AssetTrackFault.None)
+                {
+                    beams.Add(prepared!);
+                }
+            }
+
+            return new AssetCapture(standalone, projectiles, beams);
         }
 
         public static string NetStop()

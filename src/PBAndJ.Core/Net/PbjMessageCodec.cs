@@ -98,6 +98,54 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public const int MaxPoseNameLength = 128;
 
+        /// <summary>
+        /// Cap on tracks of <i>each</i> kind in one
+        /// <see cref="ReplayAssetsMessage"/>.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="ReplayAssetParts.Split"/> never fills a part past this
+        /// many tracks in <b>total</b> across the three kinds, so the encoder
+        /// stays well inside it. The decoder bounds each of the three lists
+        /// separately at this value, because a decoder may not assume the
+        /// sender packed the way ours does — it can only bound what it is about
+        /// to allocate. The frame bound is therefore proved against three full
+        /// lists, which is three times what any part we send carries.
+        /// </remarks>
+        public const int MaxAssetsPerPart = 64;
+
+        /// <summary>Cap on the parts one turn's assets may split into.</summary>
+        /// <remarks>
+        /// With <see cref="MaxAssetsPerPart"/> this bounds a turn at 4096
+        /// tracks, against a measured worst case of 1091 — and that figure was
+        /// the host's whole unpruned five-turn accumulation, not one window's
+        /// slice. A backstop rather than a working limit; see
+        /// <see cref="ReplayAssetParts.Split"/> for what happens past it.
+        /// </remarks>
+        public const int MaxAssetPartsPerTurn = 64;
+
+        /// <summary>
+        /// Cap on keys in one projectile or beam track.
+        /// </summary>
+        /// <remarks>
+        /// Far above the measurement — 364 projectiles carried 938 keys between
+        /// them, under three each — and deliberately so. These come off the same
+        /// player-configurable sampler M8's poses do, so the cap is set by what
+        /// the setting can produce rather than by what one machine happened to
+        /// record. <see cref="TrackThinning.Thin"/> makes it a repair.
+        /// </remarks>
+        public const int MaxAssetKeysPerTrack = 64;
+
+        /// <summary>Longest pool key an asset track may carry, in characters.</summary>
+        /// <remarks>
+        /// Counted in characters and set well below
+        /// <see cref="PbjWriter.MaxStringLength"/>, exactly as
+        /// <see cref="MaxPoseNameLength"/> is and for the same reason: 128
+        /// characters cannot exceed 512 UTF-8 bytes, so encode can never be
+        /// where an over-long key is discovered.
+        /// <see cref="AssetTrackFault.KeyTooLong"/> is where it is discovered.
+        /// </remarks>
+        public const int MaxAssetKeyLength = 128;
+
         public static byte[] Encode(PbjMessage message)
         {
             if (message == null)
@@ -253,6 +301,13 @@ namespace PBAndJ.Core.Net
                     writer.WriteInt32(poses.PartIndex);
                     writer.WriteInt32(poses.PartCount);
                     WriteUnitPoseTrack(writer, poses.Track);
+                    break;
+
+                case ReplayAssetsMessage assets:
+                    writer.WriteInt32(assets.Turn);
+                    writer.WriteInt32(assets.PartIndex);
+                    writer.WriteInt32(assets.PartCount);
+                    WriteAssetCapture(writer, assets.Assets);
                     break;
 
                 case ScenarioOfferMessage offer:
@@ -511,6 +566,15 @@ namespace PBAndJ.Core.Net
                     return new PosesMessage(turn, partIndex, partCount, ReadUnitPoseTrack(reader));
                 }
 
+                case PbjMessageType.ReplayAssets:
+                {
+                    var turn = reader.ReadInt32();
+                    var partIndex = reader.ReadInt32();
+                    var partCount = ReadCount(reader, MaxAssetPartsPerTurn, "asset part");
+                    return new ReplayAssetsMessage(
+                        turn, partIndex, partCount, ReadAssetCapture(reader));
+                }
+
                 case PbjMessageType.ScenarioOffer:
                 {
                     var saveName = reader.ReadString();
@@ -611,10 +675,7 @@ namespace PBAndJ.Core.Net
         {
             writer.WriteString(unit.Name);
             WriteVec3(writer, unit.Position);
-            writer.WriteSingle(unit.Rotation.X);
-            writer.WriteSingle(unit.Rotation.Y);
-            writer.WriteSingle(unit.Rotation.Z);
-            writer.WriteSingle(unit.Rotation.W);
+            WriteVec4(writer, unit.Rotation);
             WriteVec3(writer, unit.Facing);
             writer.WriteSingle(unit.Integrity);
             writer.WriteBool(unit.IsDead);
@@ -635,8 +696,7 @@ namespace PBAndJ.Core.Net
         {
             var name = reader.ReadString();
             var position = ReadVec3(reader);
-            var rotation = new Vec4(
-                reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            var rotation = ReadVec4(reader);
             var facing = ReadVec3(reader);
             var integrity = reader.ReadSingle();
             var isDead = reader.ReadBool();
@@ -659,18 +719,14 @@ namespace PBAndJ.Core.Net
         {
             writer.WriteSingle(key.Time);
             WriteVec3(writer, key.Position);
-            writer.WriteSingle(key.Rotation.X);
-            writer.WriteSingle(key.Rotation.Y);
-            writer.WriteSingle(key.Rotation.Z);
-            writer.WriteSingle(key.Rotation.W);
+            WriteVec4(writer, key.Rotation);
         }
 
         private static TransformKey ReadTransformKey(PbjReader reader)
         {
             var time = reader.ReadSingle();
             var position = ReadVec3(reader);
-            return new TransformKey(time, position, new Vec4(
-                reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()));
+            return new TransformKey(time, position, ReadVec4(reader));
         }
 
         private static void WriteUnitPoseTrack(PbjWriter writer, UnitPoseTrack? track)
@@ -700,11 +756,7 @@ namespace PBAndJ.Core.Net
                 for (var j = 0; j < key.Joints.Count; j++)
                 {
                     WriteVec3(writer, key.Joints[j].Position);
-                    var rotation = key.Joints[j].Rotation;
-                    writer.WriteSingle(rotation.X);
-                    writer.WriteSingle(rotation.Y);
-                    writer.WriteSingle(rotation.Z);
-                    writer.WriteSingle(rotation.W);
+                    WriteVec4(writer, key.Joints[j].Rotation);
                 }
             }
         }
@@ -737,15 +789,194 @@ namespace PBAndJ.Core.Net
                 var poseJoints = new JointPose[poseJointCount];
                 for (var j = 0; j < poseJointCount; j++)
                 {
-                    poseJoints[j] = new JointPose(ReadVec3(reader), new Vec4(
-                        reader.ReadSingle(), reader.ReadSingle(),
-                        reader.ReadSingle(), reader.ReadSingle()));
+                    var jointPosition = ReadVec3(reader);
+                    poseJoints[j] = new JointPose(jointPosition, ReadVec4(reader));
                 }
 
                 keys[k] = new PoseKey(time, syncLeft, syncRight, poseJoints);
             }
 
             return new UnitPoseTrack(name, joints!, keys);
+        }
+
+        /// <summary>
+        /// One part's three collections, each length-prefixed. M14.
+        /// </summary>
+        /// <remarks>
+        /// Three counted lists rather than one tagged sequence. A tag byte per
+        /// track would be a byte spent restating something the layout already
+        /// says, and a decoder reading a tagged stream cannot bound its
+        /// allocations before it has read them all.
+        /// </remarks>
+        private static void WriteAssetCapture(PbjWriter writer, AssetCapture assets)
+        {
+            writer.WriteInt32(assets.Standalone.Count);
+            for (var i = 0; i < assets.Standalone.Count; i++)
+            {
+                var track = assets.Standalone[i];
+                writer.WriteInt32(track.Id);
+                WriteAssetTrackHead(writer, track.Head);
+                WriteVec3(writer, track.Position);
+                WriteVec4(writer, track.Rotation);
+                WriteVec3(writer, track.Scale);
+                WriteVec4(writer, track.VelocityAndDecay);
+                WriteVec3(writer, track.PositionLocal);
+            }
+
+            writer.WriteInt32(assets.Projectiles.Count);
+            for (var i = 0; i < assets.Projectiles.Count; i++)
+            {
+                var track = assets.Projectiles[i];
+                writer.WriteInt32(track.Id);
+                WriteAssetTrackHead(writer, track.Head);
+                WriteVec3(writer, track.Scale);
+                writer.WriteInt32(track.Keys.Count);
+                for (var k = 0; k < track.Keys.Count; k++)
+                {
+                    WriteTransformKey(writer, track.Keys[k]);
+                }
+            }
+
+            writer.WriteInt32(assets.Beams.Count);
+            for (var i = 0; i < assets.Beams.Count; i++)
+            {
+                var track = assets.Beams[i];
+                writer.WriteInt32(track.Id);
+                WriteAssetTrackHead(writer, track.Head);
+                writer.WriteInt32(track.Keys.Count);
+                for (var k = 0; k < track.Keys.Count; k++)
+                {
+                    var key = track.Keys[k];
+                    writer.WriteSingle(key.Time);
+                    WriteVec3(writer, key.Position);
+                    WriteVec4(writer, key.Rotation);
+                    WriteVec3(writer, key.Parameters);
+                }
+            }
+        }
+
+        private static AssetCapture ReadAssetCapture(PbjReader reader)
+        {
+            var standaloneCount = ReadCount(reader, MaxAssetsPerPart, "standalone asset");
+            var standalone = new StandaloneAssetTrack[standaloneCount];
+            for (var i = 0; i < standaloneCount; i++)
+            {
+                var id = reader.ReadInt32();
+                var head = ReadAssetTrackHead(reader);
+                var position = ReadVec3(reader);
+                var rotation = ReadVec4(reader);
+                var scale = ReadVec3(reader);
+                var velocityAndDecay = ReadVec4(reader);
+                standalone[i] = new StandaloneAssetTrack(
+                    id, head, position, rotation, scale, velocityAndDecay, ReadVec3(reader));
+            }
+
+            var projectileCount = ReadCount(reader, MaxAssetsPerPart, "projectile asset");
+            var projectiles = new ProjectileAssetTrack[projectileCount];
+            for (var i = 0; i < projectileCount; i++)
+            {
+                var id = reader.ReadInt32();
+                var head = ReadAssetTrackHead(reader);
+                var scale = ReadVec3(reader);
+                var keyCount = ReadCount(reader, MaxAssetKeysPerTrack, "projectile key");
+                var keys = new TransformKey[keyCount];
+                for (var k = 0; k < keyCount; k++)
+                {
+                    keys[k] = ReadTransformKey(reader);
+                }
+                projectiles[i] = new ProjectileAssetTrack(id, head, scale, keys);
+            }
+
+            var beamCount = ReadCount(reader, MaxAssetsPerPart, "beam asset");
+            var beams = new BeamAssetTrack[beamCount];
+            for (var i = 0; i < beamCount; i++)
+            {
+                var id = reader.ReadInt32();
+                var head = ReadAssetTrackHead(reader);
+                var keyCount = ReadCount(reader, MaxAssetKeysPerTrack, "beam key");
+                var keys = new BeamKey[keyCount];
+                for (var k = 0; k < keyCount; k++)
+                {
+                    var time = reader.ReadSingle();
+                    var position = ReadVec3(reader);
+                    var rotation = ReadVec4(reader);
+                    keys[k] = new BeamKey(time, position, rotation, ReadVec3(reader));
+                }
+                beams[i] = new BeamAssetTrack(id, head, keys);
+            }
+
+            return new AssetCapture(standalone, projectiles, beams);
+        }
+
+        /// <summary>
+        /// The head every asset track shares, with both optional blocks
+        /// present-flagged rather than sentinelled.
+        /// </summary>
+        /// <remarks>
+        /// A flag byte and a payload written only when set, because absence is
+        /// a real instruction here and the common case besides: a hue offset of
+        /// zero tells the client to flatten the effect's hue, while an absent
+        /// one tells it to leave the prefab's own alone. A sentinel float would
+        /// have to be a value the game cannot legitimately produce, and there
+        /// is no such value in a 0..1 block. The flag also pays for itself —
+        /// the 727 standalone effects of a measured turn are overwhelmingly
+        /// plain, so writing the 36 bytes unconditionally would cost more than
+        /// the flags do.
+        /// </remarks>
+        private static void WriteAssetTrackHead(PbjWriter writer, AssetTrackHead head)
+        {
+            writer.WriteString(head.AssetKey);
+            writer.WriteSingle(head.TimeStart);
+            writer.WriteSingle(head.TimeEnd);
+
+            writer.WriteBool(head.Hue.HasValue);
+            if (head.Hue.HasValue)
+            {
+                writer.WriteSingle(head.Hue.Value);
+            }
+
+            writer.WriteBool(head.Colour.HasValue);
+            if (head.Colour.HasValue)
+            {
+                WriteVec4(writer, head.Colour.Value.From);
+                WriteVec4(writer, head.Colour.Value.To);
+            }
+        }
+
+        private static AssetTrackHead ReadAssetTrackHead(PbjReader reader)
+        {
+            var key = reader.ReadString();
+            var timeStart = reader.ReadSingle();
+            var timeEnd = reader.ReadSingle();
+
+            float? hue = null;
+            if (reader.ReadBool())
+            {
+                hue = reader.ReadSingle();
+            }
+
+            AssetColour? colour = null;
+            if (reader.ReadBool())
+            {
+                var from = ReadVec4(reader);
+                colour = new AssetColour(from, ReadVec4(reader));
+            }
+
+            return new AssetTrackHead(key, timeStart, timeEnd, hue, colour);
+        }
+
+        private static void WriteVec4(PbjWriter writer, Vec4 value)
+        {
+            writer.WriteSingle(value.X);
+            writer.WriteSingle(value.Y);
+            writer.WriteSingle(value.Z);
+            writer.WriteSingle(value.W);
+        }
+
+        private static Vec4 ReadVec4(PbjReader reader)
+        {
+            return new Vec4(
+                reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
         }
 
         private static void WriteVec3(PbjWriter writer, Vec3 value)

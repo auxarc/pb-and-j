@@ -65,6 +65,14 @@
     <!-- M8's playback driver. Silencing a unit's idle animation before writing
          its recorded bones means touching Animator.enabled, and Animator lives
          here rather than in CoreModule. -->
+    <!-- For reading particleCount when measuring whether a replayed effect
+         actually drew anything. The type is forwarded out of UnityEngine.dll,
+         so it is unreachable without this even though the code compiles
+         against UnityEngine elsewhere. -->
+    <Reference Include="UnityEngine.ParticleSystemModule">
+      <HintPath>$(VendorDir)/UnityEngine.ParticleSystemModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.AnimationModule">
       <HintPath>$(VendorDir)/UnityEngine.AnimationModule.dll</HintPath>
       <Private>false</Private>
