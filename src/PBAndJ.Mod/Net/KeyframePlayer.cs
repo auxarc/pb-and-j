@@ -239,6 +239,162 @@ namespace PBAndJ.Mod.Net
         private static float cursorPrevious;
         private static bool playing;
 
+        // ─── MEASUREMENT 2: the _TimeSimulation mirror ───────────────────────
+        //
+        // Vanilla replay writes this shader global on every scrub
+        // (CombatReplayHelper.cs:970, Shader.SetGlobalFloat(_TimeSimulation,
+        // timeRequested)). A client reaches none of the writers that would keep
+        // it current — ActionRecordingSystem.cs:42 is gated on combat.Simulating,
+        // which a client never sets — so during our playback it holds whatever
+        // was last left there, measured once as a stale OVERWORLD value of 49.12.
+        //
+        // Whether that matters is unknowable from the decompile, because it is a
+        // question about compiled shaders. It matters most for BEAMS: revision
+        // 4 closed the frozen-clock worry for standalone effects by way of
+        // SampleForReplay calling ParticleSystem.Simulate, and
+        // ReplayEntityAssetBeam.ApplyTime (decompiled:48-93) never calls
+        // SampleForReplay at all. So the one effect class whose immunity was
+        // never established is the one this measures.
+        //
+        // ✅ MEASURED 2026-08-16, and the answer was yes — so this is ON by
+        // default and the toggle survives only to run the comparison again.
+        //
+        // A held replay frame was photographed at two values of the global and
+        // the images diffed: between-setting difference was 2.7x the noise
+        // floor with no overlap, and the changed pixels lay ONLY along the
+        // beam, in the dashed pattern of a scrolling texture sampled at two
+        // times. Without the mirror a replayed beam's shader clock is pinned to
+        // an arbitrary constant for the whole window — the texture does not
+        // scroll at all, where on the host it does.
+        //
+        // The constant is arbitrary in the literal sense: measured client
+        // baselines of 379.69 and 230.87 both tracked how long that instance
+        // had been running, which points at CombatIntroStartupSystem.cs:367
+        // writing Time.unscaledTime on the combat-intro camera sweep.
+        //
+        // Full record: docs/notes/timesim-measurement.md.
+        private static readonly int ShaderIdTimeSimulation =
+            Shader.PropertyToID("_TimeSimulation");
+
+        /// <summary>Whether to keep <c>_TimeSimulation</c> on the playback cursor.</summary>
+        /// <remarks>
+        /// On by default because a client reaches none of the writers that keep
+        /// this current — vanilla's own replay writes it on every scrub
+        /// (<c>CombatReplayHelper.cs:970</c>) and that path is host-only, so
+        /// mirroring it is parity rather than embellishment. <c>pbj.fx-mirror 0</c>
+        /// turns it off, which is how the A/B is re-run.
+        /// </remarks>
+        internal static bool MirrorTimeSimulation { get; set; } = true;
+
+        /// <summary>
+        /// Freeze playback once the cursor reaches this time. Negative is off.
+        /// </summary>
+        /// <remarks>
+        /// Built because comparing two five-second replays by eye did not work:
+        /// one beam among 378 effects, twice, from memory, is more than eyes can
+        /// do — the first attempt at measurement 2 returned "could not tell",
+        /// which is a real answer about the instrument rather than about the
+        /// beam.
+        /// <para>
+        /// Holding turns the A/B into a still image with exactly one variable.
+        /// The window plays normally up to this time and then stops advancing,
+        /// so every track that should be active at that instant has been
+        /// revealed along the way; then <c>_TimeSimulation</c> can be moved by
+        /// hand with nothing else on screen changing. A difference under those
+        /// conditions IS the shader sampling it, and it can be photographed and
+        /// diffed rather than judged.
+        /// </para>
+        /// <para>
+        /// ⚠️ Deliberately NOT reset by <see cref="Stop"/>: it has to be set
+        /// <i>before</i> the replay starts, or the command racing a five-second
+        /// window would decide whether the hold took. The cost is that it stays
+        /// armed until it is cleared, so the command that sets it says so.
+        /// </para>
+        /// <para>
+        /// ⚠️ A held window never ends, so it never sweeps. Its instances stay
+        /// checked out until the hold is released or combat tears down. That is
+        /// acceptable for a measurement and would not be for anything shipped.
+        /// </para>
+        /// </remarks>
+        internal static float HoldAt { get; set; } = -1f;
+
+        /// <summary>Whether playback is currently frozen at <see cref="HoldAt"/>.</summary>
+        internal static bool Holding => playing && HoldAt >= 0f && cursor >= HoldAt;
+
+        // What the global held before this window, so it can be handed back.
+        // Captured UNCONDITIONALLY in Play, not when the mirror is enabled: the
+        // toggle can be flipped mid-window, and a mid-window enable with no
+        // captured pre-value would restore garbage on unwind.
+        private static float timeSimRestore;
+
+        // Set at the FIRST ACTUAL WRITE in Step, never in Play. Play has two
+        // early returns past the capture, and Stop() has no `playing` guard and
+        // is reachable with playing == false from Play's own opening call, from
+        // CombatGameBridge.StopKeyframes, and as a double-stop after a finished
+        // window. Without this, an unwind on any of those paths would write a
+        // stale value over a live one.
+        private static bool mirrorApplied;
+
+        // The cursor value written last frame, for the echo check below.
+        private static float mirrorWrote;
+        private static bool mirrorWroteAny;
+
+        /// <summary>
+        /// What <c>_TimeSimulation</c> held at the window's start and end.
+        /// </summary>
+        /// <remarks>
+        /// Sampled unconditionally, because with the mirror OFF this is the
+        /// client's real precondition — the number the whole measurement is
+        /// about. The start sample is taken in <see cref="Play"/> before playback
+        /// is armed, or a mirror-on run would read back its own first write.
+        /// </remarks>
+        internal static float TimeSimAtStart { get; private set; }
+
+        /// <inheritdoc cref="TimeSimAtStart"/>
+        internal static float TimeSimAtEnd { get; private set; }
+
+        /// <summary>
+        /// Frames on which something else overwrote the mirror's value.
+        /// </summary>
+        /// <remarks>
+        /// <b>The detector the A/B is actually trusted on.</b> If another writer
+        /// fires during our window, the last write before the frame renders wins
+        /// — and our pump is a <c>Heartbeat.Update</c> postfix whose ordering
+        /// against the Entitas systems is a script-execution-order question no
+        /// decompile answers. A confounded run looks exactly like the result we
+        /// hope for, so the confounder has to be visible or the measurement is
+        /// worthless.
+        /// <para>
+        /// Sampling the global at the window's two ends is NOT sufficient and
+        /// this is why: a writer that writes the <i>same value every frame</i> is
+        /// invisible to start/end sampling and to per-frame min/max alike, while
+        /// still winning at render time on every frame. Reading the global back
+        /// and comparing it against what we wrote catches any interleaved writer
+        /// whose value is not coincidentally our own cursor, on whichever side of
+        /// the postfix it runs.
+        /// </para>
+        /// <para>
+        /// A non-zero count <b>voids the run</b>. It is not a defect in the
+        /// mirror; it is the finding.
+        /// </para>
+        /// </remarks>
+        internal static int TimeSimOverwrites { get; private set; }
+
+        /// <summary>
+        /// Beam tracks built for this window, and how many were put on screen.
+        /// </summary>
+        /// <remarks>
+        /// A run whose turn contained no beams answers nothing, and must not be
+        /// mistaken for a clean result — which, without this, it would be
+        /// indistinguishable from. <see cref="BeamsRevealed"/> counts past the
+        /// missing-<c>fxHelperBeam</c> abandonment, so it is beams that actually
+        /// rendered rather than beams that were attempted.
+        /// </remarks>
+        internal static int BeamsBuilt { get; private set; }
+
+        /// <inheritdoc cref="BeamsBuilt"/>
+        internal static int BeamsRevealed { get; private set; }
+
         internal static bool IsPlaying => playing;
 
         /// <summary>How many replayed effects are on screen right now.</summary>
@@ -400,6 +556,17 @@ namespace PBAndJ.Mod.Net
             LateDrawing = 0;
             OnTimeReveals = 0;
             OnTimeDrawing = 0;
+            BeamsRevealed = 0;
+            TimeSimOverwrites = 0;
+
+            // Captured here — after the opening Stop(), which has already handed
+            // back anything the previous window borrowed, and before playback is
+            // armed. Unconditional: the toggle may be flipped mid-window and the
+            // unwind still has to have something true to restore.
+            timeSimRestore = Shader.GetGlobalFloat(ShaderIdTimeSimulation);
+            TimeSimAtStart = timeSimRestore;
+            TimeSimAtEnd = timeSimRestore;
+            mirrorWroteAny = false;
 
             cursor = capture.WindowStart;
             cursorPrevious = capture.WindowStart;
@@ -710,6 +877,10 @@ namespace PBAndJ.Mod.Net
         /// </remarks>
         private static void BuildShows(AssetCapture assets)
         {
+            // Reset here rather than beside the other counters in Play: this runs
+            // first, and a reset afterwards would zero what it had just counted.
+            BeamsBuilt = 0;
+
             for (var i = 0; i < assets.Standalone.Count; i++)
             {
                 var sent = assets.Standalone[i];
@@ -777,6 +948,7 @@ namespace PBAndJ.Mod.Net
                 if (Dress(track, sent.Head))
                 {
                     shows.Add(new AssetShow(track));
+                    BeamsBuilt++;
                 }
             }
         }
@@ -974,6 +1146,14 @@ namespace PBAndJ.Mod.Net
             show.Instance = instance;
             RevealedEffects++;
 
+            // Past the beam-helper abandonment above on purpose: this counts
+            // beams that actually rendered, which is what a run claiming to have
+            // measured beams has to be able to show.
+            if (show.Track is ReplayEntityAssetBeam)
+            {
+                BeamsRevealed++;
+            }
+
             // Classified at the moment of activation, because that is the only
             // moment the distinction exists: by the next frame every track's
             // phase has moved on and a late reveal is indistinguishable from an
@@ -1108,6 +1288,30 @@ namespace PBAndJ.Mod.Net
 
         internal static void Stop()
         {
+            // FIRST, and in its own try. Stop is called from Advance's catch, so
+            // a throw in any of the three unwinds below would otherwise skip this
+            // one — and this is the only step here whose blast radius is a
+            // process-wide shader global rather than one unit's animator.
+            //
+            // The residue is real and was measured on the original spike: left
+            // alone, the global sits at the playback cursor's last value long
+            // after the window ended. Restoring it is a decision, not an
+            // accident.
+            try
+            {
+                if (mirrorApplied)
+                {
+                    mirrorApplied = false;
+                    Shader.SetGlobalFloat(ShaderIdTimeSimulation, timeSimRestore);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning(
+                    "[pb-and-j] could not restore _TimeSimulation: "
+                        + e.GetType().Name + ": " + e.Message);
+            }
+
             // Visibility first, and Wake second. The same ordering argument as
             // Show's: a puppet root left inactive would swallow the sleep
             // unwind's SetActive calls on its own children.
@@ -1246,6 +1450,16 @@ namespace PBAndJ.Mod.Net
                 return;
             }
 
+            // The echo check, before anything this frame writes: if the global no
+            // longer holds what we last put there, something else wrote it
+            // between the two frames and this run is confounded. Read first,
+            // because our own write below would erase the evidence.
+            if (mirrorWroteAny
+                && !Mathf.Approximately(Shader.GetGlobalFloat(ShaderIdTimeSimulation), mirrorWrote))
+            {
+                TimeSimOverwrites++;
+            }
+
             // Real time against simulation time one-for-one: the host recorded
             // the turn at the rate it was simulated, so replaying it at any other
             // rate would be a different turn.
@@ -1255,6 +1469,37 @@ namespace PBAndJ.Mod.Net
             {
                 cursor = windowEnd;
             }
+
+            // The hold, applied AFTER the natural advance rather than instead of
+            // it: the window has to play up to this instant so that every track
+            // active there was revealed on the way past, exactly as it would have
+            // been. Jumping the cursor straight to the hold point would leave the
+            // interval activation test with nothing to cross and reveal a
+            // different set of effects than a real playback does.
+            if (HoldAt >= 0f && cursor >= HoldAt)
+            {
+                cursor = Mathf.Clamp(HoldAt, windowStart, windowEnd);
+                finished = false;
+            }
+
+            // The absolute cursor, not a turn-local elapsed — which is what
+            // vanilla writes at CombatReplayHelper.cs:970, on the same clock our
+            // window bounds come off (CombatGameBridge sets windowStart from
+            // turnStartTime and windowEnd from combat.simulationTime.f). A local
+            // 0-based time would feed shaders a clock the game never writes.
+            //
+            // Placed after the cursor advance and before ApplyShows, matching
+            // vanilla's own ordering: it writes the global, then activates and
+            // applies its tracks at the same time value.
+            if (MirrorTimeSimulation)
+            {
+                mirrorApplied = true;
+                mirrorWrote = cursor;
+                mirrorWroteAny = true;
+                Shader.SetGlobalFloat(ShaderIdTimeSimulation, cursor);
+            }
+
+            TimeSimAtEnd = Shader.GetGlobalFloat(ShaderIdTimeSimulation);
 
             for (var i = 0; i < targets.Count; i++)
             {

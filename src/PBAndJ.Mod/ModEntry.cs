@@ -68,6 +68,7 @@ namespace PBAndJ.Mod
             // unmeasured volume is how M6 nearly shipped a frame the receiver
             // would have rejected. Goes once the number is in the recon file.
             Net.VfxProbeGlue.RegisterConsoleCommands();
+            Net.BeamInjectGlue.RegisterConsoleCommands();
         }
     }
 

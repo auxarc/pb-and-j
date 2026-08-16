@@ -912,6 +912,11 @@ namespace PBAndJ.Mod.Net
             // planning.
             KeyframePlayer.Advance(Time.unscaledDeltaTime);
 
+            // M14 measurement 2's beam injector. Outside the session guard for
+            // the same reason playback is: it has to work on a solo host, which
+            // is where a turn carrying a beam is authored in the first place.
+            BeamInjectGlue.Tick();
+
             // THROWAWAY (M8 recon) — samples Time.timeScale across exactly the
             // playback window, which is the one M8 question a running game has
             // never answered. Goes with ReplayProbeGlue.
