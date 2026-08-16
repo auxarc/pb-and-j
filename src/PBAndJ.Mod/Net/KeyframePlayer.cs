@@ -229,9 +229,12 @@ namespace PBAndJ.Mod.Net
         /// Where the cursor was last frame, for the interval activation test.
         /// </summary>
         /// <remarks>
-        /// An effect can begin and end entirely between two frames — a muzzle
-        /// flash is under a tenth of a second, a frame is a thirtieth — so an
-        /// activation test sampled only at instants steps straight over it.
+        /// A track whose window closes between two frames would be stepped over
+        /// by an activation test sampled only at instants. ⚠️ Measured rare —
+        /// three replays of a 389-effect turn saw zero of them, because a
+        /// track's window is its pool lifetime (~1 s for muzzle pools) rather
+        /// than how briefly the flash looks bright. See
+        /// <c>ReplayAssetPlayback.CrossedDuring</c>.
         /// </remarks>
         private static float cursorPrevious;
         private static bool playing;
@@ -264,10 +267,18 @@ namespace PBAndJ.Mod.Net
         /// <remarks>
         /// <b>The measurement that decides whether the interval activation test
         /// earns its cost</b>, and it exists because the question cannot be
-        /// answered by looking. A handful of sub-frame flashes inside a screen
+        /// answered by looking. A handful of such activations inside a screen
         /// full of gunfire is not something a person can count, and "it looked
         /// right" is consistent with both answers — so the eye test was
         /// replaced with this one.
+        /// <para>
+        /// <b>ANSWERED, 2026-08-15.</b> Three replays of a real 389-effect turn:
+        /// <c>late=0/0</c> every time, against <c>ontime</c> around 115/389.
+        /// There are no late activations to price, so the interval test costs
+        /// nothing — and it keeps its place on that rather than on any benefit
+        /// this measured. Left in because it still runs, and because a turn that
+        /// does produce one would otherwise lose it silently.
+        /// </para>
         /// <para>
         /// <see cref="OnTimeReveals"/> and <see cref="OnTimeDrawing"/> are the
         /// control. If late effects draw at roughly the on-time rate, the
