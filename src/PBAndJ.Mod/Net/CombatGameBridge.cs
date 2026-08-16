@@ -1006,6 +1006,10 @@ namespace PBAndJ.Mod.Net
         // Host-only bridge: a host never plays back, it simulates.
         public void PlayKeyframes(int turn, KeyframeCapture capture)
         {
+            // Kept before playing, so a client can replay what it was told to
+            // play. Otherwise pbj.replay-last is host-only and the one machine
+            // whose playback is worth inspecting twice is the one that cannot.
+            NetGlue.RememberPlayed(turn, capture);
             KeyframePlayer.Play(turn, capture);
         }
 

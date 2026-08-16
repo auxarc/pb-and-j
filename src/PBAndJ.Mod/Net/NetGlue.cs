@@ -291,6 +291,29 @@ namespace PBAndJ.Mod.Net
         /// sees today.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// Keeps what a client was just told to play, so it can play it again.
+        /// </summary>
+        /// <remarks>
+        /// Without this <c>pbj.replay-last</c> is host-only, because
+        /// <c>lastCapture</c> is otherwise written solely by the host's own
+        /// capture path — and the client is the machine whose playback anyone
+        /// actually wants to inspect twice. Re-running a turn to look at it
+        /// again means re-authoring orders and re-executing on the host, which
+        /// makes any A/B comparison a comparison of two different turns.
+        /// <para>
+        /// The stored capture has already crossed the wire, so replaying it
+        /// sends it through the codec a second time. That is deliberate and
+        /// costs nothing: one code path, and a capture the encoder would now
+        /// refuse is worth learning about here.
+        /// </para>
+        /// </remarks>
+        internal static void RememberPlayed(int turn, KeyframeCapture capture)
+        {
+            lastCapture = capture;
+            lastCaptureTurn = turn;
+        }
+
         public static string ReplayLast()
         {
             if (lastCapture == null || lastCapture.Tracks.Count == 0)

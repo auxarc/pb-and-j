@@ -23,6 +23,21 @@ namespace PBAndJ.Core.Net
     }
 
     /// <summary>
+    /// What a playback frame should do with one asset track.
+    /// </summary>
+    public enum AssetShowAction
+    {
+        /// <summary>Leave it as it is. Sample it if it holds an instance.</summary>
+        Nothing = 0,
+
+        /// <summary>Check an instance out and put it on screen.</summary>
+        Reveal = 1,
+
+        /// <summary>Hand its instance back.</summary>
+        Retire = 2,
+    }
+
+    /// <summary>
     /// The arithmetic half of the game's <c>CheckAssetTrackActivation</c>.
     /// </summary>
     /// <remarks>
@@ -144,6 +159,49 @@ namespace PBAndJ.Core.Net
             float timeStart, float timeEnd, float windowStart, float windowEnd)
         {
             return timeStart <= windowEnd && timeEnd >= windowStart;
+        }
+
+        /// <summary>
+        /// What this frame should do with a track, reveal before expiry.
+        /// </summary>
+        /// <remarks>
+        /// <b>Here, under the gate, because the ORDER of these two tests is the
+        /// whole rule and getting it backwards fails silently.</b> Written the
+        /// obvious way — expire first, then activate — an effect that begins and
+        /// ends between two frames is already
+        /// <see cref="AssetTrackPhase.Expired"/> by the time the first frame
+        /// asks about it, so it is retired before <see cref="CrossedDuring"/> is
+        /// ever consulted. That defeats the entire reason the interval test
+        /// exists, and it defeats it for precisely the short effects it was
+        /// written to save.
+        /// <para>
+        /// Not a hypothetical. Measured on two real games, 2026-08-15: 828
+        /// effects crossed the wire, 826 reached the screen, and the two that
+        /// vanished were neither pool failures nor unplayable keys — they were
+        /// sub-frame effects discarded by the wrong order. A count on a live
+        /// battle was the only thing that could have caught it; no test asserted
+        /// it and no eye could have seen two missing flashes among hundreds.
+        /// </para>
+        /// <para>
+        /// <paramref name="revealed"/> is the track's state <i>before</i> this
+        /// frame, so a track this call reveals is never also retired by it — it
+        /// gets exactly one frame on screen, which is what the host's player
+        /// effectively saw, and is swept on the following pass.
+        /// </para>
+        /// </remarks>
+        public static AssetShowAction ActionFor(
+            float timeStart, float timeEnd, float previousTime, float currentTime, bool revealed)
+        {
+            if (!revealed)
+            {
+                return CrossedDuring(timeStart, timeEnd, previousTime, currentTime)
+                    ? AssetShowAction.Reveal
+                    : AssetShowAction.Nothing;
+            }
+
+            return PhaseAt(timeStart, timeEnd, currentTime) == AssetTrackPhase.Expired
+                ? AssetShowAction.Retire
+                : AssetShowAction.Nothing;
         }
 
         /// <summary>

@@ -378,6 +378,13 @@ namespace PBAndJ.Mod.Net
                 "effects=" + KeyframePlayer.ShownEffects
                     + "/" + KeyframePlayer.RevealedEffects
                     + "/" + KeyframePlayer.UnplayableEffects,
+                // The interval-activation measurement, as two ratios: how many
+                // effects were revealed after their own window had closed and
+                // drew a particle, against the same for effects revealed on
+                // time. The second is the control — without it a low late rate
+                // could just mean these effects are sparse.
+                "late=" + KeyframePlayer.LateDrawing + "/" + KeyframePlayer.LateReveals
+                    + " ontime=" + KeyframePlayer.OnTimeDrawing + "/" + KeyframePlayer.OnTimeReveals,
                 // The launch splash — logos, then the seizure warning. It sits
                 // OVER the main menu while the game already reports
                 // state=mainmenu, so a script that treats that state as "ready"

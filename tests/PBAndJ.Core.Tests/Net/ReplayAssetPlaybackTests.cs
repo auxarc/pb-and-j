@@ -56,6 +56,64 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(AssetTrackPhase.Expired, ReplayAssetPlayback.PhaseAt(1f, 3f, nan));
         }
 
+        // --- the order of the two tests, which is the whole rule ---
+
+        // THE REGRESSION. Written the obvious way — expire first, then activate
+        // — a sub-frame effect is already Expired by the time the first frame
+        // asks about it and is retired before CrossedDuring is ever consulted,
+        // which defeats the interval test for precisely the effects it exists to
+        // save. Two real games, 828 effects across the wire, 826 on screen, and
+        // the two that vanished were neither pool failures nor bad keys.
+        [Fact]
+        public void ActionFor_AnEffectThatBeganAndEndedBetweenTwoFrames_IsRevealedNotRetired()
+        {
+            // Lives from 1.00 to 1.01; the cursor steps 0.99 -> 1.05 straight
+            // over it. It is Expired at 1.05 by any point test.
+            Assert.Equal(
+                AssetShowAction.Reveal,
+                ReplayAssetPlayback.ActionFor(1f, 1.01f, 0.99f, 1.05f, revealed: false));
+        }
+
+        [Fact]
+        public void ActionFor_AnEffectRevealedAndNowPast_IsRetired()
+        {
+            Assert.Equal(
+                AssetShowAction.Retire,
+                ReplayAssetPlayback.ActionFor(1f, 2f, 2.4f, 2.5f, revealed: true));
+        }
+
+        // The same track on the frame after it was revealed. `revealed` is the
+        // state BEFORE this frame, so a track revealed by one call is never also
+        // retired by it — it gets exactly one frame on screen and is swept next
+        // pass.
+        [Fact]
+        public void ActionFor_ARevealedEffectStillInsideItsWindow_IsLeftAlone()
+        {
+            Assert.Equal(
+                AssetShowAction.Nothing,
+                ReplayAssetPlayback.ActionFor(1f, 2f, 1.4f, 1.5f, revealed: true));
+        }
+
+        [Fact]
+        public void ActionFor_AnEffectTheCursorHasNotReached_IsLeftAlone()
+        {
+            Assert.Equal(
+                AssetShowAction.Nothing,
+                ReplayAssetPlayback.ActionFor(3f, 4f, 1f, 1.1f, revealed: false));
+        }
+
+        // An unrevealed track the cursor is already past does nothing rather
+        // than being retired: it holds no instance, so there is nothing to hand
+        // back, and saying Retire would invite a caller to treat "expired" and
+        // "was on screen" as the same thing.
+        [Fact]
+        public void ActionFor_AnUnrevealedEffectLongPast_IsLeftAlone()
+        {
+            Assert.Equal(
+                AssetShowAction.Nothing,
+                ReplayAssetPlayback.ActionFor(1f, 2f, 5f, 5.1f, revealed: false));
+        }
+
         [Fact]
         public void An_effect_that_lives_entirely_between_two_frames_is_still_shown()
         {

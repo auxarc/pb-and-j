@@ -326,9 +326,33 @@ stage_again() {
 
 # --- delegated stages -------------------------------------------------------
 
+# ⚠️ EVERY DELEGATED STAGE IS GATED ON BOTH INSTANCES HAVING FINISHED THEIR
+# LAUNCH SPLASH, and this gate is the whole reason this wrapper is not a one
+# liner. game-wait.sh returns when the DRIVE CHANNEL opens, which is long before
+# a game is ready to be driven — and a stage sent into that gap SUCCEEDS. The
+# load lands, and the pending intro then drops the title view on top of the
+# loaded battle. pbj.drive-state reports state=combat throughout, so no
+# assertion in any stage can see it.
+#
+# Cost a full two-instance run on 2026-08-15: session, lobby and fight were all
+# driven while the client still read splash=True, every check passed, and the
+# client sat on its title menu while its own state said it was in the fight.
+# The M8 header documents the trap; nothing was enforcing it.
 delegate() {
   say "delegating '$1' to playtest-m12b.sh"
+
+  if [ "$1" != "up" ] && [ "$1" != "down" ]; then
+    await_ready "$HOST_N"
+    await_ready "$PEER_N"
+  fi
+
   "$HERE/playtest-m12b.sh" "$@" || fail "playtest-m12b.sh $1 failed — fix it there, not here"
+
+  # And again after launching, so the NEXT stage cannot be the one that races.
+  if [ "$1" = "up" ]; then
+    await_ready "$HOST_N"
+    await_ready "$PEER_N"
+  fi
 }
 
 case "$STAGE" in

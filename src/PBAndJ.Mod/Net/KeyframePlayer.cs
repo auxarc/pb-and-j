@@ -189,6 +189,22 @@ namespace PBAndJ.Mod.Net
             public bool Revealed { get; set; }
 
             /// <summary>
+            /// Revealed after its own window had already closed.
+            /// </summary>
+            /// <remarks>
+            /// These are exactly the effects the interval activation test
+            /// exists to save — a muzzle flash lives under a tenth of a second
+            /// and a frame is a thirtieth, so the cursor lands past the end of
+            /// one on the very frame it first sees it. Counted separately
+            /// because whether they draw anything at all is the open question
+            /// the whole test rests on.
+            /// </remarks>
+            public bool RevealedLate { get; set; }
+
+            /// <summary>Whether its first sample has been measured yet.</summary>
+            public bool Measured { get; set; }
+
+            /// <summary>
             /// Set once this track has been given up on, so it is never retried.
             /// </summary>
             /// <remarks>
@@ -240,6 +256,39 @@ namespace PBAndJ.Mod.Net
 
         /// <summary>Effects this window could not show at all.</summary>
         internal static int UnplayableEffects { get; private set; }
+
+        /// <summary>
+        /// Effects revealed after their own window had closed, and how many of
+        /// those actually drew a particle.
+        /// </summary>
+        /// <remarks>
+        /// <b>The measurement that decides whether the interval activation test
+        /// earns its cost</b>, and it exists because the question cannot be
+        /// answered by looking. A handful of sub-frame flashes inside a screen
+        /// full of gunfire is not something a person can count, and "it looked
+        /// right" is consistent with both answers — so the eye test was
+        /// replaced with this one.
+        /// <para>
+        /// <see cref="OnTimeReveals"/> and <see cref="OnTimeDrawing"/> are the
+        /// control. If late effects draw at roughly the on-time rate, the
+        /// interval test is showing the player something real. If they draw at
+        /// zero while the control draws at nearly one, then
+        /// <c>ParticleSystem.Simulate</c> past an effect's own duration renders
+        /// nothing, and we are paying an instantiate, a <c>Setup</c> and a
+        /// destroy per flash for no pixels — in which case the honest move is to
+        /// fall back to the game's own point test.
+        /// </para>
+        /// </remarks>
+        internal static int LateReveals { get; private set; }
+
+        /// <inheritdoc cref="LateReveals"/>
+        internal static int LateDrawing { get; private set; }
+
+        /// <inheritdoc cref="LateReveals"/>
+        internal static int OnTimeReveals { get; private set; }
+
+        /// <inheritdoc cref="LateReveals"/>
+        internal static int OnTimeDrawing { get; private set; }
 
         /// <summary>The turn currently being presented, or -1.</summary>
         internal static int Turn { get; private set; } = -1;
@@ -336,6 +385,10 @@ namespace PBAndJ.Mod.Net
             BuildShows(capture.Assets);
             RevealedEffects = 0;
             UnplayableEffects = 0;
+            LateReveals = 0;
+            LateDrawing = 0;
+            OnTimeReveals = 0;
+            OnTimeDrawing = 0;
 
             cursor = capture.WindowStart;
             cursorPrevious = capture.WindowStart;
@@ -777,19 +830,29 @@ namespace PBAndJ.Mod.Net
                 var show = shows[i];
                 var track = show.Track;
 
-                if (ReplayAssetPlayback.PhaseAt(track.timeStart, track.timeEnd, cursor)
-                    == AssetTrackPhase.Expired)
+                // The decision itself lives in Core, deliberately. The ORDER of
+                // its two tests is the whole rule and getting it backwards
+                // fails silently — it throws away exactly the sub-frame effects
+                // the interval test exists to save, which is how two of 828
+                // went missing on the first two-instance run. A rule that can
+                // only be caught by counting effects on a live battle belongs
+                // under the gate, not in glue.
+                //
+                // An abandoned track reads as already-revealed: it must never be
+                // offered again, and retiring it is a no-op since it holds
+                // nothing.
+                var action = ReplayAssetPlayback.ActionFor(
+                    track.timeStart, track.timeEnd, cursorPrevious, cursor,
+                    show.Revealed || show.Abandoned);
+
+                if (action == AssetShowAction.Reveal)
+                {
+                    Reveal(show);
+                }
+                else if (action == AssetShowAction.Retire)
                 {
                     Retire(show);
                     continue;
-                }
-
-                if (!show.Revealed
-                    && !show.Abandoned
-                    && ReplayAssetPlayback.CrossedDuring(
-                        track.timeStart, track.timeEnd, cursorPrevious, cursor))
-                {
-                    Reveal(show);
                 }
 
                 // Covers never-revealed, abandoned, and destroyed-from-under-us
@@ -803,6 +866,26 @@ namespace PBAndJ.Mod.Net
 
                 track.ApplyTime(cursor);
                 shown++;
+
+                // Read once, on the first sample after activation: that is when
+                // SampleForReplay has just run Simulate at this effect's own
+                // local time, so it is the frame that answers "did anything
+                // come out of it".
+                if (!show.Measured)
+                {
+                    show.Measured = true;
+                    if (ParticlesOf(show.Instance) > 0)
+                    {
+                        if (show.RevealedLate)
+                        {
+                            LateDrawing++;
+                        }
+                        else
+                        {
+                            OnTimeDrawing++;
+                        }
+                    }
+                }
             }
 
             ShownEffects = shown;
@@ -879,6 +962,23 @@ namespace PBAndJ.Mod.Net
 
             show.Instance = instance;
             RevealedEffects++;
+
+            // Classified at the moment of activation, because that is the only
+            // moment the distinction exists: by the next frame every track's
+            // phase has moved on and a late reveal is indistinguishable from an
+            // ordinary one that is now finishing.
+            show.RevealedLate =
+                ReplayAssetPlayback.PhaseAt(show.Track.timeStart, show.Track.timeEnd, cursor)
+                    == AssetTrackPhase.Expired;
+            if (show.RevealedLate)
+            {
+                LateReveals++;
+            }
+            else
+            {
+                OnTimeReveals++;
+            }
+
             instance.UpdateColors(show.Track.assetHueOffset, show.Track.assetColorOverride);
         }
 
@@ -951,6 +1051,40 @@ namespace PBAndJ.Mod.Net
             }
             shows.Clear();
             ShownEffects = 0;
+        }
+
+        /// <summary>
+        /// Live particles across an effect's whole hierarchy.
+        /// </summary>
+        /// <remarks>
+        /// Summed over the children rather than read off
+        /// <c>AssetLinker.particleSystem</c> alone. The linker's own root system
+        /// is what <c>SampleForReplay</c> simulates, but it simulates it
+        /// <c>withChildren: true</c> — and plenty of effects put their actual
+        /// emission on a child while the root emits nothing at all, which would
+        /// read as "drew nothing" and answer the question backwards.
+        /// <para>
+        /// Allocating, and deliberately not cached: it runs once per effect per
+        /// window, only on the first sample after activation.
+        /// </para>
+        /// </remarks>
+        private static int ParticlesOf(AssetLinker? instance)
+        {
+            if (instance == null)
+            {
+                return 0;
+            }
+
+            var systems = instance.GetComponentsInChildren<ParticleSystem>();
+            var alive = 0;
+            for (var i = 0; i < systems.Length; i++)
+            {
+                if (systems[i] != null)
+                {
+                    alive += systems[i].particleCount;
+                }
+            }
+            return alive;
         }
 
         private static Vector3 ToVector3(Vec3 v) => new Vector3(v.X, v.Y, v.Z);
