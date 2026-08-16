@@ -109,26 +109,34 @@ namespace PBAndJ.Core.Net
         /// <b>activate on <see cref="CrossedDuring"/>, expire on
         /// <see cref="PhaseAt"/>.</b>
         /// <para>
-        /// An effect can begin and end entirely between two frames — a muzzle
-        /// flash is under a tenth of a second and a frame at 30fps is a
-        /// thirtieth — and a cursor sampled only at instants steps straight over
-        /// it. The game's own replay (<c>CombatReplayHelper.cs:1469</c>) is that
-        /// point test and does skip them, so <see cref="IsActiveAt"/> is exact
-        /// parity with the host's <i>replay</i>. It is <b>not</b> parity with
-        /// what the host's player watched: during live simulation the effect was
-        /// fired at its real moment and seen. That is the case for the interval
-        /// test, and it is the whole of the case.
+        /// A track whose whole window falls between two frames would be stepped
+        /// over by a cursor sampled only at instants. The game's own replay
+        /// (<c>CombatReplayHelper.cs:1469</c>) is that point test and does skip
+        /// such tracks, so <see cref="IsActiveAt"/> is exact parity with the
+        /// host's <i>replay</i> — but not with what the host's player watched,
+        /// since during live simulation the effect fired at its real moment and
+        /// was seen.
         /// </para>
         /// <para>
-        /// ⚠️ <b>What is not established</b> is whether an effect activated a
-        /// frame after it ended renders anything at all.
-        /// <c>AssetLinker.SampleForReplay</c> calls
-        /// <c>ParticleSystem.Simulate</c> at the effect's local time, which for
-        /// these is past its own duration — so this may be paying an
-        /// instantiate, a <c>Setup</c> and a destroy per skipped flash to show
-        /// nothing. It is one measurement in the two-instance playtest: fire a
-        /// sub-frame effect and look. If it shows nothing, drop back to
-        /// <see cref="IsActiveAt"/> and take the game's own behaviour.
+        /// ⚠️ <b>MEASURED, and it fires far less often than this once claimed.</b>
+        /// An earlier version of this comment argued the case from "a muzzle
+        /// flash lasts under a tenth of a second and a frame is a thirtieth".
+        /// <b>That reasoning was wrong.</b> Activation tests against the
+        /// <i>track's window</i>, which is <c>timeStart + pool.lifetime</c> —
+        /// and the measured muzzle pools carry lifetimes of <b>1.02 s and
+        /// 0.95 s</b>, roughly sixty frames, which any point test catches
+        /// trivially. How briefly the flash <i>looks</i> bright has nothing to
+        /// do with it.
+        /// </para>
+        /// <para>
+        /// Three replays of a real 389-effect turn recorded <b>zero</b>
+        /// late activations — every track was reached while still active. So
+        /// this <b>keeps its place on cost rather than on benefit</b>: when it
+        /// changes nothing it costs nothing, and it still closes a real if rare
+        /// hole. The tracks it can save are those whose <c>timeEnd</c> lands
+        /// inside the window's first frame delta, which is exactly the shape
+        /// that silently lost 2 effects of 828 on a real two-instance turn
+        /// before <see cref="ActionFor"/> ordered the two tests correctly.
         /// </para>
         /// <para>
         /// Callers pass the cursor's own previous value, so the very first frame
@@ -167,13 +175,12 @@ namespace PBAndJ.Core.Net
         /// <remarks>
         /// <b>Here, under the gate, because the ORDER of these two tests is the
         /// whole rule and getting it backwards fails silently.</b> Written the
-        /// obvious way — expire first, then activate — an effect that begins and
-        /// ends between two frames is already
-        /// <see cref="AssetTrackPhase.Expired"/> by the time the first frame
-        /// asks about it, so it is retired before <see cref="CrossedDuring"/> is
-        /// ever consulted. That defeats the entire reason the interval test
-        /// exists, and it defeats it for precisely the short effects it was
-        /// written to save.
+        /// obvious way — expire first, then activate — a track whose window has
+        /// already closed by the first frame that sees it is
+        /// <see cref="AssetTrackPhase.Expired"/> on arrival, so it is retired
+        /// before <see cref="CrossedDuring"/> is ever consulted. That defeats
+        /// the entire reason the interval test exists, and it defeats it for
+        /// precisely the tracks it was written to save.
         /// <para>
         /// Not a hypothetical. Measured on two real games, 2026-08-15: 828
         /// effects crossed the wire, 826 reached the screen, and the two that
