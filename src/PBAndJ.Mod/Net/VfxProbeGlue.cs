@@ -52,7 +52,11 @@ namespace PBAndJ.Mod.Net
         // today (TransformKey is 32 bytes). Trail points are far heavier — 3
         // vectors, a tangent, a normal, a colour and three scalars.
         private const int TransformKeyBytes = 32;
-        private const int TrailPointBytes = 76;
+        // 23 floats: timeStart, timeEnd, five Vec3s, an RGBA Color, thickness
+        // and texcoord. This read 76 until stage B counted the fields — that
+        // omitted the Color, so every trail estimate this probe ever printed was
+        // 16 bytes per point light.
+        private const int TrailPointBytes = 92;
         private const int BeamKeyBytes = 44;
         private const int StandaloneBytes = 80;
 
@@ -312,8 +316,16 @@ namespace PBAndJ.Mod.Net
         /// <para>
         /// ⚠️ A held window never ends, so it never sweeps: its effect instances
         /// stay checked out until the hold is released or combat tears down.
+        /// <b>That is why this is the one command in this file compiled out of a
+        /// shipping build.</b> Every other probe here only reads; this one puts
+        /// the player's own combat into a state it cannot leave without a second
+        /// console command, which is fine for a measurement rig and not
+        /// something to hand a player who typed it out of curiosity. The rest of
+        /// the file stays — <c>fx-instances</c>, <c>fx-pools</c>, <c>fx-tsim</c>
+        /// and <c>fx-mirror</c> all earned their keep and are read-only.
         /// </para>
         /// </remarks>
+#if PBJ_DRIVE
         public static string FxHold(float seconds)
         {
             KeyframePlayer.HoldAt = seconds;
@@ -328,6 +340,7 @@ namespace PBAndJ.Mod.Net
                     + " and NOT sweep until you call pbj.fx-hold -1",
                 seconds);
         }
+#endif
 
         public static string VfxProbe()
         {
@@ -485,7 +498,9 @@ namespace PBAndJ.Mod.Net
             Add(nameof(FxTimeSim), "pbj.fx-tsim");
             Add(nameof(FxTimeSimSet), "pbj.fx-tsim-set", typeof(float));
             Add(nameof(FxMirror), "pbj.fx-mirror", typeof(int));
+#if PBJ_DRIVE
             Add(nameof(FxHold), "pbj.fx-hold", typeof(float));
+#endif
         }
 
         private static void Add(string methodName, string command, params Type[] signature)
