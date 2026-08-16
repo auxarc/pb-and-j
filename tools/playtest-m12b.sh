@@ -126,15 +126,15 @@ stage_up() {
   nohup "$HERE/game-instance.sh" "$PEER_N" > "$LOG_DIR/instance-$PEER_N.log" 2>&1 &
   "$HERE/game-wait.sh" "$PEER_N" 240 || fail "client instance never opened its channel"
 
-  # patched=31 is the healthy number (35 patch classes over 31 distinct target
+  # patched=32 is the healthy number (36 patch classes over 32 distinct target
   # methods). A different one means PatchAll aborted partway and an arbitrary
   # subset of the suppression gates is live — which looks like nothing at all
   # until a client drives the host's world. Worth failing on before a playtest,
   # not during one.
   for n in "$HOST_N" "$PEER_N"; do
     local st; st="$(drive "$n" "pbj.drive-state")"
-    printf '%s' "$st" | grep -q "patched=31" \
-      || fail "instance $n reports $(printf '%s' "$st" | grep -o 'patched=[0-9?]*') — expected patched=31; the patch set is incomplete"
+    printf '%s' "$st" | grep -q "patched=32" \
+      || fail "instance $n reports $(printf '%s' "$st" | grep -o 'patched=[0-9?]*') — expected patched=32; the patch set is incomplete"
   done
   pass "both instances up, both fully patched"
 }

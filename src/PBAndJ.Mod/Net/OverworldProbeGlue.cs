@@ -79,6 +79,7 @@ namespace PBAndJ.Mod.Net
 
             Section(report, "game state stack", ProbeGameStates);
             Section(report, "clock", ProbeClock);
+            Section(report, "nightfall and shadows", ProbeNightfall);
             Section(report, "player base", ProbePlayerBase);
             Section(report, "saveability", ProbeSaveability);
             Section(report, "management views", ProbeManagementViews);
@@ -169,6 +170,98 @@ namespace PBAndJ.Mod.Net
             report.Append("  autoSaveAtInterval: ").Append(DataShortcuts.overworld.autoSaveAtInterval)
                   .Append(" | autoSaveTimer: ").Append(SettingUtility.autoSaveTimer.ToString("F2"))
                   .Append(" | limit: ").Append(DataShortcuts.overworld.autoSaveTimerSeconds.ToString("F0"))
+                  .Append('\n');
+        }
+
+        /// <summary>
+        /// The whole nightfall chain, end to end, in one reading.
+        /// </summary>
+        /// <remarks>
+        /// Built to settle why a <b>client's combat scene renders flat</b> while
+        /// its host's is lit — the user's observation being that the client
+        /// loads <i>with</i> shadows for a moment before they are blown away,
+        /// which means the environment loaded correctly and something
+        /// afterwards switched them off.
+        /// <para>
+        /// The suspected chain, and every link is printed here so the broken one
+        /// names itself rather than being argued about:
+        /// <list type="number">
+        /// <item><c>OverworldSkySystem</c> is reactive on
+        /// <b><c>overworld.timeOfDay</c></b> and sets
+        /// <c>overworld.isTimeOfDayNight = f &lt; SunriseTime || f &gt; SunsetTime</c>.</item>
+        /// <item><c>OverworldViewNightfallSystem:37</c> passes that flag to
+        /// <c>UtilityCameraLinker.OnNightfall</c>.</item>
+        /// <item>which does <c>shadows.enabled = !nightfall</c>
+        /// (<c>UtilityCameraLinker.cs:57</c>) — switching the
+        /// <c>NGSS_FrustumShadows</c> component off outright.</item>
+        /// </list>
+        /// </para>
+        /// <para>
+        /// ⚠️ <b>Two different clocks, and that is the point.</b>
+        /// <c>CombatLoadingSystem.LoadEnvironment</c> sets
+        /// <c>combat.timeOfDay</c>, and both machines were measured to agree on
+        /// it (18.8). Nightfall is decided by <c>overworld.timeOfDay</c>, which
+        /// nothing forces to match — and a client's overworld simulation is
+        /// already known to drift, its <c>_TimeSimulation</c> having been caught
+        /// holding a stale overworld value. Both are printed side by side.
+        /// </para>
+        /// <para>
+        /// The shadow component is read by reflection and handled as a plain
+        /// <c>Behaviour</c>, so this compiles without a reference to the
+        /// third-party NGSS types it actually is.
+        /// </para>
+        /// </remarks>
+        private static void ProbeNightfall(StringBuilder report)
+        {
+            var overworld = Contexts.sharedInstance.overworld;
+            var combat = Contexts.sharedInstance.combat;
+
+            report.Append("  overworld.timeOfDay: ")
+                  .Append(overworld.hasTimeOfDay ? overworld.timeOfDay.f.ToString("F3") : "<absent>")
+                  .Append(" | isTimeOfDayNight: ").Append(overworld.isTimeOfDayNight)
+                  .Append('\n');
+            report.Append("  combat.timeOfDay:    ")
+                  .Append(combat.hasTimeOfDay ? combat.timeOfDay.f.ToString("F3") : "<absent>")
+                  .Append("   <- set by LoadEnvironment; NOT what decides nightfall")
+                  .Append('\n');
+
+            var sky = TOD_Sky.Instance;
+            if (sky == null)
+            {
+                report.Append("  TOD_Sky.Instance: <null>\n");
+            }
+            else
+            {
+                report.Append("  TOD_Sky: cycleHour ").Append(sky.Cycle.Hour.ToString("F3"))
+                      .Append(" | sunrise ").Append(sky.SunriseTime.ToString("F3"))
+                      .Append(" | sunset ").Append(sky.SunsetTime.ToString("F3"))
+                      .Append('\n');
+            }
+
+            var linker = UtilityCameraLinker.ins;
+            if (linker == null)
+            {
+                report.Append("  UtilityCameraLinker.ins: <null> — nothing can be toggling shadows\n");
+            }
+            else
+            {
+                var field = typeof(UtilityCameraLinker).GetField(
+                    "shadows", BindingFlags.Instance | BindingFlags.Public);
+                var shadows = field == null ? null : field.GetValue(linker) as Behaviour;
+                report.Append("  shadows component: ")
+                      .Append(shadows == null ? "<null>" : "present")
+                      .Append(" | enabled: ")
+                      .Append(shadows == null ? "n/a" : shadows.enabled.ToString())
+                      .Append("   <- FALSE here is the whole bug\n");
+            }
+
+            report.Append("  QualitySettings.shadowDistance: ")
+                  .Append(QualitySettings.shadowDistance.ToString("F1"))
+                  .Append(" | shadows: ").Append(QualitySettings.shadows)
+                  .Append('\n');
+            report.Append("  RenderSettings.ambientMode: ").Append(RenderSettings.ambientMode)
+                  .Append(" | ambientIntensity: ")
+                  .Append(RenderSettings.ambientIntensity.ToString("F3"))
                   .Append('\n');
         }
 

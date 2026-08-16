@@ -143,7 +143,7 @@ Two things follow specifically for M12a:
   which is the whole argument for detection.
 
 **The patch-surface assertion is owed now, and its number is not stable yet.** M12a took the mod to
-35 patch classes over 31 distinct target methods; deleting the throwaway `OverworldProbeGlue` — due
+36 patch classes over 32 distinct target methods; deleting the throwaway `OverworldProbeGlue` — due
 since M12a landed, see [The rig](#the-rig-for-whoever-picks-this-up) — drops that to 32 over 30,
 because two of its three targets are also `PassengerGlue`'s. So record the expected count *after*
 the probe goes, not before, and expect M12b's combat-entry work to move it again.
