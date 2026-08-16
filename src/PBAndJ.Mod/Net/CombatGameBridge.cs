@@ -509,6 +509,11 @@ namespace PBAndJ.Mod.Net
                 ? Contexts.sharedInstance.combat.simulationTime.f
                 : windowStart;
 
+            // M14. Taken from the same window the unit tracks are, before the
+            // loop, so the two cannot disagree about where the turn began — the
+            // whole reason both live on one KeyframeCapture.
+            var assets = CaptureAssets(windowStart, windowEnd);
+
             var tracks = new List<UnitTrack>();
             var poses = new List<UnitPoseTrack>();
             var clamped = 0;
@@ -573,7 +578,7 @@ namespace PBAndJ.Mod.Net
                     Debug.LogWarning(NetLog.KeyframesClamped(
                         CombatReplayHelper.units.Count, PbjMessageCodec.MaxTracksPerKeyframes, clamped));
                     ReportUncaptured(bonelessUnits, strandedKeys);
-                    return new KeyframeCapture(windowStart, windowEnd, tracks, poses);
+                    return new KeyframeCapture(windowStart, windowEnd, tracks, poses, assets);
                 }
             }
 
@@ -583,7 +588,7 @@ namespace PBAndJ.Mod.Net
                     tracks.Count, PbjMessageCodec.MaxTracksPerKeyframes, clamped));
             }
             ReportUncaptured(bonelessUnits, strandedKeys);
-            return new KeyframeCapture(windowStart, windowEnd, tracks, poses);
+            return new KeyframeCapture(windowStart, windowEnd, tracks, poses, assets);
         }
 
         /// <summary>
@@ -701,6 +706,225 @@ namespace PBAndJ.Mod.Net
         }
 
         /// <summary>
+        /// One turn's projectiles, beams and one-shot effects. M14.
+        /// </summary>
+        /// <remarks>
+        /// Sliced by window overlap and never sent whole, and the slice must not
+        /// branch on <c>experimentalMode</c>. That player setting gates the
+        /// game's own prune (<c>CombatReplayHelper.cs:241</c>), so on a default
+        /// machine <b>nothing is ever pruned</b> and these collections still hold
+        /// every effect of the fight at turn twenty — one measured fight grew
+        /// <c>assetsStandalone</c> from 51 to 727 across five turns. The slice
+        /// has to be correct whichever way the setting sits, so it reads the
+        /// times rather than trusting the collection.
+        /// <para>
+        /// No <c>IsRecordingAllowed</c> gate and no unit lookup, for the reason
+        /// <see cref="CaptureKeyframes"/> gives: the flag is already false by the
+        /// time this runs. Unlike the unit tracks, nothing here is keyed to a
+        /// living entity — which is why a turn that kills everyone can still
+        /// record a great deal, and why the host says so rather than discarding
+        /// it silently.
+        /// </para>
+        /// </remarks>
+        private static AssetCapture CaptureAssets(float windowStart, float windowEnd)
+        {
+            var standalone = new List<StandaloneAssetTrack>();
+            var projectiles = new List<ProjectileAssetTrack>();
+            var beams = new List<BeamAssetTrack>();
+            var trailed = 0;
+
+            var recorded = CombatReplayHelper.assetsStandalone;
+            if (recorded != null)
+            {
+                for (var i = 0; i < recorded.Count; i++)
+                {
+                    var entry = recorded[i];
+                    if (entry == null || !InWindow(entry, windowStart, windowEnd))
+                    {
+                        continue;
+                    }
+
+                    // The id is this list's position in THIS capture, not the
+                    // game's — these have no identity of their own, and the
+                    // recorder's own list is pruned by index so its positions
+                    // shift between turns. A within-turn label, nothing more.
+                    standalone.Add(new StandaloneAssetTrack(
+                        standalone.Count,
+                        Head(entry),
+                        ToVec3(entry.position),
+                        ToVec4(entry.rotation),
+                        // Load-bearing: AssignAsset writes this straight to
+                        // localScale, so a lost scale is an invisible effect.
+                        ToVec3(entry.scale),
+                        ToVec4(entry.velocityAndDecay),
+                        ToVec3(entry.positionLocal)));
+                }
+            }
+
+            if (CombatReplayHelper.assetsProjectiles != null)
+            {
+                foreach (var pair in CombatReplayHelper.assetsProjectiles)
+                {
+                    var entry = pair.Value;
+                    if (entry == null || !InWindow(entry, windowStart, windowEnd))
+                    {
+                        continue;
+                    }
+                    if (entry.keyframesTrail != null && entry.keyframesTrail.Count > 0)
+                    {
+                        trailed++;
+                    }
+
+                    var keys = new List<TransformKey>();
+                    var recordedKeys = entry.keyframesTransform;
+                    WindowRange(
+                        recordedKeys.Count, i => recordedKeys[i].time, windowStart, windowEnd,
+                        out var first, out var last);
+                    for (var i = first; i <= last; i++)
+                    {
+                        keys.Add(new TransformKey(
+                            recordedKeys[i].time,
+                            ToVec3(recordedKeys[i].position),
+                            ToVec4(recordedKeys[i].rotation)));
+                    }
+
+                    projectiles.Add(new ProjectileAssetTrack(
+                        pair.Key, Head(entry), ToVec3(entry.scale), keys));
+                }
+            }
+
+            if (CombatReplayHelper.assetsBeams != null)
+            {
+                foreach (var pair in CombatReplayHelper.assetsBeams)
+                {
+                    var entry = pair.Value;
+                    if (entry == null || !InWindow(entry, windowStart, windowEnd))
+                    {
+                        continue;
+                    }
+
+                    var keys = new List<BeamKey>();
+                    var recordedKeys = entry.keyframes;
+                    WindowRange(
+                        recordedKeys.Count, i => recordedKeys[i].time, windowStart, windowEnd,
+                        out var first, out var last);
+                    for (var i = first; i <= last; i++)
+                    {
+                        keys.Add(new BeamKey(
+                            recordedKeys[i].time,
+                            ToVec3(recordedKeys[i].position),
+                            ToVec4(recordedKeys[i].rotation),
+                            ToVec3(recordedKeys[i].parameters)));
+                    }
+
+                    beams.Add(new BeamAssetTrack(pair.Key, Head(entry), keys));
+                }
+            }
+
+            if (trailed > 0)
+            {
+                // Trails are stage B and their absence is invisible: the
+                // projectile still flies, it just leaves no wake. Said out loud
+                // because "unmeasured" is not "absent" — every sample taken so
+                // far had none, and this is the line that would tell us that
+                // sample was unrepresentative.
+                Debug.Log(NetLog.AssetTrailsNotCaptured(trailed));
+            }
+
+            return new AssetCapture(standalone, projectiles, beams);
+        }
+
+        private static bool InWindow(ReplayEntityAsset entry, float windowStart, float windowEnd) =>
+            ReplayAssetPlayback.OverlapsWindow(
+                entry.timeStart, entry.timeEnd, windowStart, windowEnd);
+
+        /// <summary>
+        /// The head every asset track shares, both optional blocks included.
+        /// </summary>
+        /// <remarks>
+        /// <c>assetKeyHash</c> is deliberately not read. It is
+        /// <c>string.GetHashCode</c>, which carries no cross-process stability
+        /// guarantee, so a hash minted here would match nothing on a client —
+        /// silently, since a failed lookup simply shows no effect. The key
+        /// travels as the string it is.
+        /// </remarks>
+        private static AssetTrackHead Head(ReplayEntityAsset entry)
+        {
+            // Null is a real value in both, and not the same as zero: an absent
+            // hue means the effect keeps its prefab's own, where a hue of zero
+            // is an instruction to flatten it.
+            var hue = entry.assetHueOffset != null ? entry.assetHueOffset.f : (float?)null;
+            var colour = entry.assetColorOverride != null
+                ? new AssetColour(
+                    ToVec4(entry.assetColorOverride.colorFrom),
+                    ToVec4(entry.assetColorOverride.colorTo))
+                : (AssetColour?)null;
+
+            return new AssetTrackHead(
+                entry.assetKey, entry.timeStart, entry.timeEnd, hue, colour);
+        }
+
+        /// <summary>
+        /// The keys of one asset track that this turn's window needs, with the
+        /// bracketing key on each side.
+        /// </summary>
+        /// <remarks>
+        /// The brackets are not padding. <c>ReplayEntityAssetProjectile.ApplyTime</c>
+        /// interpolates between the pair of keys straddling the requested time
+        /// on an <b>absolute</b> clock, so a slice cut flush to the window leaves
+        /// the cursor's first frames with nothing before them and the projectile
+        /// snaps to its first in-window key instead of arriving at it. Same for
+        /// the far end.
+        /// <para>
+        /// An empty range is returned as <c>first = 0, last = -1</c>, so the
+        /// caller's loop adds nothing and the track goes out with no keys — where
+        /// <c>ReplayAssetParts.TryPrepare</c> drops it as
+        /// <see cref="AssetTrackFault.TooFewKeys"/>. That is the right outcome
+        /// and the right place for it: a track with nothing in this window has
+        /// nothing to draw, and sending it would put a frozen instance at
+        /// <c>keyframes[0]</c> or at the world origin.
+        /// </para>
+        /// </remarks>
+        private static void WindowRange(
+            int count,
+            Func<int, float> timeAt,
+            float windowStart,
+            float windowEnd,
+            out int first,
+            out int last)
+        {
+            first = count;
+            last = -1;
+            for (var i = 0; i < count; i++)
+            {
+                var time = timeAt(i);
+                if (time < windowStart || time > windowEnd)
+                {
+                    continue;
+                }
+                if (i < first)
+                {
+                    first = i;
+                }
+                last = i;
+            }
+
+            if (last < 0)
+            {
+                first = 0;
+                return;
+            }
+            if (first > 0)
+            {
+                first--;
+            }
+            if (last < count - 1)
+            {
+                last++;
+            }
+        }
+
+        /// <summary>
         /// Where this turn's keys begin in an accumulated recorder list.
         /// </summary>
         /// <remarks>
@@ -774,6 +998,10 @@ namespace PBAndJ.Mod.Net
         private static Vec3 ToVec3(Vector3 v) => new Vec3(v.x, v.y, v.z);
 
         private static Vec4 ToVec4(Quaternion q) => new Vec4(q.x, q.y, q.z, q.w);
+
+        private static Vec4 ToVec4(Vector4 v) => new Vec4(v.x, v.y, v.z, v.w);
+
+        private static Vec4 ToVec4(Color c) => new Vec4(c.r, c.g, c.b, c.a);
 
         // Host-only bridge: a host never plays back, it simulates.
         public void PlayKeyframes(int turn, KeyframeCapture capture)

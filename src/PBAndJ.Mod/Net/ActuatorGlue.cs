@@ -369,6 +369,15 @@ namespace PBAndJ.Mod.Net
                     ? combat.predictionTime.f.ToString("0.00", CultureInfo.InvariantCulture)
                     : "-"),
                 "session=" + NetStatusShort(),
+                // M14. Cumulative within a window, deliberately: most effects
+                // last under a second, so a live count polled between two of
+                // them reads zero and a turn full of gunfire is
+                // indistinguishable from one where nothing fired. The third
+                // number is the one that means something is wrong rather than
+                // quiet — an effect the client could not show at all.
+                "effects=" + KeyframePlayer.ShownEffects
+                    + "/" + KeyframePlayer.RevealedEffects
+                    + "/" + KeyframePlayer.UnplayableEffects,
                 // The launch splash — logos, then the seizure warning. It sits
                 // OVER the main menu while the game already reports
                 // state=mainmenu, so a script that treats that state as "ready"

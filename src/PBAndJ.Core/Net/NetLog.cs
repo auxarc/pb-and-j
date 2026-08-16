@@ -638,6 +638,53 @@ namespace PBAndJ.Core.Net
         }
 
         /// <summary>
+        /// One effect the client cannot show, said once and then never again.
+        /// </summary>
+        /// <remarks>
+        /// Once is the whole point. Vanilla re-attempts activation for an
+        /// unassigned active track on <b>every frame</b>, and an unresolvable
+        /// key makes <c>AssetPoolUtility.IsInstanceAvailable</c> log on every
+        /// one of those — so a single bad key is a warning per frame for the
+        /// length of its window. The track is abandoned after this line.
+        /// <para>
+        /// The key is named because this is the one failure that says the two
+        /// machines disagree about their content: the handshake refuses a
+        /// mismatched game build and mod version, but DLC or workshop pools can
+        /// still diverge at identical versions, and the key is what identifies
+        /// which.
+        /// </para>
+        /// </remarks>
+        public static string AssetUnplayable(string? assetKey, string why)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "cannot show effect '{0}': {1} — it will be missing from this turn",
+                assetKey ?? "(unnamed)", why);
+        }
+
+        /// <summary>
+        /// Projectiles crossed carrying trails that stage A does not send.
+        /// </summary>
+        /// <remarks>
+        /// The projectile still flies; it just leaves no wake, which is a loss
+        /// no count and no other line would show. Trails were left out because
+        /// <c>keyframesTrail</c> was empty on every sample taken and
+        /// <c>ReplayKeyframeTrailPoint</c> is ten fields — easily the heaviest
+        /// shape in the system — so it is not designed in blind. <b>Unmeasured
+        /// is not absent</b>, and this is the line that would tell us those
+        /// samples were unrepresentative and the weapon that produces them is
+        /// now on the field.
+        /// </remarks>
+        public static string AssetTrailsNotCaptured(int projectiles)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "{0} projectile{1} had recorded trails, which do not travel yet — "
+                    + "they will fly without a wake on the client",
+                projectiles, Plural(projectiles));
+        }
+
+        /// <summary>
         /// A turn recorded effects but no unit tracks, so none of it can go.
         /// </summary>
         /// <remarks>

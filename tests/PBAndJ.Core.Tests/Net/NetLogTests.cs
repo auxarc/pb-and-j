@@ -593,6 +593,41 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Contains("1 track dropped", NetLog.AssetsDropped(4, 1, AssetTrackFault.NoKey));
         }
 
+        // Named because this is the one failure that says the two machines
+        // disagree about their content — the handshake refuses a mismatched
+        // build and mod version, but pools can still diverge at identical ones.
+        [Fact]
+        public void AssetUnplayable_NamesTheKeyAndTheReason()
+        {
+            Assert.Equal(
+                "[pb-and-j] cannot show effect 'fx_muzzle_rifle': no such asset pool — "
+                    + "it will be missing from this turn",
+                NetLog.AssetUnplayable("fx_muzzle_rifle", "no such asset pool"));
+        }
+
+        [Fact]
+        public void AssetUnplayable_WithNoKeyAtAll_SaysSo()
+        {
+            Assert.Contains("effect '(unnamed)'", NetLog.AssetUnplayable(null, "no such asset pool"));
+        }
+
+        // Unmeasured is not absent. Every sample taken had no trails, and this
+        // is the line that would say that sample was unrepresentative.
+        [Fact]
+        public void AssetTrailsNotCaptured_NamesALossNoOtherLineWouldShow()
+        {
+            Assert.Equal(
+                "[pb-and-j] 2 projectiles had recorded trails, which do not travel yet — "
+                    + "they will fly without a wake on the client",
+                NetLog.AssetTrailsNotCaptured(2));
+        }
+
+        [Fact]
+        public void AssetTrailsNotCaptured_SpeaksOfOneProjectileInTheSingular()
+        {
+            Assert.Contains("1 projectile ", NetLog.AssetTrailsNotCaptured(1));
+        }
+
         // The only place this loss can be reported at all: the client never gets
         // the terminator it would report against.
         [Fact]

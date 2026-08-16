@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Text;
 using PhantomBrigade;
+using PhantomBrigade.Data;
 using QFSW.QC;
 using UnityEngine;
 
@@ -40,6 +41,88 @@ namespace PBAndJ.Mod.Net
         private const int TrailPointBytes = 76;
         private const int BeamKeyBytes = 44;
         private const int StandaloneBytes = 80;
+
+        /// <summary>
+        /// How many pooled instances are alive right now. M14's leak detector.
+        /// </summary>
+        /// <remarks>
+        /// Built because <b>eyes cannot answer this one</b>, and finding that out
+        /// is what it is for. A leaked replay instance sits at exactly the
+        /// position the live effect that preceded it occupies, so a leak is
+        /// invisible by construction: replay a turn twice and the second set
+        /// hides precisely under the first. Observed on a real game, 2026-08-15
+        /// — the user could see bullets suspended in the air and could not tell
+        /// whose they were.
+        /// <para>
+        /// <c>standaloneLive</c> is the number that matters. Our replay checks
+        /// out through <c>GetInstanceStandalone</c>, so every instance we hold
+        /// is in some pool's <c>instancesStandalone</c>. It is not <i>only</i>
+        /// ours — <c>UnitVFXManagerBase:272</c> and <c>ScenarioUtility:3821</c>
+        /// use that route too — so read it as a <b>delta across one replay</b>
+        /// rather than as an absolute. Zero delta is the sweep working; a delta
+        /// near the turn's effect count is the sweep not running at all.
+        /// </para>
+        /// <para>
+        /// <c>listed</c> counts the same lists including destroyed entries.
+        /// Destroying a standalone instance leaves its slot behind — Unity's
+        /// fake-null makes it compare equal to null and the pool's own
+        /// teardown sweep skips it — so <c>listed</c> climbing while
+        /// <c>standaloneLive</c> holds steady is exactly what correct behaviour
+        /// looks like, and is worth being able to see rather than fear.
+        /// </para>
+        /// </remarks>
+        public static string FxInstances()
+        {
+            var pools = DataMultiLinker<DataContainerAssetPool>.data;
+            if (pools == null)
+            {
+                return "[pb-and-j] fx-instances | no asset pools are loaded";
+            }
+
+            var live = 0;
+            var listed = 0;
+            var poolsWithLive = 0;
+            var pooledUsed = 0;
+
+            foreach (var pair in pools)
+            {
+                var pool = pair.Value;
+                if (pool == null)
+                {
+                    continue;
+                }
+                pooledUsed += pool.instanceCountUsed;
+
+                var instances = pool.instancesStandalone;
+                if (instances == null)
+                {
+                    continue;
+                }
+
+                var here = 0;
+                for (var i = 0; i < instances.Count; i++)
+                {
+                    // Unity's overloaded == , deliberately: a destroyed object is
+                    // not a null reference and only this comparison knows it.
+                    if (instances[i] != null)
+                    {
+                        here++;
+                    }
+                }
+
+                listed += instances.Count;
+                live += here;
+                if (here > 0)
+                {
+                    poolsWithLive++;
+                }
+            }
+
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "[pb-and-j] fx-instances | standaloneLive={0} across {1} pool(s) | listed={2} | pooledUsed={3}",
+                live, poolsWithLive, listed, pooledUsed);
+        }
 
         public static string VfxProbe()
         {
@@ -191,10 +274,16 @@ namespace PBAndJ.Mod.Net
 
         internal static void RegisterConsoleCommands()
         {
+            Add(nameof(VfxProbe), "pbj.vfx-probe");
+            Add(nameof(FxInstances), "pbj.fx-instances");
+        }
+
+        private static void Add(string methodName, string command)
+        {
             var method = typeof(VfxProbeGlue).GetMethod(
-                nameof(VfxProbe), BindingFlags.Static | BindingFlags.Public,
+                methodName, BindingFlags.Static | BindingFlags.Public,
                 null, new System.Type[0], null);
-            QuantumConsoleProcessor.TryAddCommand(new CommandData(method, "pbj.vfx-probe"));
+            QuantumConsoleProcessor.TryAddCommand(new CommandData(method, command));
         }
     }
 }
