@@ -408,7 +408,9 @@ namespace PBAndJ.Mod.Net
                 // this client's projectile prefab has no AraTrail where the
                 // host's did — which the pool digest cannot see, since it hashes
                 // pool keys and not the components hanging off each prefab.
-                "trailsRefused=" + KeyframePlayer.TrailsRefused
+                "lightsFired=" + KeyframePlayer.LightsFired
+                    + " lightsNoMgr=" + KeyframePlayer.LightsNoManager
+                    + " trailsRefused=" + KeyframePlayer.TrailsRefused
                     + " lightsRefused=" + KeyframePlayer.LightsRefused
                     + " lightsNoTransform=" + WeaponLightPatches.SkippedNoTransform,
                 // The launch splash — logos, then the seizure warning. It sits

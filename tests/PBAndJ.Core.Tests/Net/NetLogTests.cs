@@ -621,7 +621,7 @@ namespace PBAndJ.Core.Tests.Net
         {
             Assert.Equal(
                 "[pb-and-j] 3 projectiles carried trails | 97 points",
-                NetLog.AssetTrailsSent(3, 97));
+                NetLog.AssetTrailsSent(3, 97, 0));
         }
 
         [Fact]
@@ -629,7 +629,39 @@ namespace PBAndJ.Core.Tests.Net
         {
             Assert.Equal(
                 "[pb-and-j] 1 projectile carried trails | 1 point",
-                NetLog.AssetTrailsSent(1, 1));
+                NetLog.AssetTrailsSent(1, 1, 0));
+        }
+
+        // The cap was sized believing no real trail would reach it, and a
+        // playtest measured ~68 points on an ordinary missile against a cap of
+        // 64. Thinning is therefore the normal path, and at 68 it is invisible
+        // while at 300 it would not be — so it has to say so.
+        [Fact]
+        public void AssetTrailsSent_WhenTheCapBit_SaysSoAndNamesIt()
+        {
+            Assert.Equal(
+                "[pb-and-j] 3 projectiles carried trails | 205 points "
+                    + "| 2 over the 64-point cap and thinned",
+                NetLog.AssetTrailsSent(3, 205, 2));
+        }
+
+        // The positive counterpart to the two loss lines. Without it a run with
+        // both losses at zero reads the same whether every flash travelled or
+        // no light code ran at all.
+        [Fact]
+        public void AssetLightsSent_ReportsUnitsAndLights()
+        {
+            Assert.Equal(
+                "[pb-and-j] 3 units fired 7 weapon lights",
+                NetLog.AssetLightsSent(3, 7));
+        }
+
+        [Fact]
+        public void AssetLightsSent_SpeaksOfOneOfEachInTheSingular()
+        {
+            Assert.Equal(
+                "[pb-and-j] 1 unit fired 1 weapon light",
+                NetLog.AssetLightsSent(1, 1));
         }
 
         // The one cost of hanging lights off the pose track, made loud. A unit

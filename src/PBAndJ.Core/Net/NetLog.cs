@@ -676,12 +676,47 @@ namespace PBAndJ.Core.Net
         /// the trail cap is sized against and it is the only one that would show
         /// a weapon far heavier than anything measured.
         /// </remarks>
-        public static string AssetTrailsSent(int projectiles, int points)
+        public static string AssetTrailsSent(int projectiles, int points, int overCap)
         {
-            return Prefix + string.Format(
+            var line = Prefix + string.Format(
                 CultureInfo.InvariantCulture,
                 "{0} projectile{1} carried trails | {2} point{3}",
                 projectiles, Plural(projectiles), points, Plural(points));
+
+            // Silent thinning is the failure this argument exists to prevent.
+            // The cap was sized believing no real trail would reach it; a
+            // playtest measured ~68 points on an ordinary missile against a cap
+            // of 64, so it fires in normal play. At 68 the coarsening is
+            // invisible and at 300 it would not be, and nothing else in the
+            // system distinguishes those two.
+            if (overCap > 0)
+            {
+                line += string.Format(
+                    CultureInfo.InvariantCulture,
+                    " | {0} over the {1}-point cap and thinned",
+                    overCap, PbjMessageCodec.MaxTrailPointsPerTrack);
+            }
+            return line;
+        }
+
+        /// <summary>
+        /// Weapon lights captured and put on the wire this turn.
+        /// </summary>
+        /// <remarks>
+        /// The positive counterpart to <see cref="LightsWithoutPoseTrack"/> and
+        /// <see cref="LightsUnusable"/>, and it exists because those two alone
+        /// were not falsifiable. A playtest with both reading zero is equally
+        /// consistent with "every flash travelled" and with "no light code ran
+        /// at all" — the silent-success shape this project has now paid for
+        /// several times over. A count that rises when weapons fire tells the
+        /// two apart.
+        /// </remarks>
+        public static string AssetLightsSent(int units, int lights)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "{0} unit{1} fired {2} weapon light{3}",
+                units, Plural(units), lights, Plural(lights));
         }
 
         /// <summary>

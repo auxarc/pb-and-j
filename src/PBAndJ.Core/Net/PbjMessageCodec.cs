@@ -155,13 +155,24 @@ namespace PBAndJ.Core.Net
         /// <c>WriteBytes</c>, so its 512 KiB throw never engages.
         /// </para>
         /// <para>
-        /// Measured trails ran ~32 points, so nothing real is ever touched by
-        /// this. When it does fire, <see cref="TrackThinning.Thin"/> coarsens
-        /// the ribbon and keeps both of its ends — which is why no
-        /// trail-specific thinning exists. Dropping the <i>oldest</i> points
-        /// would look like the sympathetic choice and is the opposite one: the
-        /// game culls by <c>timeEnd</c>, so the oldest points are exactly the
-        /// ones still visible in the frames right after the muzzle.
+        /// ⚠️ <b>This cap DOES fire in ordinary play — an earlier draft of this
+        /// comment claimed it never would, and a playtest refuted that.</b> The
+        /// ~32-points-per-trail figure it rested on came from one turn; a real
+        /// missile measured <b>~68</b>, so a fully-thinned ribbon is the normal
+        /// case and not the pathological one. It is still the right cap — the
+        /// coarsening from 68 to 64 is invisible, and a trail was confirmed by
+        /// eye on a client with it in force — but it means
+        /// <see cref="NetLog.AssetTrailsSent"/> has to report when it bites,
+        /// because a five-fold coarsening on some longer-lived projectile would
+        /// otherwise look exactly like this one.
+        /// <para>
+        /// When it fires, <see cref="TrackThinning.Thin"/> coarsens the ribbon
+        /// and keeps both of its ends — which is why no trail-specific thinning
+        /// exists. Dropping the <i>oldest</i> points would look like the
+        /// sympathetic choice and is the opposite one: the game culls by
+        /// <c>timeEnd</c>, so the oldest points are exactly the ones still
+        /// visible in the frames right after the muzzle.
+        /// </para>
         /// </para>
         /// </remarks>
         public const int MaxTrailPointsPerTrack = 64;

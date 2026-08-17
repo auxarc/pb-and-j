@@ -624,6 +624,22 @@ namespace PBAndJ.Mod.Net
                 firedUnits++;
             }
 
+            // The positive count first, and unconditionally when anything fired.
+            // Without it a playtest reading zero losses cannot tell "every flash
+            // travelled" from "no light code ran at all".
+            if (carried > 0)
+            {
+                var units = 0;
+                for (var i = 0; i < poses.Count; i++)
+                {
+                    if (poses[i].Lights.Count > 0)
+                    {
+                        units++;
+                    }
+                }
+                Debug.Log(NetLog.AssetLightsSent(units, carried));
+            }
+
             var orphaned = fired - carried;
             if (orphaned > 0)
             {
@@ -794,6 +810,7 @@ namespace PBAndJ.Mod.Net
             var beams = new List<BeamAssetTrack>();
             var trailed = 0;
             var trailPoints = 0;
+            var trailOverCap = 0;
 
             var recorded = CombatReplayHelper.assetsStandalone;
             if (recorded != null)
@@ -850,6 +867,14 @@ namespace PBAndJ.Mod.Net
                     {
                         trailed++;
                         trailPoints += trail.Count;
+
+                        // Counted here rather than where the thinning happens,
+                        // because this is the last place the pre-cap length
+                        // exists. TryPrepare only ever sees the result.
+                        if (trail.Count > PbjMessageCodec.MaxTrailPointsPerTrack)
+                        {
+                            trailOverCap++;
+                        }
                     }
 
                     projectiles.Add(new ProjectileAssetTrack(
@@ -890,7 +915,7 @@ namespace PBAndJ.Mod.Net
                 // Points per turn is the number MaxTrailPointsPerTrack is sized
                 // against, and the only one that would show a weapon far heavier
                 // than the ~32-points-per-trail this was measured on.
-                Debug.Log(NetLog.AssetTrailsSent(trailed, trailPoints));
+                Debug.Log(NetLog.AssetTrailsSent(trailed, trailPoints, trailOverCap));
             }
 
             return new AssetCapture(standalone, projectiles, beams);

@@ -54,8 +54,10 @@
 #   * `make deploy` must have run since the M14 changes landed. A 0.15.0 build
 #     has no effect wire at all, which looks exactly like this milestone
 #     failing.
-#   * Both instances must report mod 0.16.0. A peer built without the
-#     ReplayAssets type faults on the first one it receives.
+#   * Both instances must report mod 0.17.0 (stage B moved it, and moved the
+#     wire to v6). A peer on 0.16.0 does not merely miss trails and weapon
+#     lights — it reads a projectile's trail count as the next projectile's
+#     id and faults on the first effects message it receives.
 #
 # WHAT GOOD LOOKS LIKE, on the host's log:
 #
@@ -280,9 +282,23 @@ stage_turn() {
   host_log="$(prefix_log "$HOST_N")"
   peer_log="$(prefix_log "$PEER_N")"
 
-  # The client reached this fight by LOADING the host's save, so nothing is
-  # selected and its combat HUD has never opened.
+  # BOTH, and the host is not the redundant one it looks like. The client
+  # reached this fight by loading the host's save, so nothing is selected there
+  # — but the host arrived by deploying, which selects nothing either, and its
+  # pbj.execute then refuses in a way that reads as a stalled barrier rather
+  # than an unopened HUD. It only ever passed before because the `beam` stage
+  # happens to wake the host, so running `all` (which skips `beam`) stalled at
+  # ready 1/2 with no line saying why. wake_hud is idempotent.
+  wake_hud "$HOST_N"
   wake_hud "$PEER_N"
+
+  # The client's SESSION state, not its game state, and it must be Planning
+  # before it presses anything. ClientSession.HandleLocalReady opens with
+  # `if (State != Planning) return;` and says NOTHING when it refuses, so a
+  # ready posted while the client is still processing CombatStart is swallowed
+  # whole — the host then sits at ready 1/2 until the stage times out, with no
+  # line anywhere naming the cause. Cost three runs before it was pinned.
+  await "$PEER_N" "state Planning" "the client's session is ready to commit" 60
 
   # Both sent unconditionally rather than branching on the reply: a ready
   # already counted is idempotent, whereas parsing a refusal out of a reply

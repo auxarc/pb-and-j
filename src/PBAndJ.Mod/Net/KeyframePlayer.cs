@@ -430,8 +430,50 @@ namespace PBAndJ.Mod.Net
         /// </remarks>
         internal static int LightsRefused { get; private set; }
 
+        /// <summary>
+        /// Weapon lights this client actually armed, counted once each.
+        /// </summary>
+        /// <remarks>
+        /// The falsifiable half of the weapon-light instrumentation, and it was
+        /// added after a playtest proved the other half insufficient: with only
+        /// <see cref="LightsRefused"/> and the host's loss lines, a run where
+        /// every flash rendered and a run where the light code never executed
+        /// both read as all-zero. Counted on the frame the cursor crosses a
+        /// key's time, not per call — <c>OnWeaponLight</c> is re-armed every
+        /// frame a light is inside its envelope, so counting calls would report
+        /// the frame rate.
+        /// </remarks>
+        internal static int LightsFired { get; private set; }
+
+        /// <summary>
+        /// Weapon lights dropped because their unit has no light manager.
+        /// </summary>
+        /// <remarks>
+        /// Its own counter because it is the one weapon-light loss the host
+        /// cannot see: the unit HAS a pose track, so
+        /// <see cref="NetLog.LightsWithoutPoseTrack"/> stays silent, and nothing
+        /// throws, so <see cref="LightsRefused"/> stays silent too. A whole
+        /// unit's flashes would simply not happen.
+        /// </remarks>
+        internal static int LightsNoManager { get; private set; }
+
         /// <summary>Repositioned per key; see <c>ApplyWeaponLights</c>.</summary>
         private static Transform? lightAnchor;
+
+        /// <summary>
+        /// The light counter's own previous cursor, one notch below the window.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately not <c>cursorPrevious</c>, which starts exactly AT
+        /// <c>WindowStart</c>. A flash stamped at the window's first instant
+        /// then fails a strict <c>previous &lt; time</c> crossing test and is
+        /// never counted — while still being armed, because the arming path
+        /// only asks that elapsed time be non-negative. That undercounts by one
+        /// per turn, which is precisely the sort of standing discrepancy that
+        /// sends someone hunting a loss that is not there. Measured: host sent
+        /// 142, client counted 141.
+        /// </remarks>
+        private static float lightsCursorPrevious;
 
         internal static bool IsPlaying => playing;
 
@@ -597,6 +639,8 @@ namespace PBAndJ.Mod.Net
             BeamsRevealed = 0;
             TrailsRefused = 0;
             LightsRefused = 0;
+            LightsFired = 0;
+            LightsNoManager = 0;
             TimeSimOverwrites = 0;
 
             // Captured here — after the opening Stop(), which has already handed
@@ -610,6 +654,7 @@ namespace PBAndJ.Mod.Net
 
             cursor = capture.WindowStart;
             cursorPrevious = capture.WindowStart;
+            lightsCursorPrevious = capture.WindowStart - 1f;
             Turn = turn;
             playing = true;
 
@@ -1647,6 +1692,7 @@ namespace PBAndJ.Mod.Net
             // appears a frame before the unit firing it does.
             ApplyShows();
             cursorPrevious = cursor;
+            lightsCursorPrevious = cursor;
 
             if (finished)
             {
@@ -1706,6 +1752,15 @@ namespace PBAndJ.Mod.Net
             var manager = target.Lights;
             if (manager == null)
             {
+                // Counted, not merely skipped — see LightsNoManager.
+                for (var i = 0; i < poses.Lights.Count; i++)
+                {
+                    if (lightsCursorPrevious < poses.Lights[i].Time
+                        && poses.Lights[i].Time <= cursor)
+                    {
+                        LightsNoManager++;
+                    }
+                }
                 return;
             }
 
@@ -1716,8 +1771,31 @@ namespace PBAndJ.Mod.Net
                 // Only flashes the cursor has reached, and only those still
                 // within their own envelope — re-arming an expired light every
                 // frame would restart its fade and leave it lit forever.
-                var elapsed = cursor - key.Time;
-                if (elapsed < 0f || elapsed > key.DurationStable + key.DurationFade)
+                // COUNTED FIRST, and that order is the whole rule — exactly the
+                // one stage A had to move into Core as ActionFor. Written the
+                // obvious way, with the envelope test above this, a flash whose
+                // whole life falls between two frames is skipped before it is
+                // ever counted, so it is neither armed nor reported. Measured:
+                // the host sent 58 and the client counted 56.
+                if (lightsCursorPrevious < key.Time && key.Time <= cursor)
+                {
+                    LightsFired++;
+                }
+
+                // Interval overlap, not a point test on elapsed time. A frame
+                // gap during playback is routinely longer than a weapon light
+                // lives, so "is the cursor inside the envelope right now" is
+                // false for most of the short ones on every single frame.
+                //
+                // The durations are floored the way OnWeaponLight itself floors
+                // them (UnitLightManager.cs:276-278). Using the raw values makes
+                // our envelope narrower than the one the game will actually
+                // animate — as little as 0.05s against its 0.10s — so we would
+                // decline to arm lights the game would happily have shown.
+                var life = Mathf.Max(0.05f, key.DurationStable)
+                    + Mathf.Max(0.05f, key.DurationFade);
+                if (!ReplayAssetPlayback.OverlapsWindow(
+                        key.Time, key.Time + life, lightsCursorPrevious, cursor))
                 {
                     continue;
                 }
