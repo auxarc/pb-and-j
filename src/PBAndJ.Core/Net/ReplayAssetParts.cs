@@ -122,9 +122,21 @@ namespace PBAndJ.Core.Net
                 return AssetTrackFault.TooFewKeys;
             }
 
+            // The trail gets the same generic thinner as the transform keys, and
+            // that is a deliberate reuse rather than an oversight. A trail is a
+            // polyline, not a sampling, so thinning coarsens the ribbon instead
+            // of merely losing precision — but Thin keeps both ends, so the
+            // ribbon still spans its full length. ⚠️ It DOES fire in ordinary
+            // play — a real missile measured ~68 points against a cap of 64, so
+            // this is the normal path and not a pathological one; the bridge
+            // reports it rather than letting it be silent. The alternative that looks
+            // kinder — dropping the oldest points — is the cruel one: the game
+            // culls by timeEnd, so the oldest surviving points are precisely
+            // those visible in the frames just after the muzzle.
             prepared = new ProjectileAssetTrack(
                 track.Id, track.Head, track.Scale,
-                TrackThinning.Thin(track.Keys, PbjMessageCodec.MaxAssetKeysPerTrack));
+                TrackThinning.Thin(track.Keys, PbjMessageCodec.MaxAssetKeysPerTrack),
+                TrackThinning.Thin(track.Trail, PbjMessageCodec.MaxTrailPointsPerTrack));
             return AssetTrackFault.None;
         }
 

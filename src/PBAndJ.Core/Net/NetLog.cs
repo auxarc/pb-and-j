@@ -663,25 +663,99 @@ namespace PBAndJ.Core.Net
         }
 
         /// <summary>
-        /// Projectiles crossed carrying trails that stage A does not send.
+        /// Projectiles crossed carrying trails, and how many points they cost.
         /// </summary>
         /// <remarks>
-        /// The projectile still flies; it just leaves no wake, which is a loss
-        /// no count and no other line would show. Trails were left out because
-        /// <c>keyframesTrail</c> was empty on every sample taken and
-        /// <c>ReplayKeyframeTrailPoint</c> is ten fields — easily the heaviest
-        /// shape in the system — so it is not designed in blind. <b>Unmeasured
-        /// is not absent</b>, and this is the line that would tell us those
-        /// samples were unrepresentative and the weapon that produces them is
-        /// now on the field.
+        /// The successor to stage A's <c>AssetTrailsNotCaptured</c>, which
+        /// reported the same projectiles as a <i>loss</i> because trails did not
+        /// travel yet. That line was written to catch the moment a weapon
+        /// producing trails reached the field, and it did exactly that — it
+        /// fired on 3 of 109 projectiles in a real turn, which is how stage B
+        /// learned trails were worth building and cheap enough to build. Kept as
+        /// a count rather than deleted, because points-per-turn is the number
+        /// the trail cap is sized against and it is the only one that would show
+        /// a weapon far heavier than anything measured.
         /// </remarks>
-        public static string AssetTrailsNotCaptured(int projectiles)
+        public static string AssetTrailsSent(int projectiles, int points, int overCap)
+        {
+            var line = Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "{0} projectile{1} carried trails | {2} point{3}",
+                projectiles, Plural(projectiles), points, Plural(points));
+
+            // Silent thinning is the failure this argument exists to prevent.
+            // The cap was sized believing no real trail would reach it; a
+            // playtest measured ~68 points on an ordinary missile against a cap
+            // of 64, so it fires in normal play. At 68 the coarsening is
+            // invisible and at 300 it would not be, and nothing else in the
+            // system distinguishes those two.
+            if (overCap > 0)
+            {
+                line += string.Format(
+                    CultureInfo.InvariantCulture,
+                    " | {0} over the {1}-point cap and thinned",
+                    overCap, PbjMessageCodec.MaxTrailPointsPerTrack);
+            }
+            return line;
+        }
+
+        /// <summary>
+        /// Weapon lights captured and put on the wire this turn.
+        /// </summary>
+        /// <remarks>
+        /// The positive counterpart to <see cref="LightsWithoutPoseTrack"/> and
+        /// <see cref="LightsUnusable"/>, and it exists because those two alone
+        /// were not falsifiable. A playtest with both reading zero is equally
+        /// consistent with "every flash travelled" and with "no light code ran
+        /// at all" — the silent-success shape this project has now paid for
+        /// several times over. A count that rises when weapons fire tells the
+        /// two apart.
+        /// </remarks>
+        public static string AssetLightsSent(int units, int lights)
         {
             return Prefix + string.Format(
                 CultureInfo.InvariantCulture,
-                "{0} projectile{1} had recorded trails, which do not travel yet — "
-                    + "they will fly without a wake on the client",
-                projectiles, Plural(projectiles));
+                "{0} unit{1} fired {2} weapon light{3}",
+                units, Plural(units), lights, Plural(lights));
+        }
+
+        /// <summary>
+        /// A unit fired but got no pose track, so its weapon lights have no ride.
+        /// </summary>
+        /// <remarks>
+        /// The one cost of hanging lights off the pose track, made loud instead
+        /// of silent. The join is deliberate — a light is meaningless without
+        /// the unit whose <c>UnitLightManager</c> owns the <c>Light</c> — but it
+        /// means a unit the recorder skipped, or one whose track failed
+        /// <see cref="PoseTracks.TryPrepare"/>, drops its flashes with it. That
+        /// is invisible on screen among other flashes, which is exactly the
+        /// class of loss this project has learned to instrument rather than
+        /// discover later.
+        /// </remarks>
+        public static string LightsWithoutPoseTrack(int units, int lights)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "{0} unit{1} fired {2} weapon light{3} but carried no pose track — "
+                    + "those flashes will not reach the client",
+                units, Plural(units), lights, Plural(lights));
+        }
+
+        /// <summary>
+        /// Weapon lights that could not travel, having no usable socket.
+        /// </summary>
+        /// <remarks>
+        /// Separate from <see cref="LightsWithoutPoseTrack"/> because the causes
+        /// are unrelated and the fixes are too: this one means the host recorded
+        /// a flash whose mount socket is missing or absurd, so the client could
+        /// never find the <c>Light</c> to drive even if it arrived.
+        /// </remarks>
+        public static string LightsUnusable(int lights)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "{0} weapon light{1} had no usable socket and will not travel",
+                lights, Plural(lights));
         }
 
         /// <summary>

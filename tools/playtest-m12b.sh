@@ -126,15 +126,20 @@ stage_up() {
   nohup "$HERE/game-instance.sh" "$PEER_N" > "$LOG_DIR/instance-$PEER_N.log" 2>&1 &
   "$HERE/game-wait.sh" "$PEER_N" 240 || fail "client instance never opened its channel"
 
-  # patched=32 is the healthy number (36 patch classes over 32 distinct target
+  # patched=33 is the healthy number (37 patch classes over 33 distinct target
   # methods). A different one means PatchAll aborted partway and an arbitrary
   # subset of the suppression gates is live — which looks like nothing at all
   # until a client drives the host's world. Worth failing on before a playtest,
   # not during one.
+  #
+  # 32 -> 33 with M14 stage B: WeaponLightPatches postfixes
+  # CombatReplayHelper.OnUnitLightWeapon, which is the only place a weapon
+  # light's world position can be resolved while the barrel is still pointing
+  # where it fired.
   for n in "$HOST_N" "$PEER_N"; do
     local st; st="$(drive "$n" "pbj.drive-state")"
-    printf '%s' "$st" | grep -q "patched=32" \
-      || fail "instance $n reports $(printf '%s' "$st" | grep -o 'patched=[0-9?]*') — expected patched=32; the patch set is incomplete"
+    printf '%s' "$st" | grep -q "patched=33" \
+      || fail "instance $n reports $(printf '%s' "$st" | grep -o 'patched=[0-9?]*') — expected patched=33; the patch set is incomplete"
   done
   pass "both instances up, both fully patched"
 }
@@ -253,6 +258,18 @@ stage_fight() {
     # (Cost one confused round on 2026-08-14.)
     if drive "$HOST_N" "pbj.drive-state" | grep -q "state=basecrawler"; then
       drive "$HOST_N" "pbj.nav-world" | tee -a "$RUN_LOG"
+
+      # Leaving the base can raise a disengage dialog, and when it does the
+      # nav press alone never reaches the overworld — the stage just times out
+      # 120s later pointing at state=basecrawler, which reads like the nav
+      # actuator being broken. It is conditional, so the stage passes without
+      # this often enough to look fine; it has now cost two runs.
+      #
+      # Unconditional on purpose. pbj.dialog-confirm guards on IsEntered(), so
+      # calling it with no dialog open is an honest no-op rather than the
+      # closed-dialog callback re-fire it used to be.
+      drive "$HOST_N" "pbj.dialog-confirm" | tee -a "$RUN_LOG"
+
       await "$HOST_N" "state=overworld" "host reached the overworld map" 120
     fi
 

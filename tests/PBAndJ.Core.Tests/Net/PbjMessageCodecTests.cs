@@ -124,6 +124,46 @@ namespace PBAndJ.Core.Tests.Net
                 id, AssetHead("fx_bullet_" + id), new Vec3(2f, 2f, 2f), frames);
         }
 
+        private static ProjectileAssetTrack TrailedProjectile(int id, int keys, int points)
+        {
+            var plain = ProjectileAsset(id, keys);
+            var trail = new TrailKey[points];
+            for (var i = 0; i < points; i++)
+            {
+                // Every field a different value, and none of them equal to any
+                // other field's. Five Vec3s in a row are interchangeable to the
+                // compiler; a tangent that arrives in the normal's slot is a
+                // trail lit from the wrong side.
+                trail[i] = new TrailKey(
+                    i * 0.1f,
+                    i * 0.1f + 0.5f,
+                    new Vec3(i + 1, i + 2, i + 3),
+                    new Vec3(i + 10, i + 11, i + 12),
+                    new Vec3(i + 20, i + 21, i + 22),
+                    new Vec3(i + 30, i + 31, i + 32),
+                    new Vec3(i + 40, i + 41, i + 42),
+                    new Vec4(0.11f, 0.22f, 0.33f, 0.44f),
+                    0.9f + i,
+                    0.05f + i);
+            }
+
+            return new ProjectileAssetTrack(
+                plain.Id, plain.Head, plain.Scale, plain.Keys, trail);
+        }
+
+        private static UnitLightKey LightKey(int index)
+        {
+            return new UnitLightKey(
+                index * 0.25f,
+                "socket_" + index,
+                new Vec3(index + 1, index + 2, index + 3),
+                new Vec4(0.15f, 0.25f, 0.35f, 1f),
+                6f + index,
+                0.02f + index,
+                0.03f + index,
+                0.04f + index);
+        }
+
         private static BeamAssetTrack BeamAsset(int id, int keys)
         {
             var frames = new BeamKey[keys];
@@ -853,6 +893,85 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Null(decoded.Track!.Name);
             Assert.Empty(decoded.Track.Joints);
             Assert.Empty(decoded.Track.Keys);
+
+            // A null track must reproduce as the empty-light shape too, or
+            // encode can no longer round-trip everything decode can produce.
+            Assert.Empty(decoded.Track.Lights);
+        }
+
+        // Every field asserted against a distinct value. The three durations are
+        // the trap here: same type, adjacent on the wire, and transposing stable
+        // with fade changes how a flash decays without changing any count.
+        [Fact]
+        public void RoundTrip_Poses_PreservesEveryFieldOfAWeaponLight()
+        {
+            var decoded = RoundTrip(new PosesMessage(
+                1, 0, 1,
+                new UnitPoseTrack("u", new[] { "j" }, null, new[] { LightKey(1) })));
+
+            var light = Assert.Single(decoded.Track!.Lights);
+            Assert.Equal(0.25f, light.Time);
+            Assert.Equal("socket_1", light.Socket);
+            Assert.Equal(new[] { 2f, 3f, 4f }, new[] { light.Position.X, light.Position.Y, light.Position.Z });
+            Assert.Equal(
+                new[] { 0.15f, 0.25f, 0.35f, 1f },
+                new[] { light.Colour.X, light.Colour.Y, light.Colour.Z, light.Colour.W });
+            Assert.Equal(7f, light.Intensity);
+            Assert.Equal(1.02f, light.DurationBuildup);
+            Assert.Equal(1.03f, light.DurationStable);
+            Assert.Equal(1.04f, light.DurationFade);
+        }
+
+        // Lights travel beside the poses, not instead of them: a track must
+        // arrive carrying both, or a firing mech loses either its walk or its
+        // muzzle flash depending on which the codec dropped.
+        [Fact]
+        public void RoundTrip_Poses_CarriesLightsAlongsideTheKeys()
+        {
+            var decoded = RoundTrip(new PosesMessage(
+                1, 0, 1,
+                new UnitPoseTrack(
+                    "u",
+                    new[] { "joint_0" },
+                    new[] { new PoseKey(0f, false, false, new[] { new JointPose(default, default) }) },
+                    new[] { LightKey(0), LightKey(1), LightKey(2) })));
+
+            Assert.Single(decoded.Track!.Keys);
+            Assert.Equal(3, decoded.Track.Lights.Count);
+            Assert.Equal(
+                new[] { "socket_0", "socket_1", "socket_2" },
+                new[]
+                {
+                    decoded.Track.Lights[0].Socket,
+                    decoded.Track.Lights[1].Socket,
+                    decoded.Track.Lights[2].Socket,
+                });
+        }
+
+        // A pose track with no lights is the ordinary case — a unit that walked
+        // without firing — and must stay free.
+        [Fact]
+        public void RoundTrip_Poses_AUnitThatDidNotFireCarriesNoLights()
+        {
+            var decoded = RoundTrip(new PosesMessage(3, 0, 1, PoseTrack("unit_a", 4, 3)));
+
+            Assert.Empty(decoded.Track!.Lights);
+        }
+
+        [Fact]
+        public void Decode_PosesWithTooManyWeaponLights_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.Poses);
+            writer.WriteInt32(1);
+            writer.WriteInt32(0);
+            writer.WriteInt32(1);
+            writer.WriteString("u");
+            writer.WriteInt32(0);
+            writer.WriteInt32(0);
+            writer.WriteInt32(PbjMessageCodec.MaxLightKeysPerUnit + 1);
+
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
         }
 
         [Fact]
@@ -987,6 +1106,61 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(
                 new[] { 7f, 8f, 9f },
                 new[] { track.PositionLocal.X, track.PositionLocal.Y, track.PositionLocal.Z });
+        }
+
+        // Ten fields, each read back into a rebuilt AraTrail.Point by the game's
+        // own ApplyTime. Asserted one at a time and against distinct values,
+        // because the five Vec3s are the same type in the same run and the codec
+        // would happily swap two of them forever.
+        [Fact]
+        public void RoundTrip_ReplayAssets_PreservesEveryFieldOfATrailPoint()
+        {
+            var decoded = RoundTrip(new ReplayAssetsMessage(4, 0, 1, new AssetCapture(
+                null, new[] { TrailedProjectile(7, 2, 1) }, null)));
+
+            var point = Assert.Single(Assert.Single(decoded.Assets.Projectiles).Trail);
+            Assert.Equal(0f, point.Time);
+            Assert.Equal(0.5f, point.TimeEnd);
+            Assert.Equal(new[] { 1f, 2f, 3f }, new[] { point.Position.X, point.Position.Y, point.Position.Z });
+            Assert.Equal(new[] { 10f, 11f, 12f }, new[] { point.Velocity.X, point.Velocity.Y, point.Velocity.Z });
+            Assert.Equal(
+                new[] { 20f, 21f, 22f },
+                new[] { point.PerlinDirection.X, point.PerlinDirection.Y, point.PerlinDirection.Z });
+            Assert.Equal(new[] { 30f, 31f, 32f }, new[] { point.Tangent.X, point.Tangent.Y, point.Tangent.Z });
+            Assert.Equal(new[] { 40f, 41f, 42f }, new[] { point.Normal.X, point.Normal.Y, point.Normal.Z });
+            Assert.Equal(
+                new[] { 0.11f, 0.22f, 0.33f, 0.44f },
+                new[] { point.Colour.X, point.Colour.Y, point.Colour.Z, point.Colour.W });
+            Assert.Equal(0.9f, point.Thickness);
+            Assert.Equal(0.05f, point.Texcoord);
+        }
+
+        // Emission order is the ribbon's geometry: SetPoints treats the last
+        // point as the head. A codec that reversed the list would pass every
+        // per-field assertion above and still turn every trail inside out.
+        [Fact]
+        public void RoundTrip_ReplayAssets_KeepsTrailPointsInEmissionOrder()
+        {
+            var decoded = RoundTrip(new ReplayAssetsMessage(4, 0, 1, new AssetCapture(
+                null, new[] { TrailedProjectile(7, 2, 4) }, null)));
+
+            var trail = Assert.Single(decoded.Assets.Projectiles).Trail;
+            Assert.Equal(4, trail.Count);
+            Assert.Equal(new[] { 0f, 0.1f, 0.2f, 0.3f }, new[]
+            {
+                trail[0].Time, trail[1].Time, trail[2].Time, trail[3].Time,
+            });
+        }
+
+        // The common case by a wide margin — 106 of 109 measured projectiles —
+        // and the one that must not cost anything or break stage A's shape.
+        [Fact]
+        public void RoundTrip_ReplayAssets_AProjectileWithoutATrailStaysEmpty()
+        {
+            var decoded = RoundTrip(new ReplayAssetsMessage(1, 0, 1, new AssetCapture(
+                null, new[] { ProjectileAsset(7, 2) }, null)));
+
+            Assert.Empty(Assert.Single(decoded.Assets.Projectiles).Trail);
         }
 
         [Fact]
@@ -1182,10 +1356,26 @@ namespace PBAndJ.Core.Tests.Net
             {
                 transforms[i] = new TransformKey(i, new Vec3(1f, 1f, 1f), new Vec4(0f, 0f, 0f, 1f));
             }
+            // Trails at their cap too, and this is the term that actually
+            // decides the bound: a trail point is 92 bytes against a transform
+            // key's 32, so MaxTrailPointsPerTrack is what stands between a full
+            // part and the 1 MiB frame limit. Stage A's version of this test
+            // predates trails, and leaving it unchanged would have gone on
+            // "proving" a bound for a message shape we no longer send.
+            var trail = new TrailKey[PbjMessageCodec.MaxTrailPointsPerTrack];
+            for (var i = 0; i < trail.Length; i++)
+            {
+                trail[i] = new TrailKey(
+                    i, i + 1,
+                    new Vec3(1f, 1f, 1f), new Vec3(1f, 1f, 1f), new Vec3(1f, 1f, 1f),
+                    new Vec3(1f, 1f, 1f), new Vec3(1f, 1f, 1f),
+                    new Vec4(1f, 1f, 1f, 1f), 1f, 1f);
+            }
             var projectiles = new ProjectileAssetTrack[PbjMessageCodec.MaxAssetsPerPart];
             for (var i = 0; i < projectiles.Length; i++)
             {
-                projectiles[i] = new ProjectileAssetTrack(i, head, new Vec3(1f, 1f, 1f), transforms);
+                projectiles[i] = new ProjectileAssetTrack(
+                    i, head, new Vec3(1f, 1f, 1f), transforms, trail);
             }
 
             var beamKeys = new BeamKey[PbjMessageCodec.MaxAssetKeysPerTrack];
@@ -1206,6 +1396,16 @@ namespace PBAndJ.Core.Tests.Net
 
             Assert.True(bytes.Length < PbjRuntime.MaxFrameLength,
                 $"a fully capped asset part was {bytes.Length} bytes, over the frame limit");
+
+            // Pinned, not merely bounded. A fully capped part measures ~712 KiB
+            // of the 1 MiB limit, so the real headroom is about 1.44x and the
+            // trail term alone is half the message — raising
+            // MaxTrailPointsPerTrack past ~112 breaches the frame. "Under the
+            // limit" would still pass at 99% full and tell nobody the next cap
+            // bump is the one that breaks decode.
+            Assert.True(bytes.Length < PbjRuntime.MaxFrameLength * 3 / 4,
+                $"a fully capped asset part was {bytes.Length} bytes, which has eaten "
+                    + "the headroom the trail cap was sized to leave");
         }
 
         // --- scenario transfer (M9) ---

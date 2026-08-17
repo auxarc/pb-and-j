@@ -401,6 +401,18 @@ namespace PBAndJ.Mod.Net
                         "0.00", CultureInfo.InvariantCulture)
                     + " overwrites=" + KeyframePlayer.TimeSimOverwrites
                     + " mirror=" + (KeyframePlayer.MirrorTimeSimulation ? "on" : "off"),
+                // M14 stage B. Both are expected to read zero, and both are
+                // losses nothing on screen would show: a bullet without its wake
+                // still flies the right path, and a muzzle flash that never lit
+                // is invisible among the ones that did. trailsRefused> 0 means
+                // this client's projectile prefab has no AraTrail where the
+                // host's did — which the pool digest cannot see, since it hashes
+                // pool keys and not the components hanging off each prefab.
+                "lightsFired=" + KeyframePlayer.LightsFired
+                    + " lightsNoMgr=" + KeyframePlayer.LightsNoManager
+                    + " trailsRefused=" + KeyframePlayer.TrailsRefused
+                    + " lightsRefused=" + KeyframePlayer.LightsRefused
+                    + " lightsNoTransform=" + WeaponLightPatches.SkippedNoTransform,
                 // The launch splash — logos, then the seizure warning. It sits
                 // OVER the main menu while the game already reports
                 // state=mainmenu, so a script that treats that state as "ready"

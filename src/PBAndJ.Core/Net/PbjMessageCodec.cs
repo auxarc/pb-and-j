@@ -135,6 +135,59 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public const int MaxAssetKeysPerTrack = 64;
 
+        /// <summary>
+        /// Cap on trail points in one projectile track.
+        /// </summary>
+        /// <remarks>
+        /// This is a <b>wire-safety bound, not a fidelity dial</b>, and it is
+        /// sized from the frame arithmetic rather than from the measurement.
+        /// A trail point is 92 bytes — about 2.9 <see cref="TransformKey"/>s —
+        /// and at 64 the trail term alone is <c>64 × 64 × 92</c> = 368 KiB,
+        /// <b>half of a fully capped part</b>. Measured rather than estimated:
+        /// a part at every cap encodes to <b>712 KiB</b> against the 1 MiB
+        /// <see cref="PbjRuntime.MaxFrameLength"/>, so headroom is ≈ 1.44× and
+        /// <b>a cap past ~112 breaches the frame</b>. That margin is pinned by
+        /// a test, not left to arithmetic in a comment.
+        /// <para>
+        /// ⚠️ <see cref="PbjWriter.MaxBytesLength"/> is <b>not</b> the binding
+        /// limit here, despite being the smaller number. Asset parts are written
+        /// field by field; nothing about them goes through
+        /// <c>WriteBytes</c>, so its 512 KiB throw never engages.
+        /// </para>
+        /// <para>
+        /// ⚠️ <b>This cap DOES fire in ordinary play — an earlier draft of this
+        /// comment claimed it never would, and a playtest refuted that.</b> The
+        /// ~32-points-per-trail figure it rested on came from one turn; a real
+        /// missile measured <b>~68</b>, so a fully-thinned ribbon is the normal
+        /// case and not the pathological one. It is still the right cap — the
+        /// coarsening from 68 to 64 is invisible, and a trail was confirmed by
+        /// eye on a client with it in force — but it means
+        /// <see cref="NetLog.AssetTrailsSent"/> has to report when it bites,
+        /// because a five-fold coarsening on some longer-lived projectile would
+        /// otherwise look exactly like this one.
+        /// <para>
+        /// When it fires, <see cref="TrackThinning.Thin"/> coarsens the ribbon
+        /// and keeps both of its ends — which is why no trail-specific thinning
+        /// exists. Dropping the <i>oldest</i> points would look like the
+        /// sympathetic choice and is the opposite one: the game culls by
+        /// <c>timeEnd</c>, so the oldest points are exactly the ones still
+        /// visible in the frames right after the muzzle.
+        /// </para>
+        /// </para>
+        /// </remarks>
+        public const int MaxTrailPointsPerTrack = 64;
+
+        /// <summary>
+        /// Cap on weapon-light flashes carried on one unit's pose track.
+        /// </summary>
+        /// <remarks>
+        /// A busy measured turn put 109 flashes across every unit in the fight,
+        /// so 64 for a single unit is generous. They are ~40 bytes plus a socket
+        /// string and ride the one-track-per-message pose wire, so they compete
+        /// with nothing.
+        /// </remarks>
+        public const int MaxLightKeysPerUnit = 64;
+
         /// <summary>Longest pool key an asset track may carry, in characters.</summary>
         /// <remarks>
         /// Counted in characters and set well below
@@ -729,6 +782,76 @@ namespace PBAndJ.Core.Net
             return new TransformKey(time, position, ReadVec4(reader));
         }
 
+        private static void WriteTrailKey(PbjWriter writer, TrailKey key)
+        {
+            writer.WriteSingle(key.Time);
+            writer.WriteSingle(key.TimeEnd);
+            WriteVec3(writer, key.Position);
+            WriteVec3(writer, key.Velocity);
+            WriteVec3(writer, key.PerlinDirection);
+            WriteVec3(writer, key.Tangent);
+            WriteVec3(writer, key.Normal);
+            WriteVec4(writer, key.Colour);
+            writer.WriteSingle(key.Thickness);
+            writer.WriteSingle(key.Texcoord);
+        }
+
+        private static TrailKey ReadTrailKey(PbjReader reader)
+        {
+            var time = reader.ReadSingle();
+            var timeEnd = reader.ReadSingle();
+            var position = ReadVec3(reader);
+            var velocity = ReadVec3(reader);
+            var perlinDirection = ReadVec3(reader);
+            var tangent = ReadVec3(reader);
+            var normal = ReadVec3(reader);
+            var colour = ReadVec4(reader);
+            var thickness = reader.ReadSingle();
+            return new TrailKey(
+                time,
+                timeEnd,
+                position,
+                velocity,
+                perlinDirection,
+                tangent,
+                normal,
+                colour,
+                thickness,
+                reader.ReadSingle());
+        }
+
+        private static void WriteUnitLightKey(PbjWriter writer, UnitLightKey key)
+        {
+            writer.WriteSingle(key.Time);
+            writer.WriteString(key.Socket);
+            WriteVec3(writer, key.Position);
+            WriteVec4(writer, key.Colour);
+            writer.WriteSingle(key.Intensity);
+            writer.WriteSingle(key.DurationBuildup);
+            writer.WriteSingle(key.DurationStable);
+            writer.WriteSingle(key.DurationFade);
+        }
+
+        private static UnitLightKey ReadUnitLightKey(PbjReader reader)
+        {
+            var time = reader.ReadSingle();
+            var socket = reader.ReadString();
+            var position = ReadVec3(reader);
+            var colour = ReadVec4(reader);
+            var intensity = reader.ReadSingle();
+            var durationBuildup = reader.ReadSingle();
+            var durationStable = reader.ReadSingle();
+            return new UnitLightKey(
+                time,
+                socket,
+                position,
+                colour,
+                intensity,
+                durationBuildup,
+                durationStable,
+                reader.ReadSingle());
+        }
+
         private static void WriteUnitPoseTrack(PbjWriter writer, UnitPoseTrack? track)
         {
             // A null track is a real shape rather than a defect: it is what a
@@ -737,6 +860,7 @@ namespace PBAndJ.Core.Net
             // tests are asserting on a narrower type than the wire admits.
             var joints = track == null ? EmptyNames : track.Joints;
             var keys = track == null ? NoPoseKeys : track.Keys;
+            var lights = track == null ? NoLightKeys : track.Lights;
 
             writer.WriteString(track?.Name);
             writer.WriteInt32(joints.Count);
@@ -758,6 +882,12 @@ namespace PBAndJ.Core.Net
                     WriteVec3(writer, key.Joints[j].Position);
                     WriteVec4(writer, key.Joints[j].Rotation);
                 }
+            }
+
+            writer.WriteInt32(lights.Count);
+            for (var l = 0; l < lights.Count; l++)
+            {
+                WriteUnitLightKey(writer, lights[l]);
             }
         }
 
@@ -796,7 +926,14 @@ namespace PBAndJ.Core.Net
                 keys[k] = new PoseKey(time, syncLeft, syncRight, poseJoints);
             }
 
-            return new UnitPoseTrack(name, joints!, keys);
+            var lightCount = ReadCount(reader, MaxLightKeysPerUnit, "weapon light");
+            var lights = new UnitLightKey[lightCount];
+            for (var l = 0; l < lightCount; l++)
+            {
+                lights[l] = ReadUnitLightKey(reader);
+            }
+
+            return new UnitPoseTrack(name, joints!, keys, lights);
         }
 
         /// <summary>
@@ -834,6 +971,11 @@ namespace PBAndJ.Core.Net
                 for (var k = 0; k < track.Keys.Count; k++)
                 {
                     WriteTransformKey(writer, track.Keys[k]);
+                }
+                writer.WriteInt32(track.Trail.Count);
+                for (var k = 0; k < track.Trail.Count; k++)
+                {
+                    WriteTrailKey(writer, track.Trail[k]);
                 }
             }
 
@@ -884,7 +1026,13 @@ namespace PBAndJ.Core.Net
                 {
                     keys[k] = ReadTransformKey(reader);
                 }
-                projectiles[i] = new ProjectileAssetTrack(id, head, scale, keys);
+                var trailCount = ReadCount(reader, MaxTrailPointsPerTrack, "trail point");
+                var trail = new TrailKey[trailCount];
+                for (var k = 0; k < trailCount; k++)
+                {
+                    trail[k] = ReadTrailKey(reader);
+                }
+                projectiles[i] = new ProjectileAssetTrack(id, head, scale, keys, trail);
             }
 
             var beamCount = ReadCount(reader, MaxAssetsPerPart, "beam asset");
@@ -993,6 +1141,7 @@ namespace PBAndJ.Core.Net
 
         private static readonly string[] EmptyNames = new string[0];
         private static readonly PoseKey[] NoPoseKeys = new PoseKey[0];
+        private static readonly UnitLightKey[] NoLightKeys = new UnitLightKey[0];
 
         private static int ReadCount(PbjReader reader, int max, string what)
         {

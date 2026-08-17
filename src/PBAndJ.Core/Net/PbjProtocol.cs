@@ -141,6 +141,19 @@ namespace PBAndJ.Core.Net
         /// type would fault on its first one.
         /// </para>
         /// <para>
+        /// <b>M14 stage B is the third move</b>, and unlike the first two it
+        /// changes two layouts at once. A trail point list is appended to every
+        /// projectile inside <c>ReplayAssets</c>, and a weapon-light list to
+        /// every unit inside <c>Poses</c>. Both are counted lists written after
+        /// existing fields, so a v5 peer reads a projectile's trail count as the
+        /// next projectile's id, and a unit's light count as the end of the
+        /// message — the same class of failure as M13's, and the reason this
+        /// constant exists. <see cref="ModVersion"/> moved to 0.17.0 in the same
+        /// commit. Doing trails and weapon lights together is what makes this
+        /// <b>one</b> move rather than two; they share no code and were paired
+        /// for exactly that reason.
+        /// </para>
+        /// <para>
         /// Worth stating once, because it is easy to read this constant as
         /// belt-and-braces behind the mod-version gate: for the <b>harness</b>
         /// it is the only guard there is. <c>pbj-peer</c> announces no mod
@@ -150,7 +163,7 @@ namespace PBAndJ.Core.Net
         /// <c>make deploy</c>, which makes that the load-bearing case.
         /// </para>
         /// </remarks>
-        public const int Version = 5;
+        public const int Version = 6;
 
         /// <summary>
         /// This build of the mod, as peers announce it to each other.
@@ -164,7 +177,7 @@ namespace PBAndJ.Core.Net
         /// mod/metadata.yaml; the Makefile refuses to build a distributable when
         /// they disagree, since that is the one file this constant cannot reach.
         /// </remarks>
-        public const string ModVersion = "0.16.0";
+        public const string ModVersion = "0.17.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.

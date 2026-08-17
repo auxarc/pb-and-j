@@ -209,14 +209,20 @@ namespace PBAndJ.Core.Net
     public sealed class ProjectileAssetTrack
     {
         private static readonly TransformKey[] NoKeys = new TransformKey[0];
+        private static readonly TrailKey[] NoTrail = new TrailKey[0];
 
         public ProjectileAssetTrack(
-            int id, AssetTrackHead head, Vec3 scale, IReadOnlyList<TransformKey>? keys)
+            int id,
+            AssetTrackHead head,
+            Vec3 scale,
+            IReadOnlyList<TransformKey>? keys,
+            IReadOnlyList<TrailKey>? trail = null)
         {
             Id = id;
             Head = head;
             Scale = scale;
             Keys = keys ?? NoKeys;
+            Trail = trail ?? NoTrail;
         }
 
         /// <summary>The host's combat entity id — the game's own key for these.</summary>
@@ -235,6 +241,107 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Ascending by time. Two or more, or the track must not be sent.</summary>
         public IReadOnlyList<TransformKey> Keys { get; }
+
+        /// <summary>
+        /// The trail ribbon, in emission order. Empty for the overwhelming
+        /// majority of projectiles — only prefabs whose <c>AssetLinker.trail</c>
+        /// field is assigned ever record one.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ Emission order is load-bearing and is <b>not</b> the same claim as
+        /// "ascending by time", though it happens to imply it: index 0 is the
+        /// oldest point and the far end of the ribbon, and <c>SetPoints</c>
+        /// treats the <b>last</b> point as the head, snapping it to the
+        /// instance's transform. Reversing this list turns every trail
+        /// inside out.
+        /// <para>
+        /// Empty rather than null so a client never has to distinguish "no
+        /// trail" from "trail not sent" — the two are the same instruction, and
+        /// the game's own <c>ApplyTime</c> skips its trail block on either.
+        /// </para>
+        /// </remarks>
+        public IReadOnlyList<TrailKey> Trail { get; }
+    }
+
+    /// <summary>One emitted point of a projectile's trail ribbon.</summary>
+    /// <remarks>
+    /// The wire form of <c>ReplayKeyframeTrailPoint</c>, all ten fields, because
+    /// <c>ReplayEntityAssetProjectile.ApplyTime</c> reads every one of them back
+    /// into a rebuilt <c>AraTrail.Point</c> — there is no field here we could
+    /// drop and still hand the game a point it recognises.
+    /// <para>
+    /// ⚠️ These are <b>not</b> samples of a path the way <see cref="TransformKey"/>
+    /// is. They are the ribbon's vertices, enumerated: <c>SetPoints</c> consumes
+    /// the list as a polyline. Interpolating between two of them is meaningless.
+    /// </para>
+    /// <para>
+    /// ⚠️ <see cref="Time"/> and <see cref="TimeEnd"/> are on an <b>absolute</b>
+    /// clock, independent of the transform keys beside them
+    /// (<c>CombatReplayHelper.cs:1639-1640</c>). Slicing them to a turn window
+    /// therefore needs an interval-overlap test — see
+    /// <see cref="ReplayAssetPlayback.OverlapsWindow"/> — and <b>not</b> the
+    /// point test the transform keys use. A point test drops points whose life
+    /// has not run out, and the trail pops in bald at every turn boundary.
+    /// </para>
+    /// <para>
+    /// 92 bytes of floats, about 2.9 <see cref="TransformKey"/>s. Measured on a
+    /// real 378-effect turn: 3 of 109 projectiles carried a trail, ~32 points
+    /// each, ≈ 8.9 KB — heavy per key, light in practice.
+    /// </para>
+    /// </remarks>
+    public readonly struct TrailKey
+    {
+        public TrailKey(
+            float time,
+            float timeEnd,
+            Vec3 position,
+            Vec3 velocity,
+            Vec3 perlinDirection,
+            Vec3 tangent,
+            Vec3 normal,
+            Vec4 colour,
+            float thickness,
+            float texcoord)
+        {
+            Time = time;
+            TimeEnd = timeEnd;
+            Position = position;
+            Velocity = velocity;
+            PerlinDirection = perlinDirection;
+            Tangent = tangent;
+            Normal = normal;
+            Colour = colour;
+            Thickness = thickness;
+            Texcoord = texcoord;
+        }
+
+        /// <summary>The game's <c>timeStart</c> — when this point was emitted.</summary>
+        public float Time { get; }
+
+        /// <summary>Emission time plus the point's life. Absolute, like <see cref="Time"/>.</summary>
+        public float TimeEnd { get; }
+
+        public Vec3 Position { get; }
+        public Vec3 Velocity { get; }
+
+        /// <summary>
+        /// Re-integrated client-side, so it must travel even though it looks derived.
+        /// </summary>
+        /// <remarks>
+        /// <c>ApplyTime</c> advances the point by <c>perlinDirection * elapsed</c>
+        /// when the trail has <c>perlinNoise</c> set, so dropping this field
+        /// would straighten every noisy trail rather than merely coarsening it.
+        /// </remarks>
+        public Vec3 PerlinDirection { get; }
+
+        public Vec3 Tangent { get; }
+        public Vec3 Normal { get; }
+
+        /// <summary>RGBA. Costs 16 of the 92 bytes and cannot be dropped.</summary>
+        public Vec4 Colour { get; }
+
+        public float Thickness { get; }
+        public float Texcoord { get; }
     }
 
     /// <summary>One sampled instant of a beam.</summary>

@@ -20,7 +20,12 @@ namespace PBAndJ.Core.Tests.Net
             // visibility bytes as the next unit's name length.
             // v5 (M8's leftovers) is the same case a second time and in the same
             // record: an arrival-time flag and float, five more bytes a unit.
-            Assert.Equal(5, PbjProtocol.Version);
+            // v6 (M14 stage B) is the first to change TWO layouts at once: a
+            // trail point list appended to every projectile inside ReplayAssets,
+            // and a weapon light list appended to every unit inside Poses. Both
+            // are counted lists after existing fields, so a v5 peer reads a
+            // projectile's trail count as the next projectile's id.
+            Assert.Equal(6, PbjProtocol.Version);
         }
 
         [Fact]
@@ -209,7 +214,10 @@ namespace PBAndJ.Core.Tests.Net
             // layout alone — so the mod version is the only thing standing
             // between a peer built without the type and a host that broadcasts
             // it on every executed turn.
-            Assert.Equal("0.16.0", PbjProtocol.ModVersion);
+            // 0.17.0 for M14 stage B — trails and weapon lights — which moves
+            // PbjProtocol.Version to 6 alongside it. Pairing the two features in
+            // one release is what makes that a single wire break instead of two.
+            Assert.Equal("0.17.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

@@ -73,6 +73,17 @@ namespace PBAndJ.Mod.Net
 
             /// <summary>Present only on mechs, and only for the palm sync.</summary>
             public CombatMechAnimationView? MechView { get; set; }
+
+            /// <summary>
+            /// This unit's light manager, cached at install like every other
+            /// handle here.
+            /// </summary>
+            /// <remarks>
+            /// Null is ordinary and not an error: the game itself null-checks
+            /// the result of <c>GetLightManager</c> (<c>CombatView.cs:43-47</c>)
+            /// even though <c>ActionRecordingSystem:55</c> does not.
+            /// </remarks>
+            public UnitLightManager? Lights { get; set; }
         }
 
         /// <summary>
@@ -395,6 +406,75 @@ namespace PBAndJ.Mod.Net
         /// <inheritdoc cref="BeamsBuilt"/>
         internal static int BeamsRevealed { get; private set; }
 
+        /// <summary>
+        /// Trails dropped because this client's prefab has no <c>AraTrail</c>.
+        /// </summary>
+        /// <remarks>
+        /// Should be zero between two installs of the same build, and a nonzero
+        /// value means something the pool digest cannot see: that digest hashes
+        /// pool <i>keys</i>, not which components hang off each prefab, so two
+        /// machines can agree on all 176 keys and still disagree here. The
+        /// projectile still flies — only its wake is refused — so nothing on
+        /// screen would say so.
+        /// </remarks>
+        internal static int TrailsRefused { get; private set; }
+
+        /// <summary>
+        /// Weapon lights the game refused to place, having thrown inside its own
+        /// <c>OnWeaponLight</c>.
+        /// </summary>
+        /// <remarks>
+        /// Expected to be zero. The realistic cause is a socket whose
+        /// <c>Light</c> died with a blown-off part, which that method
+        /// dereferences without checking.
+        /// </remarks>
+        internal static int LightsRefused { get; private set; }
+
+        /// <summary>
+        /// Weapon lights this client actually armed, counted once each.
+        /// </summary>
+        /// <remarks>
+        /// The falsifiable half of the weapon-light instrumentation, and it was
+        /// added after a playtest proved the other half insufficient: with only
+        /// <see cref="LightsRefused"/> and the host's loss lines, a run where
+        /// every flash rendered and a run where the light code never executed
+        /// both read as all-zero. Counted on the frame the cursor crosses a
+        /// key's time, not per call — <c>OnWeaponLight</c> is re-armed every
+        /// frame a light is inside its envelope, so counting calls would report
+        /// the frame rate.
+        /// </remarks>
+        internal static int LightsFired { get; private set; }
+
+        /// <summary>
+        /// Weapon lights dropped because their unit has no light manager.
+        /// </summary>
+        /// <remarks>
+        /// Its own counter because it is the one weapon-light loss the host
+        /// cannot see: the unit HAS a pose track, so
+        /// <see cref="NetLog.LightsWithoutPoseTrack"/> stays silent, and nothing
+        /// throws, so <see cref="LightsRefused"/> stays silent too. A whole
+        /// unit's flashes would simply not happen.
+        /// </remarks>
+        internal static int LightsNoManager { get; private set; }
+
+        /// <summary>Repositioned per key; see <c>ApplyWeaponLights</c>.</summary>
+        private static Transform? lightAnchor;
+
+        /// <summary>
+        /// The light counter's own previous cursor, one notch below the window.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately not <c>cursorPrevious</c>, which starts exactly AT
+        /// <c>WindowStart</c>. A flash stamped at the window's first instant
+        /// then fails a strict <c>previous &lt; time</c> crossing test and is
+        /// never counted — while still being armed, because the arming path
+        /// only asks that elapsed time be non-negative. That undercounts by one
+        /// per turn, which is precisely the sort of standing discrepancy that
+        /// sends someone hunting a loss that is not there. Measured: host sent
+        /// 142, client counted 141.
+        /// </remarks>
+        private static float lightsCursorPrevious;
+
         internal static bool IsPlaying => playing;
 
         /// <summary>How many replayed effects are on screen right now.</summary>
@@ -557,6 +637,10 @@ namespace PBAndJ.Mod.Net
             OnTimeReveals = 0;
             OnTimeDrawing = 0;
             BeamsRevealed = 0;
+            TrailsRefused = 0;
+            LightsRefused = 0;
+            LightsFired = 0;
+            LightsNoManager = 0;
             TimeSimOverwrites = 0;
 
             // Captured here — after the opening Stop(), which has already handed
@@ -570,6 +654,7 @@ namespace PBAndJ.Mod.Net
 
             cursor = capture.WindowStart;
             cursorPrevious = capture.WindowStart;
+            lightsCursorPrevious = capture.WindowStart - 1f;
             Turn = turn;
             playing = true;
 
@@ -666,6 +751,12 @@ namespace PBAndJ.Mod.Net
             target.Bones = bones;
             target.Remap = PoseTracks.Remap(pose.Joints, NamesOf(bones));
             PosedUnits++;
+
+            // Cached above the mech/tank fork on purpose. Both visual managers
+            // implement GetLightManager (UnitVisualManager:1720 and
+            // UnitVisualManagerSimple:516), so putting this after the tank
+            // early-return below would quietly give weapon lights to mechs only.
+            target.Lights = visualManager!.GetLightManager();
 
             if (!unit.hasMechAnimationView)
             {
@@ -914,14 +1005,50 @@ namespace PBAndJ.Mod.Net
                     });
                 }
 
+                // Null, not an empty list, when nothing came: it is the shape
+                // the game's own ApplyTime tests first, and the shape the trail
+                // guard in Reveal restores when a client's prefab cannot carry
+                // one. An empty list would behave the same today and would make
+                // "no trail sent" and "trail refused locally" indistinguishable.
+                List<ReplayKeyframeTrailPoint>? trail = null;
+                if (sent.Trail.Count > 0)
+                {
+                    trail = new List<ReplayKeyframeTrailPoint>(sent.Trail.Count);
+                    for (var t = 0; t < sent.Trail.Count; t++)
+                    {
+                        var point = sent.Trail[t];
+                        trail.Add(new ReplayKeyframeTrailPoint
+                        {
+                            timeStart = point.Time,
+                            timeEnd = point.TimeEnd,
+                            position = ToVector3(point.Position),
+                            velocity = ToVector3(point.Velocity),
+                            perlinDirection = ToVector3(point.PerlinDirection),
+                            tangent = ToVector3(point.Tangent),
+                            normal = ToVector3(point.Normal),
+                            color = ToColor(point.Colour),
+                            thickness = point.Thickness,
+                            texcoord = point.Texcoord,
+                        });
+                    }
+                }
+
                 var track = new ReplayEntityAssetProjectile
                 {
                     id = sent.Id,
                     scale = ToVector3(sent.Scale),
                     keyframesTransform = keys,
-                    // Stage A does not carry trails, and null is how the game's
-                    // own ApplyTime skips them rather than a shape it mishandles.
-                    keyframesTrail = null,
+                    keyframesTrail = trail,
+
+                    // Left at their defaults deliberately. All three are read by
+                    // ApplyTime and written by nothing in the entire decompile —
+                    // trailStartTimeOffset only ever as 0f at
+                    // CombatReplayHelper.cs:1584, and the two spline flags never
+                    // at all. Carrying them would freeze three dead fields into
+                    // a wire layout.
+                    trailStartTimeOffset = 0f,
+                    trailStartSplineAware = false,
+                    trailEndSplineAware = false,
                 };
                 if (Dress(track, sent.Head))
                 {
@@ -1143,6 +1270,24 @@ namespace PBAndJ.Mod.Net
                 return;
             }
 
+            // The trail's version of the beam hazard above, and it is the same
+            // asymmetry in the game's own code: AssignAsset null-checks
+            // assetInstance.trail (ReplayEntityAssetProjectile.cs:47) and
+            // ApplyTime does not (:103-104), so a projectile carrying trail
+            // points onto a prefab with no AraTrail NREs every frame.
+            //
+            // Unlike the beam case this drops the TRAIL and keeps the effect.
+            // A beam with no helper cannot render at all; a bullet with no wake
+            // is still a bullet flying the right path, and abandoning it would
+            // turn a cosmetic mismatch into a missing projectile.
+            if (show.Track is ReplayEntityAssetProjectile projectile
+                && projectile.keyframesTrail != null
+                && instance.trail == null)
+            {
+                projectile.keyframesTrail = null;
+                TrailsRefused++;
+            }
+
             show.Instance = instance;
             RevealedEffects++;
 
@@ -1310,6 +1455,25 @@ namespace PBAndJ.Mod.Net
                 Debug.LogWarning(
                     "[pb-and-j] could not restore _TimeSimulation: "
                         + e.GetType().Name + ": " + e.Message);
+            }
+
+            // The weapon-light anchor is ours and nothing else refers to it, so
+            // it goes back with the window rather than lingering in the scene —
+            // and certainly not into the overworld. LightAnchor() rebuilds it on
+            // demand, which is also what covers combat teardown destroying it
+            // out from under us.
+            try
+            {
+                if (lightAnchor != null)
+                {
+                    UnityEngine.Object.Destroy(lightAnchor.gameObject);
+                }
+                lightAnchor = null;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning(
+                    "[pb-and-j] could not retire the weapon-light anchor: " + e.Message);
             }
 
             // Visibility first, and Wake second. The same ordering argument as
@@ -1516,6 +1680,7 @@ namespace PBAndJ.Mod.Net
                 }
 
                 ApplyPose(target);
+                ApplyWeaponLights(target);
             }
 
             // After the transform and pose writes, so a unit revealed this frame
@@ -1527,11 +1692,163 @@ namespace PBAndJ.Mod.Net
             // appears a frame before the unit firing it does.
             ApplyShows();
             cursorPrevious = cursor;
+            lightsCursorPrevious = cursor;
 
             if (finished)
             {
                 Stop();
             }
+        }
+
+        /// <summary>
+        /// Fires this unit's weapon lights up to the cursor, then animates them.
+        /// </summary>
+        /// <remarks>
+        /// Two calls into the game's own <c>UnitLightManager</c>, in this order,
+        /// and both are needed every frame:
+        /// <list type="bullet">
+        /// <item><c>OnWeaponLight</c> arms a socket's light — it writes
+        /// <c>timeStart</c>, the durations and the position, and does not
+        /// animate.</item>
+        /// <item><c>OnTimeChange</c> is what actually drives intensity, off
+        /// <c>timeCurrent - timeStart</c> against those durations
+        /// (<c>UnitLightManager.cs:135-175</c>).</item>
+        /// </list>
+        /// <para>
+        /// <b>Nothing on a client drives <c>OnTimeChange</c> otherwise.</b> Its
+        /// two per-unit callers — <c>ActionRecordingSystem.cs:55</c> and
+        /// <c>CombatReplayHelper.ApplyTimeToUnit:1269</c> — are both gated
+        /// behind state a client never reaches (the <c>Simulating</c> flag, and
+        /// a <c>units</c> dictionary only <c>OnExecutionStart</c> fills). So
+        /// there is no double-drive to collide with — but that is a property of
+        /// those two gates, not an absence, and it would stop being true the
+        /// moment anything populated <c>units</c> here.
+        /// </para>
+        /// <para>
+        /// <b>The dummy transform is the whole trick.</b> The game insists on a
+        /// <c>Transform</c> it can call <c>TransformPoint(0, 0, positionOffset)</c>
+        /// on, and that result is the only use it makes of it. So one shared,
+        /// repositioned object plus an offset of zero reproduces the captured
+        /// world point exactly — <c>TransformPoint(Vector3.zero)</c> is just the
+        /// translation column, under any parenting or scale. One object suffices
+        /// for every unit because the value is consumed before the call returns.
+        /// </para>
+        /// <para>
+        /// ⚠️ Wrapped per key because <c>OnWeaponLight</c> dereferences
+        /// <c>unitVFXLight.light</c> with no null check (<c>:280-281</c>), unlike
+        /// every neighbouring method in that class. A socket whose <c>Light</c>
+        /// died with a blown-off part throws inside game code, and an unguarded
+        /// throw here would cost the rest of the turn's playback.
+        /// </para>
+        /// </remarks>
+        private static void ApplyWeaponLights(Target target)
+        {
+            var poses = target.Poses;
+            if (poses == null || poses.Lights.Count == 0)
+            {
+                return;
+            }
+
+            var manager = target.Lights;
+            if (manager == null)
+            {
+                // Counted, not merely skipped — see LightsNoManager.
+                for (var i = 0; i < poses.Lights.Count; i++)
+                {
+                    if (lightsCursorPrevious < poses.Lights[i].Time
+                        && poses.Lights[i].Time <= cursor)
+                    {
+                        LightsNoManager++;
+                    }
+                }
+                return;
+            }
+
+            for (var i = 0; i < poses.Lights.Count; i++)
+            {
+                var key = poses.Lights[i];
+
+                // Only flashes the cursor has reached, and only those still
+                // within their own envelope — re-arming an expired light every
+                // frame would restart its fade and leave it lit forever.
+                // COUNTED FIRST, and that order is the whole rule — exactly the
+                // one stage A had to move into Core as ActionFor. Written the
+                // obvious way, with the envelope test above this, a flash whose
+                // whole life falls between two frames is skipped before it is
+                // ever counted, so it is neither armed nor reported. Measured:
+                // the host sent 58 and the client counted 56.
+                if (lightsCursorPrevious < key.Time && key.Time <= cursor)
+                {
+                    LightsFired++;
+                }
+
+                // Interval overlap, not a point test on elapsed time. A frame
+                // gap during playback is routinely longer than a weapon light
+                // lives, so "is the cursor inside the envelope right now" is
+                // false for most of the short ones on every single frame.
+                //
+                // The durations are floored the way OnWeaponLight itself floors
+                // them (UnitLightManager.cs:276-278). Using the raw values makes
+                // our envelope narrower than the one the game will actually
+                // animate — as little as 0.05s against its 0.10s — so we would
+                // decline to arm lights the game would happily have shown.
+                var life = Mathf.Max(0.05f, key.DurationStable)
+                    + Mathf.Max(0.05f, key.DurationFade);
+                if (!ReplayAssetPlayback.OverlapsWindow(
+                        key.Time, key.Time + life, lightsCursorPrevious, cursor))
+                {
+                    continue;
+                }
+
+                var dummy = LightAnchor();
+                if (dummy == null)
+                {
+                    return;
+                }
+                dummy.position = new Vector3(key.Position.X, key.Position.Y, key.Position.Z);
+
+                try
+                {
+                    manager.OnWeaponLight(
+                        key.Time,
+                        dummy,
+                        key.Socket,
+                        new Color(key.Colour.X, key.Colour.Y, key.Colour.Z, key.Colour.W),
+                        key.Intensity,
+                        key.DurationBuildup,
+                        key.DurationStable,
+                        key.DurationFade,
+                        // Zero on purpose: the offset is already folded into the
+                        // captured point, so applying it twice would push every
+                        // flash a metre further down the barrel.
+                        0f);
+                }
+                catch (Exception e)
+                {
+                    LightsRefused++;
+                    Debug.LogWarning(
+                        "[pb-and-j] weapon light on socket '" + key.Socket + "' was refused: "
+                            + e.Message);
+                }
+            }
+
+            manager.OnTimeChange(cursor);
+        }
+
+        /// <summary>The shared dummy transform, created on first use per window.</summary>
+        /// <remarks>
+        /// Recreated rather than kept forever: a destroyed one reads
+        /// <c>== null</c> through Unity's operator and would silently trip
+        /// <c>OnWeaponLight</c>'s own null early-out, taking every weapon light
+        /// with it and saying nothing.
+        /// </remarks>
+        private static Transform? LightAnchor()
+        {
+            if (lightAnchor == null)
+            {
+                lightAnchor = new GameObject("pbj_light_anchor").transform;
+            }
+            return lightAnchor;
         }
 
         /// <summary>

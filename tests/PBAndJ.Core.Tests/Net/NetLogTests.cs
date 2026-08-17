@@ -611,21 +611,92 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Contains("effect '(unnamed)'", NetLog.AssetUnplayable(null, "no such asset pool"));
         }
 
-        // Unmeasured is not absent. Every sample taken had no trails, and this
-        // is the line that would say that sample was unrepresentative.
+        // The successor to stage A's AssetTrailsNotCaptured. That line reported
+        // these projectiles as a loss, fired on 3 of 109 in a real turn, and is
+        // how stage B learned trails were worth building — so it is kept as a
+        // count rather than deleted. Points per turn is what the trail cap is
+        // sized against.
         [Fact]
-        public void AssetTrailsNotCaptured_NamesALossNoOtherLineWouldShow()
+        public void AssetTrailsSent_ReportsProjectilesAndPoints()
         {
             Assert.Equal(
-                "[pb-and-j] 2 projectiles had recorded trails, which do not travel yet — "
-                    + "they will fly without a wake on the client",
-                NetLog.AssetTrailsNotCaptured(2));
+                "[pb-and-j] 3 projectiles carried trails | 97 points",
+                NetLog.AssetTrailsSent(3, 97, 0));
         }
 
         [Fact]
-        public void AssetTrailsNotCaptured_SpeaksOfOneProjectileInTheSingular()
+        public void AssetTrailsSent_SpeaksOfOneOfEachInTheSingular()
         {
-            Assert.Contains("1 projectile ", NetLog.AssetTrailsNotCaptured(1));
+            Assert.Equal(
+                "[pb-and-j] 1 projectile carried trails | 1 point",
+                NetLog.AssetTrailsSent(1, 1, 0));
+        }
+
+        // The cap was sized believing no real trail would reach it, and a
+        // playtest measured ~68 points on an ordinary missile against a cap of
+        // 64. Thinning is therefore the normal path, and at 68 it is invisible
+        // while at 300 it would not be — so it has to say so.
+        [Fact]
+        public void AssetTrailsSent_WhenTheCapBit_SaysSoAndNamesIt()
+        {
+            Assert.Equal(
+                "[pb-and-j] 3 projectiles carried trails | 205 points "
+                    + "| 2 over the 64-point cap and thinned",
+                NetLog.AssetTrailsSent(3, 205, 2));
+        }
+
+        // The positive counterpart to the two loss lines. Without it a run with
+        // both losses at zero reads the same whether every flash travelled or
+        // no light code ran at all.
+        [Fact]
+        public void AssetLightsSent_ReportsUnitsAndLights()
+        {
+            Assert.Equal(
+                "[pb-and-j] 3 units fired 7 weapon lights",
+                NetLog.AssetLightsSent(3, 7));
+        }
+
+        [Fact]
+        public void AssetLightsSent_SpeaksOfOneOfEachInTheSingular()
+        {
+            Assert.Equal(
+                "[pb-and-j] 1 unit fired 1 weapon light",
+                NetLog.AssetLightsSent(1, 1));
+        }
+
+        // The one cost of hanging lights off the pose track, made loud. A unit
+        // the recorder skipped drops its flashes with it, and that is invisible
+        // on screen among other flashes.
+        [Fact]
+        public void LightsWithoutPoseTrack_NamesBothCounts()
+        {
+            Assert.Equal(
+                "[pb-and-j] 2 units fired 5 weapon lights but carried no pose track — "
+                    + "those flashes will not reach the client",
+                NetLog.LightsWithoutPoseTrack(2, 5));
+        }
+
+        [Fact]
+        public void LightsWithoutPoseTrack_SpeaksOfOneOfEachInTheSingular()
+        {
+            Assert.Contains("1 unit fired 1 weapon light ", NetLog.LightsWithoutPoseTrack(1, 1));
+        }
+
+        // Deliberately a different line from the one above: same symptom, wholly
+        // unrelated cause, and a reader who saw them merged would chase the
+        // wrong one.
+        [Fact]
+        public void LightsUnusable_ReportsTheSocketlessOnes()
+        {
+            Assert.Equal(
+                "[pb-and-j] 4 weapon lights had no usable socket and will not travel",
+                NetLog.LightsUnusable(4));
+        }
+
+        [Fact]
+        public void LightsUnusable_SpeaksOfOneInTheSingular()
+        {
+            Assert.Contains("1 weapon light ", NetLog.LightsUnusable(1));
         }
 
         // The only place this loss can be reported at all: the client never gets

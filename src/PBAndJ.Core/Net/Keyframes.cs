@@ -176,6 +176,95 @@ namespace PBAndJ.Core.Net
         public IReadOnlyList<JointPose> Joints { get; }
     }
 
+    /// <summary>One weapon-light flash, as the host fired it.</summary>
+    /// <remarks>
+    /// The wire form of <c>ReplayKeyframeUnitLight</c>, with one deliberate
+    /// substitution: the game's <c>firingTransform</c> is a live
+    /// <c>UnityEngine.Transform</c> and cannot travel, so
+    /// <see cref="Position"/> carries the one thing that transform is ever used
+    /// for. <c>UnitLightManager.OnWeaponLight</c> reads it exactly once, as
+    /// <c>firingTransform.TransformPoint(new Vector3(0, 0, positionOffset))</c>
+    /// (<c>UnitLightManager.cs:281</c>), and never retains it — so a world point
+    /// resolved host-side is a complete substitute, and the client can feed it
+    /// back through the game's own method using a dummy transform and a zero
+    /// offset. That is why <c>positionOffset</c> is absent here: it is already
+    /// folded into <see cref="Position"/>.
+    /// <para>
+    /// ⚠️ <see cref="Position"/> <b>must</b> be resolved when the shot is fired,
+    /// not when the turn is harvested. The game stores only the live reference,
+    /// so resolving it at harvest yields the barrel's <i>end-of-turn</i>
+    /// position for every light in the turn — every flash placed wrong,
+    /// silently, with counts that all look right.
+    /// </para>
+    /// <para>
+    /// ⚠️ A null firing transform at fire time is <b>not</b> a loss. The live
+    /// path (<c>IgniteWeaponLight</c>) forwards to the same
+    /// <c>OnWeaponLight</c> with the same early-out, so the host rendered no
+    /// light either and skipping the key is exact parity.
+    /// </para>
+    /// </remarks>
+    public sealed class UnitLightKey
+    {
+        public UnitLightKey(
+            float time,
+            string? socket,
+            Vec3 position,
+            Vec4 colour,
+            float intensity,
+            float durationBuildup,
+            float durationStable,
+            float durationFade)
+        {
+            Time = time;
+            Socket = socket;
+            Position = position;
+            Colour = colour;
+            Intensity = intensity;
+            DurationBuildup = durationBuildup;
+            DurationStable = durationStable;
+            DurationFade = durationFade;
+        }
+
+        /// <summary>Simulation time of the shot, on the host's absolute clock.</summary>
+        public float Time { get; }
+
+        /// <summary>
+        /// The mount socket, which is how the client finds the right light.
+        /// </summary>
+        /// <remarks>
+        /// This is <c>part.partParentUnit.socket</c>, the socket the weapon is
+        /// mounted on — <b>not</b> the <c>localSocketOverride</c> the firing
+        /// transform lookup may have used instead. The host records the mount
+        /// socket and <c>weaponLightsLookup</c> is keyed by it, so both ends
+        /// speak the same vocabulary.
+        /// </remarks>
+        public string? Socket { get; }
+
+        /// <summary>Where to put the light, in world space, resolved at fire time.</summary>
+        public Vec3 Position { get; }
+
+        /// <summary>RGBA, already faction-resolved by the host.</summary>
+        public Vec4 Colour { get; }
+
+        public float Intensity { get; }
+
+        /// <summary>
+        /// The ramp <i>inside</i> the stable phase, not a phase before it.
+        /// </summary>
+        /// <remarks>
+        /// Easy to misread as the first third of an envelope. The game's
+        /// arithmetic (<c>UnitLightManager.cs:150-158</c>) runs the light for
+        /// <c>durationStable + durationFade</c> and uses
+        /// <c>durationBuildup</c> only to scale intensity <i>within</i> the
+        /// stable phase. Across all seven of the game's light definitions the
+        /// longest total life is 0.30 s.
+        /// </remarks>
+        public float DurationBuildup { get; }
+
+        public float DurationStable { get; }
+        public float DurationFade { get; }
+    }
+
     /// <summary>
     /// One unit's skeletal animation over one executed turn.
     /// </summary>
@@ -197,13 +286,18 @@ namespace PBAndJ.Core.Net
     {
         private static readonly PoseKey[] NoKeys = new PoseKey[0];
         private static readonly string[] NoJoints = new string[0];
+        private static readonly UnitLightKey[] NoLights = new UnitLightKey[0];
 
         public UnitPoseTrack(
-            string? name, IReadOnlyList<string>? joints, IReadOnlyList<PoseKey>? keys)
+            string? name,
+            IReadOnlyList<string>? joints,
+            IReadOnlyList<PoseKey>? keys,
+            IReadOnlyList<UnitLightKey>? lights = null)
         {
             Name = name;
             Joints = joints ?? NoJoints;
             Keys = keys ?? NoKeys;
+            Lights = lights ?? NoLights;
         }
 
         /// <summary>The persistent entity's internal name — the join key.</summary>
@@ -214,6 +308,24 @@ namespace PBAndJ.Core.Net
 
         /// <summary>Ascending by <see cref="PoseKey.Time"/>.</summary>
         public IReadOnlyList<PoseKey> Keys { get; }
+
+        /// <summary>
+        /// This unit's weapon-light flashes over the turn, ascending by time.
+        /// </summary>
+        /// <remarks>
+        /// Rides the pose track rather than the asset wire because the game
+        /// hangs <c>keyframesLightsWeapons</c> off <c>ReplayUnit</c>, and
+        /// because a light is meaningless without the unit whose
+        /// <c>UnitLightManager</c> owns the <c>Light</c> it drives — the same
+        /// join key serves both.
+        /// <para>
+        /// ⚠️ That coupling has one cost, and it is instrumented rather than
+        /// silent: a unit the recorder gave no pose track has nowhere to put its
+        /// lights, so <see cref="NetLog.LightsWithoutPoseTrack"/> reports them
+        /// instead of dropping them quietly.
+        /// </para>
+        /// </remarks>
+        public IReadOnlyList<UnitLightKey> Lights { get; }
     }
 
     /// <summary>
