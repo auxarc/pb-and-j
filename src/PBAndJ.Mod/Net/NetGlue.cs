@@ -916,6 +916,7 @@ namespace PBAndJ.Mod.Net
             // the same reason playback is: it has to work on a solo host, which
             // is where a turn carrying a beam is authored in the first place.
             BeamInjectGlue.Tick();
+            StageCProbeGlue.Tick();
 
             // THROWAWAY (M8 recon) — samples Time.timeScale across exactly the
             // playback window, which is the one M8 question a running game has

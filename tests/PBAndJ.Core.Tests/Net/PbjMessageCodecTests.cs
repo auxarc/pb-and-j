@@ -958,6 +958,138 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Empty(decoded.Track!.Lights);
         }
 
+        // --- stage C: reaction pings and melee trajectories ---
+
+        private static MeleeTrajectory Melee(int seed) => new MeleeTrajectory(
+            seed + 0.5f,
+            seed + 1.5f,
+            seed % 2 == 0,
+            "shockwave_" + seed,
+            new Vec3(seed, seed + 1, seed + 2),
+            new Vec3(seed + 3, seed + 4, seed + 5));
+
+        [Fact]
+        public void RoundTrip_Poses_PreservesEveryFieldOfAMeleeTrajectory()
+        {
+            // Distinct values in every slot. The trap is the position pair:
+            // same type, adjacent on the wire, and transposing them drags the
+            // shockwave backwards along the swing without moving any count.
+            var decoded = RoundTrip(new PosesMessage(
+                1, 0, 1,
+                new UnitPoseTrack("u", new[] { "j" }, null, null, null, new[] { Melee(1) })));
+
+            var melee = Assert.Single(decoded.Track!.Melees);
+            Assert.Equal(1.5f, melee.TimeStart);
+            Assert.Equal(2.5f, melee.TimeEnd);
+            Assert.False(melee.PartUsed);
+            Assert.Equal("shockwave_1", melee.ShockwaveKey);
+            Assert.Equal(new[] { 1f, 2f, 3f }, new[] { melee.PosStart.X, melee.PosStart.Y, melee.PosStart.Z });
+            Assert.Equal(new[] { 4f, 5f, 6f }, new[] { melee.PosEnd.X, melee.PosEnd.Y, melee.PosEnd.Z });
+        }
+
+        [Fact]
+        public void RoundTrip_Poses_PreservesReactionPingsInOrder()
+        {
+            // Order is a precondition, not a nicety: "the latest ping" is read
+            // as "the last one at or before the cursor", which is only the
+            // newest while the list stays ascending.
+            var decoded = RoundTrip(new PosesMessage(
+                1, 0, 1,
+                new UnitPoseTrack("u", new[] { "j" }, null, null, new[] { 0.5f, 1.5f, 2.5f })));
+
+            Assert.Equal(new[] { 0.5f, 1.5f, 2.5f }, decoded.Track!.Reactions);
+        }
+
+        [Fact]
+        public void RoundTrip_Poses_CarriesPingsAndMeleesAlongsideKeysAndLights()
+        {
+            // All four collections at once. Each is length-prefixed and read in
+            // a fixed order, so a misplaced count is not a corrupt field but a
+            // misparse of everything after it.
+            var decoded = RoundTrip(new PosesMessage(
+                1, 0, 1,
+                new UnitPoseTrack(
+                    "u",
+                    new[] { "joint_0" },
+                    new[] { new PoseKey(0f, false, false, new[] { new JointPose(default, default) }) },
+                    new[] { LightKey(0), LightKey(1) },
+                    new[] { 4f },
+                    new[] { Melee(2), Melee(3) })));
+
+            Assert.Single(decoded.Track!.Keys);
+            Assert.Equal(2, decoded.Track.Lights.Count);
+            Assert.Equal(new[] { 4f }, decoded.Track.Reactions);
+            Assert.Equal(2, decoded.Track.Melees.Count);
+            Assert.Equal(
+                new[] { "shockwave_2", "shockwave_3" },
+                new[] { decoded.Track.Melees[0].ShockwaveKey, decoded.Track.Melees[1].ShockwaveKey });
+        }
+
+        [Fact]
+        public void RoundTrip_Poses_AUnitThatNeitherPingedNorSwungCarriesNeither()
+        {
+            var decoded = RoundTrip(new PosesMessage(3, 0, 1, PoseTrack("unit_a", 4, 3)));
+
+            Assert.Empty(decoded.Track!.Reactions);
+            Assert.Empty(decoded.Track.Melees);
+        }
+
+        [Fact]
+        public void RoundTrip_PosesWithNullTrack_ReadsBackWithNeitherPingsNorMelees()
+        {
+            var decoded = RoundTrip(new PosesMessage(1, 0, 1, null));
+
+            Assert.Empty(decoded.Track!.Reactions);
+            Assert.Empty(decoded.Track.Melees);
+        }
+
+        [Fact]
+        public void RoundTrip_Poses_PreservesANullShockwaveKey()
+        {
+            var decoded = RoundTrip(new PosesMessage(
+                1, 0, 1,
+                new UnitPoseTrack(
+                    "u", new[] { "j" }, null, null, null,
+                    new[] { new MeleeTrajectory(0f, 1f, true, null, default, default) })));
+
+            Assert.Null(Assert.Single(decoded.Track!.Melees).ShockwaveKey);
+        }
+
+        [Fact]
+        public void Decode_PosesWithTooManyReactionPings_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.Poses);
+            writer.WriteInt32(1);
+            writer.WriteInt32(0);
+            writer.WriteInt32(1);
+            writer.WriteString("u");
+            writer.WriteInt32(0);
+            writer.WriteInt32(0);
+            writer.WriteInt32(0);
+            writer.WriteInt32(PbjMessageCodec.MaxReactionPingsPerUnit + 1);
+
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
+        [Fact]
+        public void Decode_PosesWithTooManyMelees_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.Poses);
+            writer.WriteInt32(1);
+            writer.WriteInt32(0);
+            writer.WriteInt32(1);
+            writer.WriteString("u");
+            writer.WriteInt32(0);
+            writer.WriteInt32(0);
+            writer.WriteInt32(0);
+            writer.WriteInt32(0);
+            writer.WriteInt32(PbjMessageCodec.MaxMeleesPerUnit + 1);
+
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
         [Fact]
         public void Decode_PosesWithTooManyWeaponLights_Throws()
         {

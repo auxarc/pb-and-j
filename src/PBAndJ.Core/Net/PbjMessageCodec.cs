@@ -188,6 +188,37 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public const int MaxLightKeysPerUnit = 64;
 
+        /// <summary>
+        /// Cap on reaction-glow pings carried on one unit's pose track.
+        /// </summary>
+        /// <remarks>
+        /// One ping per action start that uses reaction lights, so a turn's
+        /// worth for a single unit is a handful. Four bytes each and no string,
+        /// making this the cheapest list on the wire.
+        /// <para>
+        /// ⚠️ The cap is only safe because capture slices to the turn window
+        /// first. The recorder's own list accumulates for the whole fight
+        /// (<c>units</c> is cleared only when <c>experimentalMode</c> is off,
+        /// and it defaults on), so a whole-list send would climb past any cap
+        /// mid-fight and take the turn's real pings down with it.
+        /// </para>
+        /// </remarks>
+        public const int MaxReactionPingsPerUnit = 64;
+
+        /// <summary>
+        /// Cap on melee swings carried on one unit's pose track.
+        /// </summary>
+        /// <remarks>
+        /// A unit gets one melee action per turn in practice; 8 leaves room for
+        /// a straddling swing from the previous window plus anything a longer
+        /// turn allows. Same window-slice precondition as
+        /// <see cref="MaxReactionPingsPerUnit"/>, and here it bites soonest —
+        /// the recorder appends a record per swing for the whole fight, so a
+        /// melee-oriented mech would cross 8 cumulative records within a few
+        /// turns and lose its whole track.
+        /// </remarks>
+        public const int MaxMeleesPerUnit = 8;
+
         /// <summary>Longest pool key an asset track may carry, in characters.</summary>
         /// <remarks>
         /// Counted in characters and set well below
@@ -861,6 +892,8 @@ namespace PBAndJ.Core.Net
             var joints = track == null ? EmptyNames : track.Joints;
             var keys = track == null ? NoPoseKeys : track.Keys;
             var lights = track == null ? NoLightKeys : track.Lights;
+            var reactions = track == null ? NoReactionPings : track.Reactions;
+            var melees = track == null ? NoMelees : track.Melees;
 
             writer.WriteString(track?.Name);
             writer.WriteInt32(joints.Count);
@@ -889,6 +922,39 @@ namespace PBAndJ.Core.Net
             {
                 WriteUnitLightKey(writer, lights[l]);
             }
+
+            writer.WriteInt32(reactions.Count);
+            for (var r = 0; r < reactions.Count; r++)
+            {
+                writer.WriteSingle(reactions[r]);
+            }
+
+            writer.WriteInt32(melees.Count);
+            for (var m = 0; m < melees.Count; m++)
+            {
+                WriteMeleeTrajectory(writer, melees[m]);
+            }
+        }
+
+        private static void WriteMeleeTrajectory(PbjWriter writer, MeleeTrajectory melee)
+        {
+            writer.WriteSingle(melee.TimeStart);
+            writer.WriteSingle(melee.TimeEnd);
+            writer.WriteBool(melee.PartUsed);
+            writer.WriteString(melee.ShockwaveKey);
+            WriteVec3(writer, melee.PosStart);
+            WriteVec3(writer, melee.PosEnd);
+        }
+
+        private static MeleeTrajectory ReadMeleeTrajectory(PbjReader reader)
+        {
+            var timeStart = reader.ReadSingle();
+            var timeEnd = reader.ReadSingle();
+            var partUsed = reader.ReadBool();
+            var shockwaveKey = reader.ReadString();
+            var posStart = ReadVec3(reader);
+            return new MeleeTrajectory(
+                timeStart, timeEnd, partUsed, shockwaveKey, posStart, ReadVec3(reader));
         }
 
         private static UnitPoseTrack ReadUnitPoseTrack(PbjReader reader)
@@ -933,7 +999,21 @@ namespace PBAndJ.Core.Net
                 lights[l] = ReadUnitLightKey(reader);
             }
 
-            return new UnitPoseTrack(name, joints!, keys, lights);
+            var reactionCount = ReadCount(reader, MaxReactionPingsPerUnit, "reaction ping");
+            var reactions = new float[reactionCount];
+            for (var r = 0; r < reactionCount; r++)
+            {
+                reactions[r] = reader.ReadSingle();
+            }
+
+            var meleeCount = ReadCount(reader, MaxMeleesPerUnit, "melee");
+            var melees = new MeleeTrajectory[meleeCount];
+            for (var m = 0; m < meleeCount; m++)
+            {
+                melees[m] = ReadMeleeTrajectory(reader);
+            }
+
+            return new UnitPoseTrack(name, joints!, keys, lights, reactions, melees);
         }
 
         /// <summary>
@@ -1142,6 +1222,8 @@ namespace PBAndJ.Core.Net
         private static readonly string[] EmptyNames = new string[0];
         private static readonly PoseKey[] NoPoseKeys = new PoseKey[0];
         private static readonly UnitLightKey[] NoLightKeys = new UnitLightKey[0];
+        private static readonly float[] NoReactionPings = new float[0];
+        private static readonly MeleeTrajectory[] NoMelees = new MeleeTrajectory[0];
 
         private static int ReadCount(PbjReader reader, int max, string what)
         {

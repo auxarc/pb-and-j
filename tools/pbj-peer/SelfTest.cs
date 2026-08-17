@@ -1871,7 +1871,28 @@ namespace PBAndJ.Peer
                 keys[k] = new PoseKey(time, k % 2 == 0, k >= keyCount / 2, poses);
             }
 
-            return new UnitPoseTrack(name, joints, keys);
+            // M14 stage C rides the same track, so it is exercised by the same
+            // leg rather than by a scenario of its own. Two pings and one swing:
+            // enough that a codec reading either count in the wrong place walks
+            // off into the next field, which is the failure this catches.
+            var reactions = new[]
+            {
+                windowStart + ((windowEnd - windowStart) * 0.25f),
+                windowStart + ((windowEnd - windowStart) * 0.75f),
+            };
+
+            var melees = new[]
+            {
+                new MeleeTrajectory(
+                    windowStart + 0.5f,
+                    windowEnd - 0.5f,
+                    seed % 2 == 0,
+                    $"shockwave_{seed}",
+                    new Vec3(seed, seed + 1f, seed + 2f),
+                    new Vec3(seed + 3f, seed + 4f, seed + 5f)),
+            };
+
+            return new UnitPoseTrack(name, joints, keys, null, reactions, melees);
         }
 
         private static readonly Vec4[] UnitRotations =
@@ -1940,6 +1961,60 @@ namespace PBAndJ.Peer
                         why = $"key {k} joint {j} changed crossing the wire";
                         return false;
                     }
+                }
+            }
+
+            // M14 stage C. Order is asserted, not just membership: playback
+            // reads "the newest ping" as "the last one that qualifies", which is
+            // only true while the list stays ascending.
+            if (got.Reactions.Count != sent.Reactions.Count)
+            {
+                why = $"arrived with {got.Reactions.Count} reaction pings, not {sent.Reactions.Count}";
+                return false;
+            }
+            for (var r = 0; r < sent.Reactions.Count; r++)
+            {
+                if (got.Reactions[r] != sent.Reactions[r])
+                {
+                    why = $"reaction ping {r} is stamped {got.Reactions[r]}, not {sent.Reactions[r]}";
+                    return false;
+                }
+            }
+
+            if (got.Melees.Count != sent.Melees.Count)
+            {
+                why = $"arrived with {got.Melees.Count} melee swings, not {sent.Melees.Count}";
+                return false;
+            }
+            for (var m = 0; m < sent.Melees.Count; m++)
+            {
+                var from = sent.Melees[m];
+                var to = got.Melees[m];
+                if (from.TimeStart != to.TimeStart || from.TimeEnd != to.TimeEnd)
+                {
+                    why = $"melee {m} changed its window crossing the wire";
+                    return false;
+                }
+                if (from.PartUsed != to.PartUsed || from.ShockwaveKey != to.ShockwaveKey)
+                {
+                    why = $"melee {m} lost its preset crossing the wire";
+                    return false;
+                }
+
+                // Both points, separately. They are the same type and adjacent
+                // on the wire, so a transposition drags the shockwave backwards
+                // along the swing while every count still agrees.
+                if (from.PosStart.X != to.PosStart.X || from.PosStart.Y != to.PosStart.Y
+                    || from.PosStart.Z != to.PosStart.Z)
+                {
+                    why = $"melee {m} moved its start point";
+                    return false;
+                }
+                if (from.PosEnd.X != to.PosEnd.X || from.PosEnd.Y != to.PosEnd.Y
+                    || from.PosEnd.Z != to.PosEnd.Z)
+                {
+                    why = $"melee {m} moved its end point";
+                    return false;
                 }
             }
 

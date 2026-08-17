@@ -6,7 +6,7 @@ namespace PBAndJ.Core.Tests.Net
     public class PbjProtocolTests
     {
         [Fact]
-        public void Version_IsFive()
+        public void Version_IsSeven()
         {
             // Pinned deliberately: bumping the wire format must be an explicit
             // edit here and in Write_MinimalOrder_ProducesExactBytes.
@@ -25,7 +25,11 @@ namespace PBAndJ.Core.Tests.Net
             // and a weapon light list appended to every unit inside Poses. Both
             // are counted lists after existing fields, so a v5 peer reads a
             // projectile's trail count as the next projectile's id.
-            Assert.Equal(6, PbjProtocol.Version);
+            // v7 (M14 stage C) changes the same Poses unit record again: a
+            // reaction-ping list and a melee-trajectory list appended after the
+            // weapon lights. A v6 peer reads the ping count as the end of the
+            // message. Paired into one break for the stage B reason.
+            Assert.Equal(7, PbjProtocol.Version);
         }
 
         [Fact]
@@ -223,7 +227,11 @@ namespace PBAndJ.Core.Tests.Net
             // peers across that change disagree about whether a client already
             // holds a large fight. A semantic break under an identical layout is
             // exactly the case the mod version exists to catch.
-            Assert.Equal("0.18.0", PbjProtocol.ModVersion);
+            // 0.19.0 for M14 stage C — reaction pings and melee trajectories,
+            // both appended to every unit inside Poses — which moves
+            // PbjProtocol.Version to 7 alongside it. Paired into one break for
+            // the same reason stage B paired trails with weapon lights.
+            Assert.Equal("0.19.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

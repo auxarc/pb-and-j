@@ -1,4 +1,4 @@
 # The wire surface as of this ModVersion. See 'check-wire-surface' in the
 # Makefile. Re-record only when you have decided the change is intentional.
-version: 0.18.0
-sha256: 8eec339cb756659b06491bf4e7ccee5b7af2f551ff548a358067ca85855ae1ef
+version: 0.19.0
+sha256: 1b269745551f23f9386c8868c439199944fe7b660056e73cfc0747e8ec10e46e

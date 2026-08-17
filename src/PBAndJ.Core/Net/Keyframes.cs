@@ -266,6 +266,78 @@ namespace PBAndJ.Core.Net
     }
 
     /// <summary>
+    /// One melee swing's ground path, from which the client re-drives the game's
+    /// own shockwave trail.
+    /// </summary>
+    /// <remarks>
+    /// The whole record is values — two stamps, a flag, a key and two points —
+    /// which is why it can be harvested at end of turn rather than at event
+    /// time. That is the opposite of <see cref="UnitLightKey"/>, whose world
+    /// position had to be resolved at fire time because the game stored a live
+    /// <c>Transform</c> that had moved on by the harvest. Nothing here
+    /// re-resolves.
+    /// <para>
+    /// The game's own replay drives melee trails through
+    /// <c>MeleeUtility.CheckOverlapsWithShockwave</c> rather than through a
+    /// keyframe list, so this is a transcription of a call, not of a track.
+    /// <c>unitCombatID</c> is deliberately not carried: the drive selects the
+    /// mech by the entity it is handed, and the record already lives on that
+    /// unit's own pose track.
+    /// </para>
+    /// </remarks>
+    public sealed class MeleeTrajectory
+    {
+        public MeleeTrajectory(
+            float timeStart,
+            float timeEnd,
+            bool partUsed,
+            string? shockwaveKey,
+            Vec3 posStart,
+            Vec3 posEnd)
+        {
+            TimeStart = timeStart;
+            TimeEnd = timeEnd;
+            PartUsed = partUsed;
+            ShockwaveKey = shockwaveKey;
+            PosStart = posStart;
+            PosEnd = posEnd;
+        }
+
+        /// <summary>When the swing begins, on the host's absolute clock.</summary>
+        public float TimeStart { get; }
+
+        /// <summary>When it ends — the action's start plus its duration.</summary>
+        public float TimeEnd { get; }
+
+        /// <summary>
+        /// Whether a melee <i>part</i> swung, as opposed to the frame itself.
+        /// </summary>
+        /// <remarks>
+        /// Selects which time-remap curve the client evaluates —
+        /// <c>timeRemapMeleeStandard</c> or <c>timeRemapMeleeFallback</c> — so
+        /// the false case is a different animation, never an absent one.
+        /// </remarks>
+        public bool PartUsed { get; }
+
+        /// <summary>
+        /// Which shockwave definition to look up, resolved client-side.
+        /// </summary>
+        /// <remarks>
+        /// A key, never the object: the same rule every asset follows. A key
+        /// that resolves to nothing makes the game's own helper early-return
+        /// without drawing, which is why a null survives the wire rather than
+        /// being refused here.
+        /// </remarks>
+        public string? ShockwaveKey { get; }
+
+        /// <summary>First point of the swing's movement path.</summary>
+        public Vec3 PosStart { get; }
+
+        /// <summary>Last point of it.</summary>
+        public Vec3 PosEnd { get; }
+    }
+
+    /// <summary>
     /// One unit's skeletal animation over one executed turn.
     /// </summary>
     /// <remarks>
@@ -287,17 +359,23 @@ namespace PBAndJ.Core.Net
         private static readonly PoseKey[] NoKeys = new PoseKey[0];
         private static readonly string[] NoJoints = new string[0];
         private static readonly UnitLightKey[] NoLights = new UnitLightKey[0];
+        private static readonly float[] NoReactions = new float[0];
+        private static readonly MeleeTrajectory[] NoMelees = new MeleeTrajectory[0];
 
         public UnitPoseTrack(
             string? name,
             IReadOnlyList<string>? joints,
             IReadOnlyList<PoseKey>? keys,
-            IReadOnlyList<UnitLightKey>? lights = null)
+            IReadOnlyList<UnitLightKey>? lights = null,
+            IReadOnlyList<float>? reactions = null,
+            IReadOnlyList<MeleeTrajectory>? melees = null)
         {
             Name = name;
             Joints = joints ?? NoJoints;
             Keys = keys ?? NoKeys;
             Lights = lights ?? NoLights;
+            Reactions = reactions ?? NoReactions;
+            Melees = melees ?? NoMelees;
         }
 
         /// <summary>The persistent entity's internal name — the join key.</summary>
@@ -326,6 +404,35 @@ namespace PBAndJ.Core.Net
         /// </para>
         /// </remarks>
         public IReadOnlyList<UnitLightKey> Lights { get; }
+
+        /// <summary>
+        /// When this unit's reaction glow was pinged, ascending by time.
+        /// </summary>
+        /// <remarks>
+        /// Bare stamps, because that is all the game records — a reaction
+        /// keyframe carries a time and nothing else. Ascending order is a
+        /// precondition rather than a convention: playback reads "the newest
+        /// ping at or before the cursor" as "the last one in the list that
+        /// qualifies", which is only the newest while the order holds.
+        /// <para>
+        /// ⚠️ Sliced to the turn's window at capture. The recorder's list
+        /// accumulates for the whole fight — <c>units</c> is only cleared when
+        /// <c>experimentalMode</c> is off, and it defaults on — so shipping it
+        /// whole would grow without bound and eventually breach the cap, taking
+        /// the live pings with it.
+        /// </para>
+        /// </remarks>
+        public IReadOnlyList<float> Reactions { get; }
+
+        /// <summary>
+        /// Melee swings by this unit whose windows touch the turn.
+        /// </summary>
+        /// <remarks>
+        /// Sliced by window overlap rather than by a point test, so a swing that
+        /// straddles the turn boundary arrives in both windows and self-clears
+        /// in the second. Same accumulation caveat as <see cref="Reactions"/>.
+        /// </remarks>
+        public IReadOnlyList<MeleeTrajectory> Melees { get; }
     }
 
     /// <summary>
