@@ -31,8 +31,23 @@ namespace PBAndJ.Peer
         public Vec4 Rotation { get; set; }
         public Vec3 Facing { get; set; }
         public float Integrity { get; set; }
-        public bool IsDead { get; set; }
-        public float DeathTime { get; set; }
+
+        /// <summary>
+        /// The unit's live wrecked-part set. M15.
+        /// </summary>
+        /// <remarks>
+        /// Carried by the harness for the same reason the selftest carries
+        /// visibility: it is the field the snapshot leg asserts on, and a
+        /// stand-in bridge that dropped it would let a codec regression through
+        /// while every count still matched.
+        /// </remarks>
+        public IReadOnlyList<PartDestruction> WreckedParts { get; set; } =
+            new PartDestruction[0];
+
+        /// <summary>The unit's own wreck, and when. M15 section 3.1.</summary>
+        public bool IsWrecked { get; set; }
+
+        public float WreckedAt { get; set; }
     }
 
     [ExcludeFromCodeCoverage]
@@ -119,7 +134,10 @@ namespace PBAndJ.Peer
             {
                 snapshot.Add(new UnitSnapshot(
                     unit.Name, unit.Position, unit.Rotation, unit.Facing,
-                    unit.Integrity, unit.IsDead, unit.DeathTime));
+                    unit.Integrity,
+                    isWrecked: unit.IsWrecked,
+                    wreckedAt: unit.WreckedAt,
+                    wreckedParts: unit.WreckedParts));
             }
             return snapshot;
         }
@@ -146,8 +164,9 @@ namespace PBAndJ.Peer
                     Rotation = incoming.Rotation,
                     Facing = incoming.Facing,
                     Integrity = incoming.Integrity,
-                    IsDead = incoming.IsDead,
-                    DeathTime = incoming.DeathTime,
+                    WreckedParts = incoming.WreckedParts,
+                    IsWrecked = incoming.IsWrecked,
+                    WreckedAt = incoming.WreckedAt,
                 });
             }
         }

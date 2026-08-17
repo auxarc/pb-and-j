@@ -211,7 +211,7 @@ namespace PBAndJ.Core.Tests.Net
 
         private static UnitSnapshot Snapshot(string name) =>
             new UnitSnapshot(name, new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
-                new Vec3(0f, 0f, 1f), 0.75f, false, 0f);
+                new Vec3(0f, 0f, 1f), 0.75f);
 
         private static UnitTrack Track(string name, int keys)
         {
@@ -560,9 +560,9 @@ namespace PBAndJ.Core.Tests.Net
             var m = RoundTrip(new SnapshotMessage(4, "abc123", new[]
             {
                 new UnitSnapshot("pb_mech_01", new Vec3(1.5f, -2.25f, 3f), new Vec4(0.1f, 0.2f, 0.3f, 0.4f),
-                    new Vec3(0f, 0f, -1f), 0.625f, false, 0f),
+                    new Vec3(0f, 0f, -1f), 0.625f),
                 new UnitSnapshot("pb_mech_02", new Vec3(-9f, 0f, 0.125f), new Vec4(1f, 0f, 0f, 0f),
-                    new Vec3(1f, 0f, 0f), 0f, true, 2.5f),
+                    new Vec3(1f, 0f, 0f), 0f),
             }));
 
             Assert.Equal(4, m.Turn);
@@ -578,12 +578,9 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(0.4f, alive.Rotation.W);
             Assert.Equal(-1f, alive.Facing.Z);
             Assert.Equal(0.625f, alive.Integrity);
-            Assert.False(alive.IsDead);
 
-            var dead = m.Units[1];
-            Assert.True(dead.IsDead);
-            Assert.Equal(2.5f, dead.DeathTime);
-            Assert.Equal(0.125f, dead.Position.Z);
+            var second = m.Units[1];
+            Assert.Equal(0.125f, second.Position.Z);
         }
 
         // Three booleans that all default to a different value from the one
@@ -596,10 +593,10 @@ namespace PBAndJ.Core.Tests.Net
             var m = RoundTrip(new SnapshotMessage(1, null, new[]
             {
                 new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
-                    new Vec3(0f, 0f, 1f), 1f, false, 0f,
+                    new Vec3(0f, 0f, 1f), 1f,
                     isHidden: true, isHiddenDetectable: false, isDeployed: false),
                 new UnitSnapshot("pb_mech_02", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
-                    new Vec3(0f, 0f, 1f), 1f, false, 0f,
+                    new Vec3(0f, 0f, 1f), 1f,
                     isHidden: false, isHiddenDetectable: true, isDeployed: true),
             }));
 
@@ -610,6 +607,102 @@ namespace PBAndJ.Core.Tests.Net
             Assert.False(m.Units[1].IsHidden);
             Assert.True(m.Units[1].IsHiddenDetectable);
             Assert.True(m.Units[1].IsDeployed);
+        }
+
+        // Per unit, and with a different count on each, so a decoder that read
+        // one unit's list into the next unit's record cannot pass. The list is
+        // the LAST thing in the record, which is exactly where a reader that
+        // dropped a field lands — and where the two removed death fields used to
+        // sit, so this leg is also what pins their removal.
+        [Fact]
+        public void RoundTrip_Snapshot_PreservesWreckedPartsPerUnit()
+        {
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f),
+                new UnitSnapshot("pb_mech_02", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f,
+                    wreckedParts: new[] { new PartDestruction("equipment_left", 4.25f) }),
+                new UnitSnapshot("pb_mech_03", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f,
+                    wreckedParts: new[]
+                    {
+                        new PartDestruction("core", 0f),
+                        // The spawn sentinel. A codec that quantised or clamped
+                        // the stamp would erase the sign that tells a
+                        // pre-battle wreck from one this turn produced.
+                        new PartDestruction("leg_right", -100f),
+                    }),
+            }));
+
+            Assert.Empty(m.Units[0].WreckedParts);
+
+            var one = Assert.Single(m.Units[1].WreckedParts);
+            Assert.Equal("equipment_left", one.Socket);
+            Assert.Equal(4.25f, one.Time);
+
+            Assert.Equal(2, m.Units[2].WreckedParts.Count);
+            Assert.Equal("core", m.Units[2].WreckedParts[0].Socket);
+            Assert.Equal(0f, m.Units[2].WreckedParts[0].Time);
+            Assert.Equal("leg_right", m.Units[2].WreckedParts[1].Socket);
+            Assert.Equal(-100f, m.Units[2].WreckedParts[1].Time);
+        }
+
+        // The unit's own wreck travels beside its parts and is a SEPARATE fact,
+        // so the units here are chosen to disagree in both directions: one
+        // wrecked with no parts recorded, one with parts and not wrecked. A
+        // decoder that inferred either from the other cannot pass.
+        [Fact]
+        public void RoundTrip_Snapshot_PreservesTheUnitWreckIndependentlyOfItsParts()
+        {
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f,
+                    isWrecked: true, wreckedAt: 7.5f),
+                new UnitSnapshot("pb_mech_02", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f,
+                    wreckedParts: new[] { new PartDestruction("core", 2f) }),
+                // Negative is the "no moment to wait for" convention, shared
+                // with PartDestruction.Time, and a codec that clamped or
+                // quantised the stamp would erase it.
+                new UnitSnapshot("pb_mech_03", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f,
+                    isWrecked: true, wreckedAt: -100f),
+            }));
+
+            Assert.True(m.Units[0].IsWrecked);
+            Assert.Equal(7.5f, m.Units[0].WreckedAt);
+            Assert.Empty(m.Units[0].WreckedParts);
+
+            Assert.False(m.Units[1].IsWrecked);
+            Assert.Single(m.Units[1].WreckedParts);
+
+            Assert.True(m.Units[2].IsWrecked);
+            Assert.Equal(-100f, m.Units[2].WreckedAt);
+        }
+
+        // Truncation rather than a fault, and the asymmetry is the point: a
+        // snapshot is a correction, so refusing to send one over a part list
+        // would cost that unit its position and visibility too.
+        [Fact]
+        public void RoundTrip_Snapshot_TruncatesAnOversizeWreckedPartList()
+        {
+            var parts = new PartDestruction[PbjMessageCodec.MaxWreckedPartsPerUnit + 5];
+            for (var i = 0; i < parts.Length; i++)
+            {
+                parts[i] = new PartDestruction("socket_" + i, i);
+            }
+
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f, wreckedParts: parts),
+            }));
+
+            Assert.Equal(PbjMessageCodec.MaxWreckedPartsPerUnit, m.Units[0].WreckedParts.Count);
+            Assert.Equal("socket_0", m.Units[0].WreckedParts[0].Socket);
         }
 
         // Presence and value travel separately, so the pairs chosen here are the
@@ -624,12 +717,12 @@ namespace PBAndJ.Core.Tests.Net
             var m = RoundTrip(new SnapshotMessage(1, null, new[]
             {
                 new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
-                    new Vec3(0f, 0f, 1f), 1f, false, 0f),
+                    new Vec3(0f, 0f, 1f), 1f),
                 new UnitSnapshot("pb_mech_02", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
-                    new Vec3(0f, 0f, 1f), 1f, false, 0f,
+                    new Vec3(0f, 0f, 1f), 1f,
                     hasArrivalTime: true, arrivalTime: -1f),
                 new UnitSnapshot("pb_mech_03", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
-                    new Vec3(0f, 0f, 1f), 1f, false, 0f,
+                    new Vec3(0f, 0f, 1f), 1f,
                     hasArrivalTime: true, arrivalTime: 10.13f),
             }));
 
@@ -658,7 +751,7 @@ namespace PBAndJ.Core.Tests.Net
             var m = RoundTrip(new SnapshotMessage(1, null, new[]
             {
                 new UnitSnapshot("u", new Vec3(float.NaN, float.PositiveInfinity, float.NegativeInfinity),
-                    new Vec4(float.Epsilon, 0f, 0f, 1f), new Vec3(0f, 0f, 0f), float.NaN, false, 0f),
+                    new Vec4(float.Epsilon, 0f, 0f, 1f), new Vec3(0f, 0f, 0f), float.NaN),
             }));
 
             Assert.True(float.IsNaN(m.Units[0].Position.X));

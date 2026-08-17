@@ -1158,7 +1158,7 @@ namespace PBAndJ.Core.Tests.Net
 
         private static UnitSnapshot Snap(string name) =>
             new UnitSnapshot(name, new Vec3(1f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
-                new Vec3(0f, 0f, 1f), 1f, false, 0f);
+                new Vec3(0f, 0f, 1f), 1f);
 
         private HostSession Executing()
         {

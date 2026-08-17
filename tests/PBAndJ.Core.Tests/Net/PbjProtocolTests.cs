@@ -6,7 +6,7 @@ namespace PBAndJ.Core.Tests.Net
     public class PbjProtocolTests
     {
         [Fact]
-        public void Version_IsSeven()
+        public void Version_IsEight()
         {
             // Pinned deliberately: bumping the wire format must be an explicit
             // edit here and in Write_MinimalOrder_ProducesExactBytes.
@@ -29,7 +29,15 @@ namespace PBAndJ.Core.Tests.Net
             // reaction-ping list and a melee-trajectory list appended after the
             // weapon lights. A v6 peer reads the ping count as the end of the
             // message. Paired into one break for the stage B reason.
-            Assert.Equal(7, PbjProtocol.Version);
+            // v8 (M15) is the first move to the Snapshot unit record since v5,
+            // and the first ever to REMOVE from a layout as well as add: a
+            // counted wrecked-part list goes in where isDead and deathTime came
+            // out, so a v7 peer reads the part count as isDead and every byte
+            // after it is rubbish. The removal is not tidying — DeathStatus is a
+            // pilot component, so both fields were constant on a unit for their
+            // whole life. The unit's own IsWrecked/WreckedAt go in on the same
+            // move, so M15's two halves cost one break between them.
+            Assert.Equal(8, PbjProtocol.Version);
         }
 
         [Fact]
@@ -231,7 +239,12 @@ namespace PBAndJ.Core.Tests.Net
             // both appended to every unit inside Poses — which moves
             // PbjProtocol.Version to 7 alongside it. Paired into one break for
             // the same reason stage B paired trails with weapon lights.
-            Assert.Equal("0.19.0", PbjProtocol.ModVersion);
+            // 0.20.0 for M15 — per-part destruction visuals — which moves
+            // PbjProtocol.Version to 8. The snapshot's unit record gains the
+            // wrecked-part list, the unit's own wreck flag and stamp, and loses
+            // the two dead death fields — all in one break, rather than keeping
+            // a field known to be constant alive until some later one.
+            Assert.Equal("0.20.0", PbjProtocol.ModVersion);
         }
 
         [Fact]
