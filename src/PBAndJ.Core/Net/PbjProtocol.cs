@@ -172,8 +172,25 @@ namespace PBAndJ.Core.Net
         /// share no code. <see cref="ModVersion"/> moved to 0.19.0 in the same
         /// commit.
         /// </para>
+        /// <para>
+        /// <b>M15 is the fifth move, and the first to move the <c>Snapshot</c>
+        /// layout since M13.</b> Every unit record gains a counted list of
+        /// wrecked parts <i>and</i> loses the two death fields that sat where it
+        /// now goes — so a v7 peer reads the wrecked-part count as
+        /// <c>isDead</c> and everything after it is rubbish. Removing the dead
+        /// fields in the same break is deliberate: <c>DeathStatus</c> is a pilot
+        /// component, so <c>IsDead</c>/<c>DeathTime</c> were never non-zero for a
+        /// unit and cost a byte and four more on every unit of every turn to say
+        /// nothing. Spending one break on both beats keeping a known-dead field
+        /// alive until the next one. The unit's own <c>IsWrecked</c>/
+        /// <c>WreckedAt</c> ride the same break, so M15's two halves — the
+        /// unit-level wreck and the per-part dissolve — cost <b>one</b> move
+        /// between them rather than two, for the reason stage B paired trails
+        /// with weapon lights. <see cref="ModVersion"/> moved to 0.20.0 in
+        /// the same commit.
+        /// </para>
         /// </remarks>
-        public const int Version = 7;
+        public const int Version = 8;
 
         /// <summary>
         /// This build of the mod, as peers announce it to each other.
@@ -197,7 +214,7 @@ namespace PBAndJ.Core.Net
         /// version is for and what a protocol version cannot express.
         /// </para>
         /// </remarks>
-        public const string ModVersion = "0.19.0";
+        public const string ModVersion = "0.20.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.

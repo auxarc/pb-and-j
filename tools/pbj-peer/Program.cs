@@ -435,9 +435,11 @@ namespace PBAndJ.Peer
             {
                 var pos = unit.Position;
                 var rot = unit.Rotation;
-                var state = unit.IsDead
-                    ? $"DEAD @{unit.DeathTime.ToString("F2", CultureInfo.InvariantCulture)}"
-                    : "alive";
+                var state = unit.IsWrecked
+                    ? $"WRECKED @{unit.WreckedAt.ToString("F2", CultureInfo.InvariantCulture)}"
+                    : (unit.WreckedParts.Count == 0
+                        ? "intact"
+                        : $"{unit.WreckedParts.Count} part(s) wrecked");
                 Console.WriteLine(string.Format(
                     CultureInfo.InvariantCulture,
                     "[pbj-peer]   {0,-24} pos ({1,8:F2},{2,8:F2},{3,8:F2})  rot ({4:F2},{5:F2},{6:F2},{7:F2})  integrity {8:P0}  {9}",

@@ -1,0 +1,544 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
+using System.Reflection;
+using System.Text;
+using PhantomBrigade;
+using PhantomBrigade.Data;
+using QFSW.QC;
+using UnityEngine;
+
+namespace PBAndJ.Mod.Net
+{
+    /// <summary>
+    /// Pre-flight for M15: whether this content can show a destroyed unit at
+    /// all, and a way to see one without a second instance or a kill.
+    /// </summary>
+    /// <remarks>
+    /// Built because M15's eye test has <b>three</b> ways to show nothing and
+    /// they are indistinguishable from a chair: our code never fired, the code
+    /// fired and the socket ships <c>destructionShaderEffect</c> false, or the
+    /// unit's blueprint names no destruction FX at all. The last two are
+    /// content, and no counter we own can tell them from a defect — the same
+    /// trap stage C's probe was written for, where it turned out only 5 of 16
+    /// units could show the effect being verified.
+    /// <para>
+    /// ⚠️ <b>This matters more here than it did for stage C.</b> The user's
+    /// reported symptom is a tank, and the tank path is exactly where the
+    /// dissolve is config-gated (<c>UnitVisualManagerSimple.cs:596</c>) and
+    /// where the wreck FX is a blueprint string that can be empty — the game
+    /// itself logs "Main destruction event on this unit has not FX name" when it
+    /// is. Reading those before the run turns "it did not work" into a number.
+    /// </para>
+    /// <para>
+    /// <c>pbj.destruct-inject</c> is the other half and the one that de-risks
+    /// the run: it drives the client-side path directly on a single instance, so
+    /// both halves can be confirmed with no host, no wire and nobody dying.
+    /// 🔑 <b>It is safe in a way the plan's proposed injector was not</b> — it
+    /// calls the visual manager and <b>never sets the <c>Wrecked</c>
+    /// component</b>, so it writes no ECS state, nothing serialized, and nothing
+    /// that could reach a campaign save. <c>undo</c> puts every unit and socket
+    /// it touched back.
+    /// </para>
+    /// </remarks>
+    [ExcludeFromCodeCoverage]
+    internal static class DestructProbeGlue
+    {
+        /// <summary>Units this injector has wrecked, for the undo.</summary>
+        private static readonly List<int> injectedUnits = new List<int>();
+
+        /// <summary>Unit id and socket this injector has dissolved.</summary>
+        private static readonly List<KeyValuePair<int, string>> injectedParts =
+            new List<KeyValuePair<int, string>>();
+
+        /// <summary>
+        /// Reports whether M15 has anything to show, and on which units.
+        /// </summary>
+        [Command("pbj.destruct-probe", "M15: whether this content can draw a wreck, per unit")]
+        public static string DestructProbe()
+        {
+            if (!IDUtility.IsGameState("combat"))
+            {
+                return "[pb-and-j] not in combat";
+            }
+
+            var sb = new StringBuilder("[pb-and-j] M15 | ");
+            ReportEcs(sb);
+            sb.Append(" | ");
+            ReportContent(sb);
+            sb.Append(" | held: units=").Append(KeyframePlayer.HeldWreckedUnits)
+                .Append(" parts=").Append(KeyframePlayer.HeldDestructions);
+
+            var line = sb.ToString();
+            Debug.Log(line);
+            return line;
+        }
+
+        /// <summary>
+        /// What this machine's own ECS says, which is the host's real answer and
+        /// a client's all-zero one.
+        /// </summary>
+        /// <remarks>
+        /// <c>wrecked</c> against <c>destroyed</c> is the reading that settles a
+        /// claim M15 rests on and which was argued statically rather than
+        /// measured: capture drops units on <c>isDestroyed</c>, the Entitas
+        /// lifecycle flag, <b>not</b> on <c>isWrecked</c>. If wrecked units are
+        /// routinely not destroyed then a wreck keeps its transform track and
+        /// lands at the right instant; if the two move together, every wreck
+        /// arrives late via the settle path instead, and <c>wrecksPlayed</c>
+        /// would read zero for a reason that is nobody's bug.
+        /// </remarks>
+        private static void ReportEcs(StringBuilder sb)
+        {
+            var units = 0;
+            var wrecked = 0;
+            var wreckedAndDestroyed = 0;
+            var parts = 0;
+            var composites = 0;
+            var hidden = 0;
+
+            foreach (var unit in Contexts.sharedInstance.combat
+                .GetGroup(CombatMatcher.UnitTag).GetEntities())
+            {
+                units++;
+                if (unit.hasUnitCompositeLink)
+                {
+                    composites++;
+                }
+                if (unit.isHidden)
+                {
+                    hidden++;
+                }
+
+                var persistent = IDUtility.GetLinkedPersistentEntity(unit);
+                if (persistent == null)
+                {
+                    continue;
+                }
+                if (persistent.isWrecked)
+                {
+                    wrecked++;
+                    if (unit.isDestroyed)
+                    {
+                        wreckedAndDestroyed++;
+                    }
+                }
+                foreach (var part in EquipmentUtility.GetPartsInUnit(persistent))
+                {
+                    if (part != null && part.isWrecked)
+                    {
+                        parts++;
+                    }
+                }
+            }
+
+            sb.Append("ecs: units=").Append(units)
+                .Append(" wrecked=").Append(wrecked)
+                .Append(" wreckedAndDestroyed=").Append(wreckedAndDestroyed)
+                .Append(" parts=").Append(parts)
+                .Append(" composites=").Append(composites)
+                .Append(" hidden=").Append(hidden);
+        }
+
+        /// <summary>
+        /// Whether the blueprints on the field carry anything to draw.
+        /// </summary>
+        /// <remarks>
+        /// Three separate questions, because the two halves of M15 fail
+        /// independently and on different data:
+        /// <list type="bullet">
+        /// <item><c>dissolve</c> — sockets whose <c>destructionShaderEffect</c>
+        /// is true. §3.2's ramp is <b>consumed only by these</b>
+        /// (<c>UnitVisualManagerSimple.cs:596</c>); on any other socket our
+        /// drive is accepted, stored, and ignored.</item>
+        /// <item><c>burst</c> — sockets with a non-empty
+        /// <c>fxOnDestruction</c>. §3.2's explosion iterates exactly that list,
+        /// so an empty one is a silent no-op inside the game's own helper.</item>
+        /// <item><c>unitFx</c> — units whose <c>fxNameDestruction</c> is set.
+        /// §3.1's wreck on the tank path draws this and nothing else, and the
+        /// game logs its own complaint when it is empty.</item>
+        /// </list>
+        /// A zero in any column is <b>content, not a defect</b>, and knowing
+        /// which one is zero before the run is the whole point of reading it.
+        /// </remarks>
+        private static void ReportContent(StringBuilder sb)
+        {
+            var withManager = 0;
+            var sockets = 0;
+            var dissolveSockets = 0;
+            var burstSockets = 0;
+            var unitFx = 0;
+            var unitFxMissing = 0;
+            var alreadyDestroyed = 0;
+            var simple = 0;
+
+            foreach (var unit in Contexts.sharedInstance.combat
+                .GetGroup(CombatMatcher.UnitTag).GetEntities())
+            {
+                if (!unit.hasCombatView || unit.combatView.view == null)
+                {
+                    continue;
+                }
+                var visuals = unit.combatView.view.visualManager;
+                if (visuals == null)
+                {
+                    continue;
+                }
+                withManager++;
+
+                var links = visuals.GetSocketLinks();
+                if (links != null)
+                {
+                    foreach (var pair in links)
+                    {
+                        var link = pair.Value;
+                        if (link == null)
+                        {
+                            continue;
+                        }
+                        sockets++;
+                        if (link.destructionShaderEffect)
+                        {
+                            dissolveSockets++;
+                        }
+                        if (link.fxOnDestruction != null && link.fxOnDestruction.Count > 0)
+                        {
+                            burstSockets++;
+                        }
+                    }
+                }
+
+                // The tank path only. A mech's wreck comes from its VFX manager
+                // rather than a named pool asset, so an absent name there is not
+                // the same finding and is deliberately not counted as one.
+                if (visuals is UnitVisualManagerSimple tank)
+                {
+                    simple++;
+                    if (!string.IsNullOrEmpty(tank.fxNameDestruction)
+                        && tank.fxTransformDestruction != null)
+                    {
+                        unitFx++;
+                    }
+                    else
+                    {
+                        unitFxMissing++;
+                    }
+                }
+
+                if (DestroyedLast(visuals))
+                {
+                    alreadyDestroyed++;
+                }
+            }
+
+            sb.Append("content: mgr=").Append(withManager)
+                .Append(" simple=").Append(simple)
+                .Append(" sockets=").Append(sockets)
+                .Append(" dissolve=").Append(dissolveSockets)
+                .Append(" burst=").Append(burstSockets)
+                .Append(" unitFx=").Append(unitFx)
+                .Append("/").Append(unitFx + unitFxMissing)
+                .Append(" destroyedLast=").Append(alreadyDestroyed);
+        }
+
+        /// <summary>
+        /// Lists one unit's sockets, so the injector can be pointed at a real one.
+        /// </summary>
+        /// <remarks>
+        /// Per socket rather than aggregated, because the aggregate above cannot
+        /// answer the question an eye test actually asks — <i>which</i> limb
+        /// should be watched. A socket reading <c>dissolve=no</c> is one where
+        /// nothing will ever be seen however correct the code is.
+        /// </remarks>
+        [Command("pbj.destruct-sockets", "M15: one unit's sockets and what each can draw")]
+        public static string DestructSockets(int unitIndex)
+        {
+            if (!TryUnit(unitIndex, out var unit, out var visuals, out var failure))
+            {
+                return failure;
+            }
+
+            var persistent = IDUtility.GetLinkedPersistentEntity(unit);
+            var name = persistent != null && persistent.hasNameInternal
+                ? persistent.nameInternal.s
+                : "?";
+            var sb = new StringBuilder("[pb-and-j] unit ")
+                .Append(unitIndex).Append(" '").Append(name).Append("'");
+            sb.Append(visuals is UnitVisualManagerSimple ? " (tank path)" : " (mech path)");
+            sb.Append(" wrecked=").Append(persistent != null && persistent.isWrecked);
+            sb.Append(" destroyedLast=").Append(DestroyedLast(visuals));
+
+            var links = visuals.GetSocketLinks();
+            if (links == null || links.Count == 0)
+            {
+                sb.Append(" | no socket links");
+            }
+            else
+            {
+                foreach (var pair in links)
+                {
+                    var link = pair.Value;
+                    sb.Append(" | ").Append(pair.Key)
+                        .Append(" dissolve=").Append(link != null && link.destructionShaderEffect ? "yes" : "NO")
+                        .Append(" burst=").Append(
+                            link != null && link.fxOnDestruction != null
+                                ? link.fxOnDestruction.Count
+                                : 0);
+                }
+            }
+
+            var line = sb.ToString();
+            Debug.Log(line);
+            return line;
+        }
+
+        /// <summary>
+        /// Drives M15's visuals on one unit, with no wire and nobody dying.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 <b>Calls the visual manager and never the ECS.</b> The plan
+        /// originally proposed an injector that set <c>isWrecked</c>, and warned
+        /// against its own suggestion for good reason: on the drive rig that
+        /// writes a host-never-set, <b>serialized</b> flag into a real campaign
+        /// save with no unwind. This one is the same shape as the feature it
+        /// tests — <c>OnUnitDestruction</c> and <c>OnSocketDestructionChange</c>
+        /// are visual calls — so the worst it can leave behind is a picture, and
+        /// <c>undo</c> takes even that back.
+        /// <para>
+        /// Modes: <c>wreck</c> plays the unit's own destruction; <c>part</c>
+        /// dissolves one socket (integrity first, exactly as the feature does,
+        /// because <c>OnSocketDestructionChange</c> re-applies stored integrity
+        /// and defaults it to 1); <c>all</c> does both across every socket.
+        /// </para>
+        /// </remarks>
+        [Command("pbj.destruct-inject", "M15: play a wreck or a part dissolve on one unit")]
+        public static string DestructInject(string mode, int unitIndex, string socket = "")
+        {
+            if (!TryUnit(unitIndex, out var unit, out var visuals, out var failure))
+            {
+                return failure;
+            }
+
+            try
+            {
+                switch (mode)
+                {
+                    case "wreck":
+                        visuals.OnUnitDestruction();
+                        Remember(injectedUnits, unit.id.id);
+                        return "[pb-and-j] wreck played on unit " + unitIndex
+                            + " — pbj.destruct-inject undo 0 to take it back";
+
+                    case "part":
+                        if (string.IsNullOrEmpty(socket))
+                        {
+                            return "[pb-and-j] name a socket (see pbj.destruct-sockets " + unitIndex + ")";
+                        }
+                        Dissolve(visuals, unit.id.id, socket);
+                        return "[pb-and-j] socket '" + socket + "' dissolved on unit " + unitIndex;
+
+                    case "all":
+                    {
+                        var links = visuals.GetSocketLinks();
+                        var driven = 0;
+                        if (links != null)
+                        {
+                            foreach (var pair in links)
+                            {
+                                Dissolve(visuals, unit.id.id, pair.Key);
+                                driven++;
+                            }
+                        }
+                        visuals.OnUnitDestruction();
+                        Remember(injectedUnits, unit.id.id);
+                        return "[pb-and-j] wreck plus " + driven + " socket(s) on unit " + unitIndex;
+                    }
+
+                    case "undo":
+                        return Undo();
+
+                    default:
+                        return "[pb-and-j] mode must be wreck, part, all or undo";
+                }
+            }
+            catch (Exception e)
+            {
+                return "[pb-and-j] refused: " + e.GetType().Name + ": " + e.Message;
+            }
+        }
+
+        /// <summary>
+        /// Puts back everything this injector touched.
+        /// </summary>
+        /// <remarks>
+        /// Reachable at all only because the game provides the inverse of both
+        /// calls — <c>OnUnitRevival</c> clears the same <c>destroyedLast</c> flag
+        /// <c>OnUnitDestruction</c> sets, and a socket driven to progress 0 over
+        /// integrity 1 is a pristine part again. An injector without an undo
+        /// would leave the rig's next measurement reading a corpse it created.
+        /// </remarks>
+        private static string Undo()
+        {
+            var units = 0;
+            var parts = 0;
+
+            for (var i = 0; i < injectedParts.Count; i++)
+            {
+                var visuals = VisualsOf(injectedParts[i].Key);
+                if (visuals == null)
+                {
+                    continue;
+                }
+                try
+                {
+                    visuals.OnIntegrityChange(injectedParts[i].Value, 1f);
+                    visuals.OnSocketDestructionChange(injectedParts[i].Value, 0f);
+                    parts++;
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning("[pb-and-j] undo of a socket was refused: " + e.Message);
+                }
+            }
+
+            for (var i = 0; i < injectedUnits.Count; i++)
+            {
+                var visuals = VisualsOf(injectedUnits[i]);
+                if (visuals == null)
+                {
+                    continue;
+                }
+                try
+                {
+                    visuals.OnUnitRevival();
+                    units++;
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning("[pb-and-j] undo of a wreck was refused: " + e.Message);
+                }
+            }
+
+            injectedParts.Clear();
+            injectedUnits.Clear();
+            return "[pb-and-j] undone: " + units + " wreck(s), " + parts + " socket(s)";
+        }
+
+        // Integrity BEFORE progress, and it is not a stylistic choice:
+        // OnSocketDestructionChange ends by re-applying the socket's stored
+        // integrity, defaulting to 1f, so the other order paints a dissolve over
+        // a part that still reads pristine.
+        private static void Dissolve(IUnitVisualManager visuals, int unitId, string socket)
+        {
+            visuals.OnIntegrityChange(socket, 0f);
+            UnitVisualUtility.OnSocketDestruction(visuals, socket, audioUsed: true);
+            visuals.OnSocketDestructionChange(socket, 1f);
+            injectedParts.Add(new KeyValuePair<int, string>(unitId, socket));
+        }
+
+        private static void Remember(List<int> into, int id)
+        {
+            if (!into.Contains(id))
+            {
+                into.Add(id);
+            }
+        }
+
+        private static IUnitVisualManager? VisualsOf(int unitId)
+        {
+            var unit = IDUtility.GetCombatEntity(unitId);
+            if (unit == null || !unit.hasCombatView || unit.combatView.view == null)
+            {
+                return null;
+            }
+            return unit.combatView.view.visualManager;
+        }
+
+        private static bool TryUnit(
+            int unitIndex,
+            out CombatEntity unit,
+            out IUnitVisualManager visuals,
+            out string failure)
+        {
+            unit = null!;
+            visuals = null!;
+
+            if (!IDUtility.IsGameState("combat"))
+            {
+                failure = "[pb-and-j] not in combat";
+                return false;
+            }
+
+            var units = Contexts.sharedInstance.combat.GetGroup(CombatMatcher.UnitTag).GetEntities();
+            if (unitIndex < 0 || unitIndex >= units.Length)
+            {
+                failure = "[pb-and-j] no unit " + unitIndex + " (there are " + units.Length + ")";
+                return false;
+            }
+
+            unit = units[unitIndex];
+            if (!unit.hasCombatView || unit.combatView.view == null
+                || unit.combatView.view.visualManager == null)
+            {
+                failure = "[pb-and-j] unit " + unitIndex + " has no visual manager";
+                return false;
+            }
+
+            visuals = unit.combatView.view.visualManager;
+            failure = string.Empty;
+            return true;
+        }
+
+        /// <summary>
+        /// Whether this manager already believes its unit is destroyed.
+        /// </summary>
+        /// <remarks>
+        /// Private on both implementations, so read by reflection or not at all
+        /// — the same choice <c>pbj.drive-state</c> made for
+        /// <c>reactionTimeLast</c>, and for the same reason: a number that might
+        /// be a lie is worse than no number.
+        /// <para>
+        /// It is the reading that separates our two indistinguishable failures.
+        /// <c>OnUnitDestruction</c> self-guards on this flag, so a true here
+        /// after a run means <b>our call landed and the game chose not to redraw
+        /// </b>, where a false means the call never happened at all.
+        /// </para>
+        /// </remarks>
+        private static bool DestroyedLast(IUnitVisualManager visuals)
+        {
+            var field = visuals.GetType().GetField(
+                "destroyedLast", BindingFlags.Instance | BindingFlags.NonPublic);
+            return field != null && field.GetValue(visuals) is bool flag && flag;
+        }
+
+        /// <summary>
+        /// Hands these commands to Quantum Console.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ <b>The <c>[Command]</c> attribute alone does nothing here.</b> QC's
+        /// own attribute scan does not reach this assembly, so every <c>pbj.*</c>
+        /// command in the mod is registered explicitly through
+        /// <c>TryAddCommand</c> and the attribute is documentation. Omitting this
+        /// call fails in the most expensive possible way: the build is green, the
+        /// deploy is green, the game runs, and the command simply does not exist
+        /// — which is only discovered with two instances already up and a fight
+        /// already loaded.
+        /// </remarks>
+        internal static void RegisterConsoleCommands()
+        {
+            Add(nameof(DestructProbe), "pbj.destruct-probe");
+            Add(nameof(DestructSockets), "pbj.destruct-sockets", typeof(int));
+            Add(nameof(DestructInject), "pbj.destruct-inject",
+                typeof(string), typeof(int), typeof(string));
+        }
+
+        private static void Add(string methodName, string command, params Type[] signature)
+        {
+            var method = typeof(DestructProbeGlue).GetMethod(
+                methodName, BindingFlags.Static | BindingFlags.Public,
+                null, signature, null);
+            QuantumConsoleProcessor.TryAddCommand(new CommandData(method, command));
+        }
+    }
+}

@@ -197,7 +197,10 @@ namespace PBAndJ.Mod.Net
                 var rotation = unit.hasRotation ? unit.rotation.q : Quaternion.identity;
                 var facing = unit.hasFacing ? unit.facing.v : Vector3.forward;
                 var integrity = persistent.hasUnitFrameIntegrity ? persistent.unitFrameIntegrity.f : 0f;
-                var dead = persistent.hasDeathStatus;
+
+                // Walked once and used twice — the set itself travels, and the
+                // unit's wreck moment is derived from it below.
+                var wrecked = WreckedPartsOf(persistent);
 
                 units.Add(new UnitSnapshot(
                     persistent.nameInternal.s,
@@ -205,8 +208,6 @@ namespace PBAndJ.Mod.Net
                     new Vec4(rotation.x, rotation.y, rotation.z, rotation.w),
                     new Vec3(facing.x, facing.y, facing.z),
                     integrity,
-                    dead,
-                    dead ? persistent.deathStatus.time : 0f,
                     // M13. A client cannot work any of these out for itself: the
                     // game's detector is line-of-sight fog of war whose only
                     // caller triggers on simulationTime, which a client never
@@ -224,7 +225,16 @@ namespace PBAndJ.Mod.Net
                     // everything deployed. Sending only a float would leave
                     // those units uncorrectable.
                     unit.hasArrivalTime,
-                    unit.hasArrivalTime ? unit.arrivalTime.f : 0f));
+                    unit.hasArrivalTime ? unit.arrivalTime.f : 0f,
+                    // M15 §3.1. The unit's own wreck, which is a different fact
+                    // from every part being wrecked and from integrity reaching
+                    // zero — only this one draws the explosion.
+                    persistent.isWrecked,
+                    WreckMomentOf(wrecked),
+                    // M15 §3.2. The live wrecked set, not this turn's additions
+                    // — see UnitSnapshot.WreckedParts for why the difference is
+                    // the design rather than a convenience.
+                    wrecked));
 
                 if (units.Count == PbjMessageCodec.MaxUnitsPerSnapshot)
                 {
@@ -237,6 +247,89 @@ namespace PBAndJ.Mod.Net
                 }
             }
             return units;
+        }
+
+        /// <summary>
+        /// The parts this unit currently has wrecked, and when each went. M15.
+        /// </summary>
+        /// <remarks>
+        /// Walks the live equipment set exactly as the game's own replay does
+        /// (<c>CombatReplayHelper.ApplyTimeToUnit:1289-1297</c>), including its
+        /// <c>hasDestructionTime ? f : 0f</c> default.
+        /// <para>
+        /// ⚠️ Deliberately <b>not</b> read from <c>ReplayUnit.keyframesDestructions</c>,
+        /// which looks purpose-built and is a trap twice over: it is written at
+        /// <c>CombatReplayHelper.cs:1914</c> and read nowhere in the shipped
+        /// game, and its recorder attributes a dependency-wrecked part to the
+        /// part that triggered it rather than to itself
+        /// (<c>EquipmentUtility.cs:3116-3117</c> and <c>:3126-3128</c> both pass
+        /// <c>partHit</c>).
+        /// </para>
+        /// <para>
+        /// Unordered, because <c>GetPartsInUnit</c> returns a set and the
+        /// receiver joins on socket rather than on index. Sorting would buy
+        /// byte-stable frames for identical state and nothing else.
+        /// </para>
+        /// </remarks>
+        private static IReadOnlyList<PartDestruction> WreckedPartsOf(PersistentEntity persistent)
+        {
+            List<PartDestruction>? wrecked = null;
+            foreach (var part in EquipmentUtility.GetPartsInUnit(persistent))
+            {
+                if (part == null || !part.isWrecked || !part.hasPartParentUnit)
+                {
+                    continue;
+                }
+
+                var socket = part.partParentUnit.socket;
+                if (string.IsNullOrEmpty(socket))
+                {
+                    continue;
+                }
+
+                wrecked ??= new List<PartDestruction>(4);
+                wrecked.Add(new PartDestruction(
+                    socket, part.hasDestructionTime ? part.destructionTime.f : 0f));
+            }
+            return (IReadOnlyList<PartDestruction>?)wrecked ?? NoWreckedParts;
+        }
+
+        private static readonly PartDestruction[] NoWreckedParts = new PartDestruction[0];
+
+        /// <summary>
+        /// When this unit was wrecked, derived from its parts. M15 §3.1.
+        /// </summary>
+        /// <remarks>
+        /// The game keeps no unit-level destruction time — <c>crumpleTime</c>
+        /// comes closest and is written only for units that have both a mech
+        /// animation view and a puppet view, so every tank lacks it. The newest
+        /// part stamp is exact rather than approximate, and the reason is in the
+        /// damage resolution itself: wrecking a unit wrecks <b>every part it
+        /// still has</b>, at one instant, in the same loop that sets the flag
+        /// (<c>EquipmentUtility.cs:3247-3255</c>). So the newest stamp is that
+        /// instant. A unit that reached the end with everything already gone was
+        /// wrecked when the last part went, which is the same number again.
+        /// <para>
+        /// Falls back to <b>negative</b>, not zero, when there is nothing to
+        /// derive from. Zero is a real instant on the host's clock — the very
+        /// start of the fight — and would make a client hold the wreck for a
+        /// window boundary it had already passed. Negative is the established
+        /// "no moment to wait for" convention here, and it makes the client play
+        /// the wreck at once, which is the right answer for a unit whose moment
+        /// nobody can name.
+        /// </para>
+        /// </remarks>
+        private static float WreckMomentOf(IReadOnlyList<PartDestruction> wrecked)
+        {
+            var newest = float.NegativeInfinity;
+            for (var i = 0; i < wrecked.Count; i++)
+            {
+                if (wrecked[i].Time > newest)
+                {
+                    newest = wrecked[i].Time;
+                }
+            }
+            return newest > float.NegativeInfinity ? newest : -100f;
         }
 
         // Safe only because a client never sets combat.Simulating, so no playback
@@ -302,13 +395,15 @@ namespace PBAndJ.Mod.Net
                     state.Rotation.X, state.Rotation.Y, state.Rotation.Z, state.Rotation.W));
                 unit.ReplaceFacing(new Vector3(state.Facing.X, state.Facing.Y, state.Facing.Z));
                 persistent.ReplaceUnitFrameIntegrity(state.Integrity);
-
-                if (state.IsDead && !persistent.hasDeathStatus)
-                {
-                    persistent.ReplaceDeathStatus(state.DeathTime, "remote");
-                }
                 byName.Remove(persistent.nameInternal.s);
             }
+
+            // M15. After the per-unit writes, and outside the loop, because the
+            // set it settles spans units the loop above may never have reached —
+            // a unit destroyed before this turn has no track and may have no
+            // entry here either, and it is exactly the unit whose parts need
+            // putting right.
+            KeyframePlayer.ReceiveDestruction(snapshot);
 
             // Entities are never created from a snapshot. A roster difference is
             // a structural mismatch that hard-setting positions cannot fix, so
@@ -1302,6 +1397,13 @@ namespace PBAndJ.Mod.Net
         public void StopKeyframes()
         {
             KeyframePlayer.Stop();
+
+            // M15, and only here rather than in Stop itself. Every emitter of
+            // this effect means the fight is over for this client — CombatEnd,
+            // Bye, or a fault — while Stop also runs between the turns of a live
+            // fight, where discarding the wrecked set would put every blown-off
+            // limb back on during the planning phase.
+            KeyframePlayer.ClearDestruction();
         }
 
         /// <summary>

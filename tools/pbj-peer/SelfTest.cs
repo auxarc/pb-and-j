@@ -221,8 +221,19 @@ namespace PBAndJ.Peer
                 // then let the correction carry the truth across.
                 hostBridge.Units[0].Position = new Vec3(12.5f, 0f, -3.25f);
                 hostBridge.Units[1].Integrity = 0.5f;
-                hostBridge.Units[2].IsDead = true;
-                hostBridge.Units[2].DeathTime = 1.75f;
+                // M15. Two parts on one unit, one of them the spawn sentinel, so
+                // the leg pins both the list layout and the sign that tells a
+                // pre-battle wreck from one this turn produced.
+                hostBridge.Units[2].WreckedParts = new[]
+                {
+                    new PartDestruction("equipment_left", 1.75f),
+                    new PartDestruction("optional_right", -100f),
+                };
+                // The unit's own wreck travels beside the parts and is a
+                // separate fact — a unit can be wrecked with parts surviving,
+                // and lose every part without being wrecked itself.
+                hostBridge.Units[2].IsWrecked = true;
+                hostBridge.Units[2].WreckedAt = 1.75f;
                 var hostDigest = hostBridge.ComputeStateDigest();
 
                 if (clientBridge.ComputeStateDigest() == hostDigest)
@@ -259,13 +270,20 @@ namespace PBAndJ.Peer
                 if (corrected.Count != 3
                     || corrected[0].Position.X != 12.5f
                     || corrected[1].Integrity != 0.5f
-                    || !corrected[2].IsDead
-                    || corrected[2].DeathTime != 1.75f)
+                    || corrected[2].WreckedParts.Count != 2
+                    || corrected[2].WreckedParts[0].Socket != "equipment_left"
+                    || corrected[2].WreckedParts[0].Time != 1.75f
+                    || corrected[2].WreckedParts[1].Socket != "optional_right"
+                    || corrected[2].WreckedParts[1].Time != -100f
+                    || !corrected[2].IsWrecked
+                    || corrected[2].WreckedAt != 1.75f
+                    || corrected[0].IsWrecked)
                 {
                     Console.WriteLine("[selftest] FAIL corrected state does not match field for field");
                     return 1;
                 }
-                Console.WriteLine("[selftest] OK   position, integrity and death all crossed intact");
+                Console.WriteLine(
+                    "[selftest] OK   position, integrity, wrecked parts and the unit wreck all crossed intact");
 
                 if (clientBridge.ClearLocalOrdersCalls == 0)
                 {

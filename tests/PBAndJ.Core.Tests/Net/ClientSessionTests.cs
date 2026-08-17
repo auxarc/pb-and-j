@@ -831,7 +831,7 @@ namespace PBAndJ.Core.Tests.Net
 
         private static UnitSnapshot Snap(string name, float x = 1f) =>
             new UnitSnapshot(name, new Vec3(x, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
-                new Vec3(0f, 0f, 1f), 1f, false, 0f);
+                new Vec3(0f, 0f, 1f), 1f);
 
         [Fact]
         public void Snapshot_ClearsStaleLocalOrdersBeforeApplying()

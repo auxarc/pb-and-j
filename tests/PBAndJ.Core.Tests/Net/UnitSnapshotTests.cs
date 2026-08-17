@@ -7,7 +7,7 @@ namespace PBAndJ.Core.Tests.Net
     {
         private static UnitSnapshot Snapshot() =>
             new UnitSnapshot("pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0.1f, 0.2f, 0.3f, 0.4f),
-                new Vec3(0f, 0f, -1f), 0.625f, true, 2.5f);
+                new Vec3(0f, 0f, -1f), 0.625f);
 
         [Fact]
         public void Constructor_RetainsEveryField()
@@ -19,8 +19,55 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(0.4f, unit.Rotation.W);
             Assert.Equal(-1f, unit.Facing.Z);
             Assert.Equal(0.625f, unit.Integrity);
-            Assert.True(unit.IsDead);
-            Assert.Equal(2.5f, unit.DeathTime);
+        }
+
+        // Empty rather than null, so a client can walk it without a guard on
+        // every frame of every window.
+        [Fact]
+        public void Constructor_DefaultsToAnIntactUnit()
+        {
+            Assert.Empty(Snapshot().WreckedParts);
+        }
+
+        [Fact]
+        public void Constructor_DefaultsToAnUnwreckedUnit()
+        {
+            Assert.False(Snapshot().IsWrecked);
+        }
+
+        [Fact]
+        public void Constructor_RetainsTheUnitWreck()
+        {
+            // A separate fact from the parts, and carried separately, because a
+            // unit is wrecked while parts survive and can lose every part
+            // without being wrecked itself. Only one of the two draws the
+            // explosion.
+            var unit = new UnitSnapshot(
+                "pb_mech_01", default, default, default, 0.5f,
+                isWrecked: true, wreckedAt: 7.5f);
+
+            Assert.True(unit.IsWrecked);
+            Assert.Equal(7.5f, unit.WreckedAt);
+            Assert.Empty(unit.WreckedParts);
+        }
+
+        [Fact]
+        public void Constructor_RetainsWreckedParts()
+        {
+            var unit = new UnitSnapshot(
+                "pb_mech_01", default, default, default, 0.5f,
+                wreckedParts: new[]
+                {
+                    new PartDestruction("equipment_left", 4.25f),
+                    new PartDestruction("leg_right", -100f),
+                });
+
+            Assert.Equal(2, unit.WreckedParts.Count);
+            Assert.Equal("equipment_left", unit.WreckedParts[0].Socket);
+            Assert.Equal(4.25f, unit.WreckedParts[0].Time);
+            // Negative is a real state, not an absence: it is the spawn sentinel
+            // for a unit that arrived with the part already gone.
+            Assert.Equal(-100f, unit.WreckedParts[1].Time);
         }
 
         // The defaults describe a unit that is on the field and being drawn,
@@ -40,7 +87,7 @@ namespace PBAndJ.Core.Tests.Net
         {
             var unit = new UnitSnapshot(
                 "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
-                new Vec3(0f, 0f, -1f), 1f, false, 0f,
+                new Vec3(0f, 0f, -1f), 1f,
                 isHidden: true, isHiddenDetectable: true, isDeployed: false);
 
             Assert.True(unit.IsHidden);
@@ -58,10 +105,10 @@ namespace PBAndJ.Core.Tests.Net
         {
             var visible = new UnitSnapshot(
                 "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
-                new Vec3(0f, 0f, -1f), 1f, false, 0f);
+                new Vec3(0f, 0f, -1f), 1f);
             var hidden = new UnitSnapshot(
                 "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
-                new Vec3(0f, 0f, -1f), 1f, false, 0f,
+                new Vec3(0f, 0f, -1f), 1f,
                 isHidden: true, isHiddenDetectable: true, isDeployed: false);
 
             Assert.Equal(
@@ -85,7 +132,7 @@ namespace PBAndJ.Core.Tests.Net
         {
             var unit = new UnitSnapshot(
                 "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
-                new Vec3(0f, 0f, -1f), 1f, false, 0f,
+                new Vec3(0f, 0f, -1f), 1f,
                 hasArrivalTime: true, arrivalTime: 10.13f);
 
             Assert.True(unit.HasArrivalTime);
@@ -104,7 +151,7 @@ namespace PBAndJ.Core.Tests.Net
         {
             var unit = new UnitSnapshot(
                 "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
-                new Vec3(0f, 0f, -1f), 1f, false, 0f,
+                new Vec3(0f, 0f, -1f), 1f,
                 hasArrivalTime: true, arrivalTime: -1f);
 
             Assert.True(unit.HasArrivalTime);
@@ -118,10 +165,10 @@ namespace PBAndJ.Core.Tests.Net
         {
             var without = new UnitSnapshot(
                 "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
-                new Vec3(0f, 0f, -1f), 1f, false, 0f);
+                new Vec3(0f, 0f, -1f), 1f);
             var with = new UnitSnapshot(
                 "pb_mech_01", new Vec3(1f, 2f, 3f), new Vec4(0f, 0f, 0f, 1f),
-                new Vec3(0f, 0f, -1f), 1f, false, 0f,
+                new Vec3(0f, 0f, -1f), 1f,
                 hasArrivalTime: true, arrivalTime: 10.13f);
 
             Assert.Equal(

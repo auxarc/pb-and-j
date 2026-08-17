@@ -97,6 +97,30 @@ namespace PBAndJ.Mod.Net
             /// not carry.
             /// </remarks>
             public CombatEntity? Unit { get; set; }
+
+            /// <summary>
+            /// The persistent entity's internal name — the key the destruction
+            /// state is held under. M15.
+            /// </summary>
+            /// <remarks>
+            /// Cached rather than re-resolved through <c>GetLinkedPersistentEntity</c>
+            /// per frame, and kept even though <see cref="Track"/> carries the
+            /// same string: a target exists only where a transform track did, so
+            /// reading it off the track would tie the destruction drive to the
+            /// one carrier this feature must not depend on.
+            /// </remarks>
+            public string? Name { get; set; }
+
+            /// <summary>
+            /// This unit's visual manager, for the per-part dissolve. M15.
+            /// </summary>
+            /// <remarks>
+            /// The manager itself rather than <see cref="Lights"/>'s owner:
+            /// <c>OnIntegrityChange</c> and <c>OnSocketDestructionChange</c> are
+            /// on <c>IUnitVisualManager</c>, which both the mech and the tank
+            /// implementations satisfy.
+            /// </remarks>
+            public IUnitVisualManager? Visuals { get; set; }
         }
 
         /// <summary>
@@ -493,6 +517,82 @@ namespace PBAndJ.Mod.Net
         /// <summary>Swings whose drive threw inside game code.</summary>
         internal static int MeleesRefused { get; private set; }
 
+        /// <summary>
+        /// Which parts this client believes are wrecked, and whether it is yet
+        /// entitled to say so. M15.
+        /// </summary>
+        /// <remarks>
+        /// Static and outliving any one window on purpose. It is fed by the
+        /// snapshot, which arrives whether or not a window follows, and the
+        /// backstop it provides is precisely for the turns where playback never
+        /// happens — so tying its lifetime to <see cref="targets"/> would
+        /// discard the state in exactly the case it exists for.
+        /// </remarks>
+        private static readonly DestructionState destruction = new DestructionState();
+
+        /// <summary>
+        /// Part destructions whose moment the cursor crossed. M15.
+        /// </summary>
+        /// <remarks>
+        /// Counted at the crossing edge rather than per drive, for the same
+        /// reason <see cref="LightsFired"/> is: the ramp re-drives a part on
+        /// every frame of its half-second, so counting calls would report the
+        /// frame rate.
+        /// <para>
+        /// ⚠️ A count proves the burst was <i>called</i>, never that anything was
+        /// seen — and here that gap is wider than usual. The dissolve is consumed
+        /// only where a socket visual ships <c>destructionShaderEffect</c> true
+        /// (<c>UnitVisualManagerSimple.cs:596</c>), which is content and may be
+        /// false on exactly the tanks this was written for.
+        /// </para>
+        /// </remarks>
+        internal static int DestructionsPlayed { get; private set; }
+
+        /// <summary>Part drives that threw inside game code.</summary>
+        internal static int DestructionsRefused { get; private set; }
+
+        /// <summary>Parts settled outside a window — the convergence backstop.</summary>
+        internal static int DestructionsSettled { get; private set; }
+
+        /// <summary>
+        /// How many parts this machine has been TOLD are wrecked, and on how
+        /// many units. M15.
+        /// </summary>
+        /// <remarks>
+        /// Zero on a host, which never receives a snapshot, and that asymmetry is
+        /// the reading: a host's own count comes off the ECS, and a client's can
+        /// only come from here because a client never sets the component. Compare
+        /// the host's ECS figure against this one on the client and a divergence
+        /// is visible — which nothing else on either machine can show, since
+        /// <c>DestructionProgress</c> is not a digest input.
+        /// </remarks>
+        internal static int HeldDestructions => destruction.Count;
+
+        internal static int HeldDestructionUnits => destruction.UnitCount;
+
+        /// <summary>
+        /// Unit wrecks played at the crossing edge during a window. M15 §3.1.
+        /// </summary>
+        /// <remarks>
+        /// The number to compare against the host's own wrecked-unit count over
+        /// a turn. ⚠️ It can legitimately fall short of it, and by a knowable
+        /// amount rather than mysteriously: a wreck only reaches this counter
+        /// when the unit still has a transform track to be a target for, so a
+        /// unit hidden at turn start, or one the ECS destroyed outright, lands in
+        /// <see cref="WrecksSettled"/> instead. <b>The sum is the figure that
+        /// must match, never this one alone.</b>
+        /// </remarks>
+        internal static int WrecksPlayed { get; private set; }
+
+        /// <summary>Wrecks and revivals applied outside a window.</summary>
+        internal static int WrecksSettled { get; private set; }
+
+        /// <summary>Wreck drives that threw inside game code.</summary>
+        internal static int WrecksRefused { get; private set; }
+
+        /// <summary>How many units this client has been told are wrecked.</summary>
+        internal static int HeldWreckedUnits => destruction.WreckedUnitCount;
+
         /// <summary>Repositioned per key; see <c>ApplyWeaponLights</c>.</summary>
         private static Transform? lightAnchor;
 
@@ -642,6 +742,8 @@ namespace PBAndJ.Mod.Net
                 var target = new Target(track, unit.combatView.view.transform)
                 {
                     Unit = unit,
+                    Name = persistent.nameInternal.s,
+                    Visuals = unit.combatView.view.visualManager,
                 };
                 targets.Add(target);
                 if (watches.Count > 0 && watches[watches.Count - 1].Id == unit.id.id)
@@ -1757,6 +1859,7 @@ namespace PBAndJ.Mod.Net
                 ApplyPose(target);
                 ApplyUnitLights(target);
                 ApplyMelees(target);
+                ApplyDestruction(target);
             }
 
             // After the transform and pose writes, so a unit revealed this frame
@@ -1772,6 +1875,14 @@ namespace PBAndJ.Mod.Net
 
             if (finished)
             {
+                // Before Stop, and only on the natural finish. A part wrecked a
+                // tenth of a second before the window ends has ramped a fifth of
+                // the way there, and without this it would sit half-dissolved
+                // through a planning phase that lasts minutes. An aborted window
+                // deliberately skips this and converges on the next snapshot
+                // instead — there is no reason to believe a fault means the turn
+                // is over.
+                ApplySettled(destruction.SettleWindow());
                 Stop();
             }
         }
@@ -2011,6 +2122,355 @@ namespace PBAndJ.Mod.Net
             if (!anyActive)
             {
                 ClearShockwave(unit);
+            }
+        }
+
+        /// <summary>
+        /// Ramps this unit's destroyed parts to where the cursor says they are.
+        /// M15.
+        /// </summary>
+        /// <remarks>
+        /// A transcription of <c>CombatReplayHelper.ApplyTimeToUnit:1288-1303</c>
+        /// with one deliberate addition and one deliberate omission.
+        /// <para>
+        /// <b>The addition is the burst</b>, fired on the frame the cursor
+        /// crosses a part's destruction time. Vanilla's replay never fires it
+        /// and cannot — <c>ReplayUnit.keyframesDestructions</c> is written and
+        /// read nowhere — so transcribing vanilla faithfully would under-deliver
+        /// here. 🔑 <b>Vanilla's replay is scrub parity; a client's playback is
+        /// its live view</b>, and on a host the burst comes from
+        /// <c>CombatPartWreckingSystem.Execute:105</c> as the part is wrecked.
+        /// <c>UnitVisualUtility.OnSocketDestruction</c> is public and static, so
+        /// this is the game's own call rather than a reimplementation of it.
+        /// </para>
+        /// <para>
+        /// <b>The omission is <c>ReplaceDestructionProgress</c>.</b> Vanilla uses
+        /// that component purely as its change guard; the guard lives in
+        /// <see cref="DestructionState.ShouldDrive"/> instead, so writing it too
+        /// would be a second copy of one fact — and the one thing a client must
+        /// not do here is start writing part state.
+        /// </para>
+        /// <para>
+        /// ⚠️ Integrity is zeroed on a part's <i>first</i> drive and the order
+        /// matters: <c>OnSocketDestructionChange</c> ends by re-applying the
+        /// socket's <b>stored</b> integrity, defaulting to <c>1f</c>
+        /// (<c>UnitVisualManager.cs:1755</c>). Drive the dissolve without zeroing
+        /// first and it renders over a part that still reads pristine — which on
+        /// a tank, whose sockets may ship <c>destructionShaderEffect</c> false
+        /// (<c>UnitVisualManagerSimple.cs:596</c>), can be the difference between
+        /// a visible change and none at all.
+        /// </para>
+        /// <para>
+        /// ⚠️ <b>Double-drive tripwire.</b> <c>EquipmentDestructionAnimationSystem</c>
+        /// is inert on a client only because nothing replaces
+        /// <c>combat.simulationTime</c> and no part carries a
+        /// <c>DestructionTime</c> component there. Anything that later sets part
+        /// <c>DestructionTime</c> client-side wakes that system and it will fight
+        /// this drive.
+        /// </para>
+        /// </remarks>
+        /// <summary>
+        /// Takes a snapshot's wrecked-part sets and settles what it may. M15.
+        /// </summary>
+        /// <remarks>
+        /// Called from the bridge's snapshot apply, which is where the host's
+        /// authority over part state lands. Everything it settles here is a part
+        /// whose destruction has no moment left in any window this client can
+        /// still play — one it was already told about, or one the unit spawned
+        /// with — so applying it on arrival is the whole point rather than a
+        /// compromise.
+        /// </remarks>
+        internal static void ReceiveDestruction(IReadOnlyList<UnitSnapshot> snapshot)
+        {
+            ApplySettled(destruction.Receive(snapshot));
+        }
+
+        /// <summary>
+        /// Plays one unit's own wreck visual, or undoes it. M15 §3.1.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 <b>The whole of §3.1 is this call, and the point is what it does
+        /// NOT do.</b> The obvious implementation — mirror the host's
+        /// <c>isWrecked</c> onto the persistent entity and let the game's own
+        /// reactive systems play the effect — buys an explosion at the price of
+        /// <c>CombatUnitWreckingSystem</c>'s entire cascade: a <b>serialized</b>
+        /// <c>unitFrameDefects</c> increment (<c>:74</c>),
+        /// <c>DestroyAllActions</c> (<c>:70</c>), a scenario-state poke
+        /// (<c>:108</c>), and for a player-owned unit a <b>modal pause dialog</b>
+        /// (<c>:84</c>) raised mid-playback on a UI with no view stack. It would
+        /// also wake <c>CombatUnitDestructionEffectSystem</c>, whose debris are
+        /// real projectile entities that a client never moves or expires —
+        /// thirty frozen fragments at the unit's core, per wreck.
+        /// <para>
+        /// <c>OnUnitDestruction</c> is the one line of that cascade we want, it
+        /// is public on <c>IUnitVisualManager</c>, and it is what actually draws
+        /// the wreck: pooled explosion FX and the <c>tank_destruction_full</c> /
+        /// <c>mech_destruction_full</c> audio. So it is called directly, exactly
+        /// as §3.2 drives the dissolve without adding a part's <c>Wrecked</c>
+        /// component. <b>State belongs to the host; this is a picture of it.</b>
+        /// </para>
+        /// <para>
+        /// Both calls are self-guarded on the manager's own <c>destroyedLast</c>
+        /// flag, so a repeat is free and the pair is a true toggle — which is
+        /// what makes un-wrecking expressible at all
+        /// (<c>UnitVisualManager.cs:2016-2023</c>).
+        /// </para>
+        /// <para>
+        /// ⚠️ Vanilla gates the visual on <c>!isHidden</c> (<c>:62</c>) and so do
+        /// we. A wreck played on a hidden unit would draw an explosion over
+        /// empty ground — and the game's own path has the same blind spot in the
+        /// other direction, so this is parity rather than an improvement.
+        /// </para>
+        /// </remarks>
+        private static void DriveWreck(IUnitVisualManager visuals, bool hidden, bool wrecked)
+        {
+            if (wrecked)
+            {
+                if (!hidden)
+                {
+                    visuals.OnUnitDestruction();
+                }
+                return;
+            }
+            visuals.OnUnitRevival();
+        }
+
+        /// <summary>
+        /// Forgets every part, for a combat or a session that has ended. M15.
+        /// </summary>
+        /// <remarks>
+        /// Separate from <see cref="Stop"/>, which runs between turns of the same
+        /// fight and must not discard the wrecked set — that set is what keeps a
+        /// blown-off limb missing through the planning phase.
+        /// </remarks>
+        internal static void ClearDestruction()
+        {
+            destruction.Clear();
+            DestructionsPlayed = 0;
+            DestructionsRefused = 0;
+            DestructionsSettled = 0;
+            WrecksPlayed = 0;
+            WrecksSettled = 0;
+            WrecksRefused = 0;
+        }
+
+        /// <summary>
+        /// Drives parts straight to their settled state, with no ramp. M15.
+        /// </summary>
+        /// <remarks>
+        /// Resolves units by name against the live combat group rather than
+        /// against <see cref="targets"/>, and that is the point of the method
+        /// existing at all: the units needing this most are the ones with no
+        /// track — destroyed at capture time, boneless, or hidden when the turn
+        /// began — and a targets-only walk would miss every one of them.
+        /// <para>
+        /// The lookup is built once per call and only when there is something to
+        /// place, so a turn that settles nothing — the overwhelming majority —
+        /// walks no entities at all.
+        /// </para>
+        /// </remarks>
+        private static void ApplySettled(DestructionUpdate update)
+        {
+            if (update.IsEmpty || !IDUtility.IsGameState("combat"))
+            {
+                return;
+            }
+
+            var byName = new Dictionary<string, IUnitVisualManager>();
+            var hiddenByName = new Dictionary<string, bool>();
+            foreach (var unit in Contexts.sharedInstance.combat.GetGroup(CombatMatcher.UnitTag).GetEntities())
+            {
+                if (!unit.hasCombatView || unit.combatView.view == null
+                    || unit.combatView.view.visualManager == null)
+                {
+                    continue;
+                }
+                var persistent = IDUtility.GetLinkedPersistentEntity(unit);
+                if (persistent == null || !persistent.hasNameInternal)
+                {
+                    continue;
+                }
+                byName[persistent.nameInternal.s] = unit.combatView.view.visualManager;
+                hiddenByName[persistent.nameInternal.s] = unit.isHidden;
+            }
+
+            // M15 section 3.1, and BEFORE the parts below. A unit settling into
+            // its wreck deactivates its own effects (UnitVisualManagerSimple's
+            // OnUnitDestruction ends on SetEffectsActive(false)), so driving the
+            // parts first would spend the property-block refreshes on visuals
+            // about to be switched off.
+            var wrecks = update.Units;
+            for (var i = 0; i < wrecks.Count; i++)
+            {
+                var wreck = wrecks[i];
+                if (string.IsNullOrEmpty(wreck.Unit)
+                    || !byName.TryGetValue(wreck.Unit!, out var unitVisuals))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    hiddenByName.TryGetValue(wreck.Unit!, out var hidden);
+                    DriveWreck(unitVisuals, hidden, wreck.Wrecked);
+                    WrecksSettled++;
+                }
+                catch (Exception e)
+                {
+                    WrecksRefused++;
+                    Debug.LogWarning(
+                        "[pb-and-j] settling the wreck of '" + wreck.Unit + "' was refused: "
+                            + e.Message);
+                }
+            }
+
+            var drives = update.Parts;
+            for (var i = 0; i < drives.Count; i++)
+            {
+                var drive = drives[i];
+                if (string.IsNullOrEmpty(drive.Unit)
+                    || !byName.TryGetValue(drive.Unit!, out var visuals))
+                {
+                    continue;
+                }
+
+                // No burst on this path. A settled part either happened in a
+                // window this client never saw or was already destroyed when the
+                // unit spawned; either way there is no moment to explode at, and
+                // firing one would put a fresh detonation on a stump.
+                try
+                {
+                    // Integrity unconditionally rather than on a first drive,
+                    // because this path also runs the un-wrecking direction and
+                    // has to be able to put a revived part back to pristine.
+                    visuals.OnIntegrityChange(drive.Socket, drive.Wrecked ? 0f : 1f);
+                    visuals.OnSocketDestructionChange(drive.Socket, drive.Wrecked ? 1f : 0f);
+                    if (drive.Wrecked)
+                    {
+                        // Recorded so a window's ramp does not re-drive a part
+                        // already at rest. Deliberately NOT recorded on the
+                        // un-wrecking side: Receive drops that entry on purpose,
+                        // so that a part destroyed a second time reads as a first
+                        // drive again and gets its integrity zeroed.
+                        destruction.ShouldDrive(drive.Unit, drive.Socket, 1f, out _);
+                    }
+                    DestructionsSettled++;
+                }
+                catch (Exception e)
+                {
+                    DestructionsRefused++;
+                    Debug.LogWarning(
+                        "[pb-and-j] settling socket '" + drive.Socket + "' was refused: "
+                            + e.Message);
+                }
+            }
+        }
+
+        private static void ApplyDestruction(Target target)
+        {
+            // M15 §3.1, ahead of the parts and outside their early return. A
+            // unit can be wrecked with nothing in its part set — a composite
+            // member, or one whose parts were all gone already — and gating the
+            // wreck on having parts would lose exactly those.
+            if (target.Visuals != null
+                && destruction.TryTakeWreck(target.Name, cursorPrevious, cursor))
+            {
+                try
+                {
+                    // isHidden read live rather than off the snapshot, because
+                    // the visibility watch may have revealed this unit part-way
+                    // through the very window we are playing.
+                    var hidden = target.Unit != null && target.Unit.isHidden;
+                    DriveWreck(target.Visuals, hidden, true);
+                    WrecksPlayed++;
+                }
+                catch (Exception e)
+                {
+                    WrecksRefused++;
+                    Debug.LogWarning(
+                        "[pb-and-j] wreck of '" + target.Name + "' was refused: " + e.Message);
+                }
+            }
+
+            var parts = destruction.PartsFor(target.Name);
+            if (parts.Count == 0)
+            {
+                return;
+            }
+
+            var visuals = target.Visuals;
+            if (visuals == null)
+            {
+                return;
+            }
+
+            for (var i = 0; i < parts.Count; i++)
+            {
+                var part = parts[i];
+                var progress = DestructionRamp.Progress(part.Time, cursor);
+
+                // The crossing edge, tested before the guard below: the burst is
+                // a moment rather than a value, so a part whose whole ramp falls
+                // between two frames must still get its explosion. Same ordering
+                // rule stage A had to move into Core as ActionFor, and stage B
+                // was bitten by.
+                var crossed = ReplayAssetPlayback.CrossedDuring(
+                    part.Time, part.Time, cursorPrevious, cursor);
+
+                // Nothing has happened to this part yet at this cursor, and
+                // saying so is not the same as saying zero. Driving a zero would
+                // register a first drive and zero the socket's integrity, which
+                // is a visible change on a part the window has not reached — the
+                // causality error this whole design exists to avoid, in
+                // miniature.
+                if (progress <= 0f && !crossed)
+                {
+                    continue;
+                }
+
+                if (!destruction.ShouldDrive(target.Name, part.Socket, progress, out var first)
+                    && !crossed)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (first)
+                    {
+                        visuals.OnIntegrityChange(part.Socket, 0f);
+                    }
+                    if (crossed)
+                    {
+                        DestructionsPlayed++;
+                        // audioUsed mirrors the game's own argument at
+                        // CombatPartWreckingSystem:105 — a part burst is silent
+                        // on a unit that is itself being wrecked, because the
+                        // unit's own destruction carries the sound. The flag is
+                        // read off this machine, where it is the client's honest
+                        // answer rather than the host's.
+                        var linked = target.Unit != null
+                            ? IDUtility.GetLinkedPersistentEntity(target.Unit)
+                            : null;
+                        UnitVisualUtility.OnSocketDestruction(
+                            visuals, part.Socket, linked == null || !linked.isWrecked);
+                    }
+                    visuals.OnSocketDestructionChange(part.Socket, progress);
+                }
+                catch (Exception e)
+                {
+                    // The guard was already told this value, and the visual
+                    // never got it. Mid-ramp that self-heals on the next frame,
+                    // which is precisely why the resting case has to be handled
+                    // deliberately: at progress 1 the value stops moving, so a
+                    // poisoned guard would refuse every retry for ever and the
+                    // part would simply never dissolve.
+                    destruction.Forget(target.Name, part.Socket);
+                    DestructionsRefused++;
+                    Debug.LogWarning(
+                        "[pb-and-j] destruction of socket '" + part.Socket
+                            + "' was refused: " + e.Message);
+                }
             }
         }
 

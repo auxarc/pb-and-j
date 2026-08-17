@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace PBAndJ.Core.Net
 {
     /// <summary>
@@ -21,6 +23,49 @@ namespace PBAndJ.Core.Net
     }
 
     /// <summary>
+    /// One of a unit's parts that the host has wrecked, and when.
+    /// </summary>
+    /// <remarks>
+    /// The socket is the join key, exactly as it is for
+    /// <see cref="UnitLightKey"/>: the client's visual manager is keyed by
+    /// socket name and an unknown one no-ops safely, so nothing here has to
+    /// survive as an id across two processes.
+    /// <para>
+    /// ⚠️ Built by walking <c>EquipmentUtility.GetPartsInUnit</c> for
+    /// <c>isWrecked</c> at capture, and deliberately <b>not</b> from
+    /// <c>ReplayUnit.keyframesDestructions</c>, which looks purpose-built and is
+    /// not: it is written at <c>CombatReplayHelper.cs:1914</c> and read nowhere
+    /// in the shipped game, and it carries a recorder defect besides —
+    /// dependency-wrecked parts record the <i>triggering</i> part rather than
+    /// themselves (<c>EquipmentUtility.cs:3116-3117</c>, <c>:3126-3128</c> both
+    /// pass <c>partHit</c>).
+    /// </para>
+    /// <para>
+    /// <see cref="Time"/> is on the host's absolute combat clock, and a negative
+    /// value is a real state rather than an absence: a unit spawning with an
+    /// already-destroyed part is stamped <c>-100</c>
+    /// (<c>UnitUtilities.cs:2041</c>), while every in-combat wreck takes
+    /// <c>combat.simulationTime</c>, which never goes below zero. That sign is
+    /// what lets a client tell "wrecked before the fight" from "wrecked in a
+    /// window I might still play", with no window bounds to consult.
+    /// </para>
+    /// </remarks>
+    public readonly struct PartDestruction
+    {
+        public PartDestruction(string? socket, float time)
+        {
+            Socket = socket;
+            Time = time;
+        }
+
+        /// <summary>The mount socket — <c>part.partParentUnit.socket</c>.</summary>
+        public string? Socket { get; }
+
+        /// <summary>When it was wrecked, on the host's absolute clock.</summary>
+        public float Time { get; }
+    }
+
+    /// <summary>
     /// One unit's authoritative state at the end of an executed turn, as the
     /// host saw it. Hard-set on a client.
     /// </summary>
@@ -40,41 +85,57 @@ namespace PBAndJ.Core.Net
     /// being exactly what host authority exists to eliminate.
     /// </para>
     /// <para>
-    /// Held at position / rotation / facing / integrity / death on purpose. Part
-    /// states, cooldowns, status effects, in-flight projectiles and terrain
-    /// destruction are all out of scope: keyframe streaming is the real answer to
-    /// wanting them, and adding fields until this is a save file is the failure
-    /// mode to avoid.
+    /// Held at position / rotation / facing / integrity / visibility, plus the
+    /// wrecked-part set M15 added. Cooldowns, status effects, in-flight
+    /// projectiles and terrain destruction remain out of scope: keyframe
+    /// streaming is the real answer to wanting them, and adding fields until
+    /// this is a save file is the failure mode to avoid.
+    /// </para>
+    /// <para>
+    /// 🐛 <b>It used to carry <c>IsDead</c> and <c>DeathTime</c>, and those were
+    /// dead wire fields for their whole life.</b> <c>DeathStatus</c> is a
+    /// <i>pilot</i> component: its only runtime writer guards
+    /// <c>isPilotTag</c> (<c>PilotUtility.DeclareDeath:2717</c>) and its only
+    /// other writer is the pilot branch of the save loader
+    /// (<c>DataManagerSave.cs:2129</c>). A unit persistent entity never has one,
+    /// so capture read a constant false and the client's <c>ReplaceDeathStatus</c>
+    /// was unreachable on real data. Removed in the same break that added the
+    /// parts, rather than left as a field that documents a fact about pilots in
+    /// the middle of a type about units.
     /// </para>
     /// </remarks>
     public readonly struct UnitSnapshot
     {
+        private static readonly PartDestruction[] NoParts = new PartDestruction[0];
+
         public UnitSnapshot(
             string? name,
             Vec3 position,
             Vec4 rotation,
             Vec3 facing,
             float integrity,
-            bool isDead,
-            float deathTime,
             bool isHidden = false,
             bool isHiddenDetectable = false,
             bool isDeployed = true,
             bool hasArrivalTime = false,
-            float arrivalTime = 0f)
+            float arrivalTime = 0f,
+            bool isWrecked = false,
+            float wreckedAt = 0f,
+            IReadOnlyList<PartDestruction>? wreckedParts = null)
         {
             Name = name;
             Position = position;
             Rotation = rotation;
             Facing = facing;
             Integrity = integrity;
-            IsDead = isDead;
-            DeathTime = deathTime;
             IsHidden = isHidden;
             IsHiddenDetectable = isHiddenDetectable;
             IsDeployed = isDeployed;
             HasArrivalTime = hasArrivalTime;
             ArrivalTime = arrivalTime;
+            IsWrecked = isWrecked;
+            WreckedAt = wreckedAt;
+            WreckedParts = wreckedParts ?? NoParts;
         }
 
         /// <summary>The persistent entity's internal name — the join key.</summary>
@@ -84,10 +145,6 @@ namespace PBAndJ.Core.Net
         public Vec4 Rotation { get; }
         public Vec3 Facing { get; }
         public float Integrity { get; }
-        public bool IsDead { get; }
-
-        /// <summary>Meaningful only when <see cref="IsDead"/>.</summary>
-        public float DeathTime { get; }
 
         /// <summary>
         /// Whether the host is drawing this unit at all.
@@ -192,6 +249,97 @@ namespace PBAndJ.Core.Net
         /// </para>
         /// </remarks>
         public float ArrivalTime { get; }
+
+        /// <summary>
+        /// Whether the host has wrecked this unit itself. M15 §3.1.
+        /// </summary>
+        /// <remarks>
+        /// A different question from every part being wrecked, and from
+        /// <see cref="Integrity"/> reaching zero. Only the <c>Wrecked</c>
+        /// component drives the wreck visual, and a client can never derive it:
+        /// it is set exclusively during damage resolution
+        /// (<c>EquipmentUtility:3244</c>), which a client does not run.
+        /// <para>
+        /// ⚠️ The client drives <c>IUnitVisualManager.OnUnitDestruction()</c>
+        /// from this and <b>never sets the component</b>, for a much sharper
+        /// reason than the parts have. The flag's own reactive system,
+        /// <c>CombatUnitWreckingSystem</c>, does far more than play an effect:
+        /// it increments <c>unitFrameDefects</c>, which is <b>serialized</b>
+        /// (<c>DataHelperSaveSerialization.cs:480</c>); it calls
+        /// <c>DestroyAllActions</c>; it pokes scenario state with
+        /// <c>OnUnitDisabled</c>; and for a player-owned unit it raises a
+        /// <b>modal pause dialog</b> (<c>CIViewDialogConfirmation.ins.Open</c>)
+        /// mid-playback, on a UI with no view stack. Setting the flag to buy an
+        /// explosion would be paying all of that.
+        /// </para>
+        /// <para>
+        /// Not sent as a wrecked-parts-are-all-present inference either. A unit
+        /// can be wrecked while parts survive, and parts can all be gone on a
+        /// unit the host has not wrecked; the two facts are set in different
+        /// places and only one of them draws the explosion.
+        /// </para>
+        /// </remarks>
+        public bool IsWrecked { get; }
+
+        /// <summary>
+        /// When it was wrecked, on the host's absolute clock. Meaningful only
+        /// when <see cref="IsWrecked"/>.
+        /// </summary>
+        /// <remarks>
+        /// Same sign convention as <see cref="PartDestruction.Time"/>: negative
+        /// means "no moment in this fight to wait for", so the client plays the
+        /// wreck at once instead of holding it for a window. That covers a unit
+        /// that spawned wrecked and a unit whose moment the host could not name.
+        /// <para>
+        /// ⚠️ <b>Derived host-side, because the game stores no unit-level
+        /// destruction time.</b> It is the newest <see cref="WreckedParts"/>
+        /// stamp, which is exact rather than approximate: wrecking a unit wrecks
+        /// every part it still has, at one instant, in the same loop that sets
+        /// the flag (<c>EquipmentUtility.cs:3247-3255</c>). A unit that reached
+        /// the end with every part already gone was wrecked when the last one
+        /// went, which is the same number. Kept on the wire rather than
+        /// recomputed on the client so that improving the derivation — a patch
+        /// recording the real instant — changes only the host.
+        /// </para>
+        /// </remarks>
+        public float WreckedAt { get; }
+
+        /// <summary>
+        /// Every part of this unit the host currently has wrecked. M15.
+        /// </summary>
+        /// <remarks>
+        /// <b>The live cumulative set, never a per-turn delta</b>, and that is
+        /// the whole design rather than a convenience. The game's own replay
+        /// walks the live wrecked set on every frame it draws, which silently
+        /// covers three cases a delta loses: parts wrecked in earlier turns,
+        /// parts already wrecked when the unit spawned, and a view rebuild —
+        /// the progress dictionary lives on the view component and resets with
+        /// it. It also makes <b>un-wrecking</b> expressible at all
+        /// (<c>CombatUnitRevive.cs:16-49</c>): a socket that leaves this list is
+        /// a removal instruction, where an add-only wire would leave a revived
+        /// part dissolved for the rest of the fight.
+        /// <para>
+        /// Being state rather than an event, it also serves as the convergence
+        /// backstop for a client that never played the window the wreck
+        /// happened in — and that is not a corner case but the wreck-heavy one.
+        /// The host sends no keyframes at all when a turn has no surviving
+        /// tracked unit (<c>HostSession.cs:1959</c>), which is exactly a
+        /// mutual-destruction final volley. Ordering is what makes it safe: the
+        /// host sends the snapshot before the keyframes from one site, over TCP,
+        /// and effects execute in order, so this always lands before the first
+        /// playback frame of the turn it describes.
+        /// </para>
+        /// <para>
+        /// ⚠️ The client drives the <b>visual</b> from this and never the
+        /// <c>Wrecked</c> component. Adding that component fires
+        /// <c>CombatPartWreckingSystem</c>, which writes
+        /// <c>integrityNormalized</c> and <c>barrierNormalized</c> to zero — and
+        /// <c>EquipmentUtility.RefreshFrameIntegrityFromParts</c> sums exactly
+        /// those into <c>unitFrameIntegrity</c>, which is both a digest input
+        /// and a saved field. State belongs to the host; this is a picture of it.
+        /// </para>
+        /// </remarks>
+        public IReadOnlyList<PartDestruction> WreckedParts { get; }
 
         /// <summary>
         /// Projects onto the narrower type the digest is defined over.

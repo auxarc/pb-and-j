@@ -219,6 +219,26 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public const int MaxMeleesPerUnit = 8;
 
+        /// <summary>
+        /// Cap on wrecked parts carried on one unit's snapshot record. M15.
+        /// </summary>
+        /// <remarks>
+        /// A unit's part count is fixed by its blueprint's socket table and runs
+        /// to single figures, so 32 is roughly four times the largest real
+        /// answer. Unlike the two lists above this needs no window-slice
+        /// precondition — the set is the unit's live wrecked parts, which is
+        /// bounded by how many parts it has rather than by how long the fight
+        /// has run, and it therefore cannot climb.
+        /// <para>
+        /// The worst case still has to be affordable, because the snapshot is one
+        /// blob: 128 units × 32 parts × (a short socket string plus a float)
+        /// stays comfortably inside <see cref="PbjWriter.MaxBytesLength"/>, which
+        /// <b>throws</b> rather than truncates and would take every effect queued
+        /// behind it (the failure M11e paid for).
+        /// </para>
+        /// </remarks>
+        public const int MaxWreckedPartsPerUnit = 32;
+
         /// <summary>Longest pool key an asset track may carry, in characters.</summary>
         /// <remarks>
         /// Counted in characters and set well below
@@ -762,20 +782,37 @@ namespace PBAndJ.Core.Net
             WriteVec4(writer, unit.Rotation);
             WriteVec3(writer, unit.Facing);
             writer.WriteSingle(unit.Integrity);
-            writer.WriteBool(unit.IsDead);
-            writer.WriteSingle(unit.DeathTime);
             writer.WriteBool(unit.IsHidden);
             writer.WriteBool(unit.IsHiddenDetectable);
             writer.WriteBool(unit.IsDeployed);
             writer.WriteBool(unit.HasArrivalTime);
             writer.WriteSingle(unit.ArrivalTime);
+            writer.WriteBool(unit.IsWrecked);
+            writer.WriteSingle(unit.WreckedAt);
+
+            // Capped by truncation rather than by faulting the record, and the
+            // asymmetry is deliberate: a snapshot is a correction, so refusing to
+            // send one because a unit somehow grew a thirty-third wrecked part
+            // would cost that unit its position and visibility too. The cap is
+            // four times the largest real answer, so reaching it means the input
+            // is already wrong.
+            var parts = unit.WreckedParts;
+            var count = parts.Count < MaxWreckedPartsPerUnit
+                ? parts.Count
+                : MaxWreckedPartsPerUnit;
+            writer.WriteInt32(count);
+            for (var i = 0; i < count; i++)
+            {
+                writer.WriteString(parts[i].Socket);
+                writer.WriteSingle(parts[i].Time);
+            }
         }
 
         // Every field is read into its own local rather than into the argument
         // list. C# does evaluate arguments left to right, so the older nested
         // form was correct — but "correct because of an evaluation-order rule"
         // is not what a wire decoder should rest on, and this record now has
-        // twelve fields rather than seven.
+        // thirteen fields rather than seven.
         private static UnitSnapshot ReadUnitSnapshot(PbjReader reader)
         {
             var name = reader.ReadString();
@@ -783,16 +820,28 @@ namespace PBAndJ.Core.Net
             var rotation = ReadVec4(reader);
             var facing = ReadVec3(reader);
             var integrity = reader.ReadSingle();
-            var isDead = reader.ReadBool();
-            var deathTime = reader.ReadSingle();
             var isHidden = reader.ReadBool();
             var isHiddenDetectable = reader.ReadBool();
             var isDeployed = reader.ReadBool();
             var hasArrivalTime = reader.ReadBool();
             var arrivalTime = reader.ReadSingle();
+            var isWrecked = reader.ReadBool();
+            var wreckedAt = reader.ReadSingle();
+
+            // ReadCount, not a bare ReadInt32: a peer must not be able to make us
+            // allocate an arbitrary array by claiming a large one.
+            var partCount = ReadCount(reader, MaxWreckedPartsPerUnit, "wrecked part");
+            var parts = new PartDestruction[partCount];
+            for (var i = 0; i < partCount; i++)
+            {
+                var socket = reader.ReadString();
+                parts[i] = new PartDestruction(socket, reader.ReadSingle());
+            }
+
             return new UnitSnapshot(
-                name, position, rotation, facing, integrity, isDead, deathTime,
-                isHidden, isHiddenDetectable, isDeployed, hasArrivalTime, arrivalTime);
+                name, position, rotation, facing, integrity,
+                isHidden, isHiddenDetectable, isDeployed, hasArrivalTime, arrivalTime,
+                isWrecked, wreckedAt, parts);
         }
 
         /// <summary>

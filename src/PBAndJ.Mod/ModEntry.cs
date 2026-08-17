@@ -70,6 +70,7 @@ namespace PBAndJ.Mod
             Net.VfxProbeGlue.RegisterConsoleCommands();
             Net.BeamInjectGlue.RegisterConsoleCommands();
             Net.StageCProbeGlue.RegisterConsoleCommands();
+            Net.DestructProbeGlue.RegisterConsoleCommands();
         }
     }
 

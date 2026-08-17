@@ -162,6 +162,86 @@ namespace PBAndJ.Mod.Net
         }
 
         /// <summary>
+        /// How many UNITS this machine's own ECS says are wrecked. M15 §3.1.
+        /// </summary>
+        /// <remarks>
+        /// A different question from the part count below, and asked separately
+        /// because the two can disagree in both directions: a unit is wrecked
+        /// while parts survive, and every part of a unit can be gone without the
+        /// unit itself being wrecked. Only this one draws the explosion.
+        /// </remarks>
+        private static string DescribeWreckedUnitsInEcs()
+        {
+            if (!IDUtility.IsGameState("combat"))
+            {
+                return "n/a";
+            }
+
+            var wrecked = 0;
+            foreach (var unit in Contexts.sharedInstance.combat
+                .GetGroup(CombatMatcher.UnitTag).GetEntities())
+            {
+                var persistent = IDUtility.GetLinkedPersistentEntity(unit);
+                if (persistent != null && persistent.isWrecked)
+                {
+                    wrecked++;
+                }
+            }
+            return wrecked.ToString(CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// How many parts this machine's own ECS says are wrecked. M15.
+        /// </summary>
+        /// <remarks>
+        /// The host's authoritative figure, and the one a client's
+        /// <c>wreckedHeld</c> has to match. Read live rather than counted at
+        /// capture on purpose: a counter incremented on the send path would
+        /// agree with itself by construction, where this walks the same
+        /// equipment set the capture walks and can therefore disagree with it.
+        /// <para>
+        /// Reads <c>n/a</c> outside combat rather than zero, because zero here is
+        /// a real and interesting answer — an unblemished fight — and a reading
+        /// that cannot tell "nothing is wrecked" from "there is nothing to ask"
+        /// is worse than no reading.
+        /// </para>
+        /// </remarks>
+        private static string DescribeWreckedInEcs()
+        {
+            if (!IDUtility.IsGameState("combat"))
+            {
+                return "n/a";
+            }
+
+            var parts = 0;
+            var units = 0;
+            foreach (var unit in Contexts.sharedInstance.combat
+                .GetGroup(CombatMatcher.UnitTag).GetEntities())
+            {
+                var persistent = IDUtility.GetLinkedPersistentEntity(unit);
+                if (persistent == null)
+                {
+                    continue;
+                }
+
+                var wrecked = 0;
+                foreach (var part in EquipmentUtility.GetPartsInUnit(persistent))
+                {
+                    if (part != null && part.isWrecked)
+                    {
+                        wrecked++;
+                    }
+                }
+                if (wrecked > 0)
+                {
+                    units++;
+                    parts += wrecked;
+                }
+            }
+            return parts + " on " + units + " unit(s)";
+        }
+
+        /// <summary>
         /// The highest <c>reactionTimeLast</c> across the fight's light
         /// managers. M14 stage C.
         /// </summary>
@@ -493,6 +573,44 @@ namespace PBAndJ.Mod.Net
                     + " meleesPlayed=" + KeyframePlayer.MeleesPlayed
                     + " meleesRefused=" + KeyframePlayer.MeleesRefused
                     + " reactionTimeLast=" + DescribeReactionTime(),
+                // M15. The two counters answer different questions and both are
+                // needed. destructionsPlayed counts bursts fired at the crossing
+                // edge during a window, so it should track the parts the host
+                // wrecked THIS turn. destructionsSettled counts parts put
+                // straight to fully-dissolved outside a window — the backstop —
+                // so a steady non-zero there across quiet turns means windows
+                // are not arriving, not that anything is being destroyed.
+                //
+                // ⚠️ Neither proves anything was SEEN, and here the gap is
+                // wider than usual: the dissolve is consumed only where a socket
+                // visual ships destructionShaderEffect true, which is content
+                // and may be false on exactly the tanks this was built for. The
+                // eye test is not optional, and it has to include a tank.
+                "destructionsPlayed=" + KeyframePlayer.DestructionsPlayed
+                    + " destructionsSettled=" + KeyframePlayer.DestructionsSettled
+                    + " destructionsRefused=" + KeyframePlayer.DestructionsRefused,
+                // 🔑 THE COMPARISON THAT MATTERS, and it is a cross-machine one:
+                // wreckedEcs is this machine's own truth, so it is the real
+                // figure on a HOST and always zero on a client — a client
+                // deliberately never sets the Wrecked component. wreckedHeld is
+                // what a client was told, so it is the real figure there and
+                // always zero on a host. The host's wreckedEcs must equal the
+                // client's wreckedHeld. Nothing else can catch them disagreeing:
+                // DestructionProgress is not a digest input (StateDigest.cs:104),
+                // so both machines read clean while showing different wreckage.
+                "wreckedEcs=" + DescribeWreckedInEcs()
+                    + " wreckedHeld=" + KeyframePlayer.HeldDestructions
+                    + " on " + KeyframePlayer.HeldDestructionUnits + " unit(s)",
+                // M15 §3.1, the unit's own wreck. wrecksPlayed lands at the
+                // crossing edge during a window; wrecksSettled covers the units
+                // that had no track to be driven through — hidden at turn start,
+                // or destroyed outright — so ⚠️ it is the SUM that should track
+                // the host's wreckedUnitsEcs, never wrecksPlayed alone.
+                "wrecksPlayed=" + KeyframePlayer.WrecksPlayed
+                    + " wrecksSettled=" + KeyframePlayer.WrecksSettled
+                    + " wrecksRefused=" + KeyframePlayer.WrecksRefused
+                    + " wreckedUnitsEcs=" + DescribeWreckedUnitsInEcs()
+                    + " wreckedUnitsHeld=" + KeyframePlayer.HeldWreckedUnits,
                 // The launch splash — logos, then the seizure warning. It sits
                 // OVER the main menu while the game already reports
                 // state=mainmenu, so a script that treats that state as "ready"
