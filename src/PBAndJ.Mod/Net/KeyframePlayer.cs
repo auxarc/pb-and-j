@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using PBAndJ.Core.Net;
 using PhantomBrigade;
+using PhantomBrigade.Combat;
 using PhantomBrigade.Combat.View;
 using PhantomBrigade.Data;
 using UnityEngine;
@@ -84,6 +85,18 @@ namespace PBAndJ.Mod.Net
             /// even though <c>ActionRecordingSystem:55</c> does not.
             /// </remarks>
             public UnitLightManager? Lights { get; set; }
+
+            /// <summary>
+            /// The unit itself, for the melee shockwave drive.
+            /// </summary>
+            /// <remarks>
+            /// The game's replay hands its own <c>CombatEntity</c> straight to
+            /// <c>MeleeUtility.CheckOverlapsWithShockwave</c>, which is what
+            /// selects whose trail moves — so this is the identity that matters,
+            /// not the recorded <c>unitCombatID</c>, which we deliberately do
+            /// not carry.
+            /// </remarks>
+            public CombatEntity? Unit { get; set; }
         }
 
         /// <summary>
@@ -457,6 +470,29 @@ namespace PBAndJ.Mod.Net
         /// </remarks>
         internal static int LightsNoManager { get; private set; }
 
+        /// <summary>
+        /// Reaction glows and melee swings the cursor crossed. M14 stage C.
+        /// </summary>
+        /// <remarks>
+        /// Both counted at the window edge, never per call, for the reason
+        /// <see cref="LightsFired"/> gives: the newest ping is re-stamped and a
+        /// live swing re-driven on every frame, so counting calls would report
+        /// the frame rate rather than the events.
+        /// <para>
+        /// ⚠️ A 1:1 match against the host still cannot prove either was SEEN.
+        /// <c>reactionDuration</c> defaults to 0.1 s
+        /// (<c>UnitLightManager.cs:45</c>), so a whole glow can fall between two
+        /// playback frames — the same sub-frame class stage B's counter caught,
+        /// and the reason the eye test is not optional here.
+        /// </para>
+        /// </remarks>
+        internal static int ReactionsPlayed { get; private set; }
+
+        internal static int MeleesPlayed { get; private set; }
+
+        /// <summary>Swings whose drive threw inside game code.</summary>
+        internal static int MeleesRefused { get; private set; }
+
         /// <summary>Repositioned per key; see <c>ApplyWeaponLights</c>.</summary>
         private static Transform? lightAnchor;
 
@@ -603,7 +639,10 @@ namespace PBAndJ.Mod.Net
                     continue;
                 }
 
-                var target = new Target(track, unit.combatView.view.transform);
+                var target = new Target(track, unit.combatView.view.transform)
+                {
+                    Unit = unit,
+                };
                 targets.Add(target);
                 if (watches.Count > 0 && watches[watches.Count - 1].Id == unit.id.id)
                 {
@@ -640,6 +679,9 @@ namespace PBAndJ.Mod.Net
             TrailsRefused = 0;
             LightsRefused = 0;
             LightsFired = 0;
+            ReactionsPlayed = 0;
+            MeleesPlayed = 0;
+            MeleesRefused = 0;
             LightsNoManager = 0;
             TimeSimOverwrites = 0;
 
@@ -741,22 +783,30 @@ namespace PBAndJ.Mod.Net
         private static void Dress(CombatEntity unit, Target target, UnitPoseTrack pose)
         {
             var visualManager = unit.combatView.view.visualManager;
+
+            // Above the bones early-return, not below it. Reaction pings and
+            // melee swings need neither bones nor a remap, and the game's own
+            // replay drives them for any unit with a light manager at all
+            // (CombatReplayHelper.cs:1245). Assigning these after the return
+            // would silently confine both features to units this machine can
+            // pose, which is a narrower set than the one the host recorded.
+            //
+            // Cached above the mech/tank fork for the same class of reason. Both
+            // visual managers implement GetLightManager (UnitVisualManager:1720
+            // and UnitVisualManagerSimple:516), so putting it after the tank
+            // early-return below would quietly give lights to mechs only.
+            target.Poses = pose;
+            target.Lights = visualManager != null ? visualManager.GetLightManager() : null;
+
             var bones = visualManager != null ? visualManager.GetRecordedBones() : null;
             if (bones == null || bones.Count == 0)
             {
                 return;
             }
 
-            target.Poses = pose;
             target.Bones = bones;
             target.Remap = PoseTracks.Remap(pose.Joints, NamesOf(bones));
             PosedUnits++;
-
-            // Cached above the mech/tank fork on purpose. Both visual managers
-            // implement GetLightManager (UnitVisualManager:1720 and
-            // UnitVisualManagerSimple:516), so putting this after the tank
-            // early-return below would quietly give weapon lights to mechs only.
-            target.Lights = visualManager!.GetLightManager();
 
             if (!unit.hasMechAnimationView)
             {
@@ -1481,6 +1531,31 @@ namespace PBAndJ.Mod.Net
             // unwind's SetActive calls on its own children.
             RestoreVisibility();
             Wake();
+            // Melee trails on the same argument as the effects below, and for a
+            // sharper reason: vanilla's turn-boundary clear lives in
+            // OnExecutionStart, which only a simulating host runs. A swing still
+            // active on the final frame is driven and then never cleared, so
+            // without this the trail hangs there through the whole planning
+            // phase.
+            for (var i = 0; i < targets.Count; i++)
+            {
+                var unit = targets[i].Unit;
+                if (unit == null || targets[i].Poses == null || targets[i].Poses!.Melees.Count == 0)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    ClearShockwave(unit);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning(
+                        "[pb-and-j] could not clear a melee shockwave: " + e.Message);
+                }
+            }
+
             // The effects last, and unconditionally. This is the sweep the whole
             // asset lifecycle rests on: a straddling projectile is still ACTIVE
             // at the window's end by construction, so nothing in the per-frame
@@ -1680,7 +1755,8 @@ namespace PBAndJ.Mod.Net
                 }
 
                 ApplyPose(target);
-                ApplyWeaponLights(target);
+                ApplyUnitLights(target);
+                ApplyMelees(target);
             }
 
             // After the transform and pose writes, so a unit revealed this frame
@@ -1741,10 +1817,10 @@ namespace PBAndJ.Mod.Net
         /// throw here would cost the rest of the turn's playback.
         /// </para>
         /// </remarks>
-        private static void ApplyWeaponLights(Target target)
+        private static void ApplyUnitLights(Target target)
         {
             var poses = target.Poses;
-            if (poses == null || poses.Lights.Count == 0)
+            if (poses == null || (poses.Lights.Count == 0 && poses.Reactions.Count == 0))
             {
                 return;
             }
@@ -1832,7 +1908,156 @@ namespace PBAndJ.Mod.Net
                 }
             }
 
-            manager.OnTimeChange(cursor);
+            // Ahead of OnTimeChange, exactly as the game's own replay orders
+            // them (CombatReplayHelper.cs:1247-1269): the ping stamps the time
+            // the glow started, and OnTimeChange is what animates it from there.
+            // Skipped entirely when nothing has been pinged yet — vanilla never
+            // reaches OnReactionPing in that case either, and a stamp we
+            // invented would be a claim rather than a silence.
+            var ping = ReactionPings.LatestAtOrBefore(poses.Reactions, cursor);
+            if (ping.HasValue)
+            {
+                for (var i = 0; i < poses.Reactions.Count; i++)
+                {
+                    if (lightsCursorPrevious < poses.Reactions[i]
+                        && poses.Reactions[i] <= cursor)
+                    {
+                        ReactionsPlayed++;
+                    }
+                }
+
+                manager.OnReactionPing(ping.Value);
+            }
+
+            // Wrapped, and only worth wrapping now that the reaction branch can
+            // arm. OnReactionAnimation dereferences reactionAmbient and
+            // reactionGlow with no null check while its caller guards only
+            // reactionHolder (UnitLightManager.cs:137, :191-192) — the class's
+            // own OnFaction null-checks both, which is the tell that a rig may
+            // leave them unset. A host would have crashed on the same rig long
+            // before we saw it, so this is insurance rather than an expectation.
+            try
+            {
+                manager.OnTimeChange(cursor);
+            }
+            catch (Exception e)
+            {
+                LightsRefused++;
+                Debug.LogWarning(
+                    "[pb-and-j] unit light update was refused: " + e.Message);
+            }
+        }
+
+        /// <summary>
+        /// Drives this unit's melee shockwave trail. M14 stage C.
+        /// </summary>
+        /// <remarks>
+        /// A transcription of <c>CombatReplayHelper.cs:1311-1329</c>, which is a
+        /// call rather than a track: the game's replay re-runs
+        /// <c>MeleeUtility.CheckOverlapsWithShockwave</c> every frame for each
+        /// swing whose window contains the cursor, and clears the trail on any
+        /// frame where none does.
+        /// <para>
+        /// 🔑 <c>registerHits: false</c> with a null action is the whole safety
+        /// argument, and the load-bearing line is <c>MeleeUtility.cs:496</c> —
+        /// <c>if (!(flag4 &amp;&amp; registerHits) || ...) continue;</c> — which
+        /// makes the entire hit-processing block unreachable. That block, not
+        /// the tail, is what holds the overlap physics, <c>VerifyMeleeHit</c>,
+        /// <b>real level prop destruction</b> and the projectile pop. Vanilla's
+        /// own replay passes exactly this pair. Anyone refactoring this must
+        /// re-check <c>:496</c>, not merely the impact code further down.
+        /// </para>
+        /// <para>
+        /// Record order is preserved because co-active swings share one trail
+        /// object and the last call wins, matching the game's <c>foreach</c>.
+        /// </para>
+        /// </remarks>
+        private static void ApplyMelees(Target target)
+        {
+            var poses = target.Poses;
+            var unit = target.Unit;
+            if (poses == null || poses.Melees.Count == 0 || unit == null)
+            {
+                return;
+            }
+
+            var anyActive = false;
+            for (var i = 0; i < poses.Melees.Count; i++)
+            {
+                var melee = poses.Melees[i];
+                if (!MeleeTrajectoryPlayback.TryNormalise(melee, cursor, out var normalised))
+                {
+                    continue;
+                }
+
+                anyActive = true;
+                if (lightsCursorPrevious < melee.TimeStart && melee.TimeStart <= cursor)
+                {
+                    MeleesPlayed++;
+                }
+
+                try
+                {
+                    DriveShockwave(unit, melee, normalised);
+                }
+                catch (Exception e)
+                {
+                    MeleesRefused++;
+                    Debug.LogWarning(
+                        "[pb-and-j] melee shockwave was refused: " + e.Message);
+                }
+            }
+
+            if (!anyActive)
+            {
+                ClearShockwave(unit);
+            }
+        }
+
+        private static void DriveShockwave(CombatEntity unit, MeleeTrajectory melee, float normalised)
+        {
+            var shockwave = DataMultiLinker<DataContainerEquipmentShockwave>
+                .GetEntry(melee.ShockwaveKey, printWarning: false);
+            var anim = DataShortcuts.anim;
+            var curve = melee.PartUsed ? anim.timeRemapMeleeStandard : anim.timeRemapMeleeFallback;
+
+            MeleeUtility.CheckOverlapsWithShockwave(
+                unit,
+                new Vector3(melee.PosStart.X, melee.PosStart.Y, melee.PosStart.Z),
+                new Vector3(melee.PosEnd.X, melee.PosEnd.Y, melee.PosEnd.Z),
+                shockwave,
+                curve,
+                normalised,
+                predictionMode: false,
+                registerHits: false,
+                actionExecuted: null);
+        }
+
+        /// <summary>
+        /// Puts a shockwave trail away, on the frame it stops being active and
+        /// again at teardown.
+        /// </summary>
+        /// <remarks>
+        /// The teardown call is not belt and braces. Vanilla's turn-boundary
+        /// clear lives in <c>OnExecutionStart</c>
+        /// (<c>CombatReplayHelper.cs:308</c>), which only a simulating host
+        /// runs, and our cursor clamps to the window end — so a swing still
+        /// active on the final frame is driven and then never cleared, leaving a
+        /// trail hanging through a planning phase that lasts minutes.
+        /// </remarks>
+        private static void ClearShockwave(CombatEntity unit)
+        {
+            if (!unit.hasCombatView || unit.combatView.view == null)
+            {
+                return;
+            }
+
+            var visualManager = unit.combatView.view.visualManager;
+            var vfx = visualManager != null ? visualManager.GetVFXManager() : null;
+            if (vfx is UnitVFXManager melee)
+            {
+                melee.OnMeleeShockwaveClear();
+            }
         }
 
         /// <summary>The shared dummy transform, created on first use per window.</summary>

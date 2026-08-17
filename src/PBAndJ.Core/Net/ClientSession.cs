@@ -479,7 +479,16 @@ namespace PBAndJ.Core.Net
                     effects.Add(new LogEffect(NetLog.CombatEndedByHost()));
                     ForgetReplayBuffers();
                     effects.Add(new StopKeyframesEffect());
-                    effects.Add(new SetExecutionLockEffect(false));
+
+                    // Held, not released — the combat-retry interregnum. A host
+                    // retrying leaves combat first, so this arrives while the
+                    // client is still standing in the loaded fight and the host
+                    // is seconds from re-entering. Releasing the button here
+                    // hands back an Execute that HandleLocalReady drops without
+                    // a word, since State is no longer Planning. CombatStart
+                    // releases it again on the host's return; Bye and Reject
+                    // release it if they never come back.
+                    effects.Add(new SetExecutionLockEffect(true));
                     break;
 
                 case OrderResultMessage result:

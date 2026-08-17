@@ -29,6 +29,25 @@ namespace PBAndJ.Mod.Net
             ExecutionLocked = false;
         }
 
+        /// <summary>
+        /// Reaction pings, melee swings and dropped swings sent this turn.
+        /// </summary>
+        /// <remarks>
+        /// Positive counters, deliberately, and stage B is why: weapon lights
+        /// shipped with loss counters only, and all-zero losses read identically
+        /// whether every flash travelled or the light code never ran at all. A
+        /// number that goes up is the only thing a playtest can falsify.
+        /// </remarks>
+        internal static int AssetReactionsSent;
+
+        internal static int AssetMeleesSent;
+
+        internal static int AssetMeleesDropped;
+
+        private static readonly List<float> NoReactionPings = new List<float>();
+
+        private static readonly List<MeleeTrajectory> NoMelees = new List<MeleeTrajectory>();
+
         public int CurrentTurn
         {
             get
@@ -509,6 +528,10 @@ namespace PBAndJ.Mod.Net
                 ? Contexts.sharedInstance.combat.simulationTime.f
                 : windowStart;
 
+            AssetReactionsSent = 0;
+            AssetMeleesSent = 0;
+            AssetMeleesDropped = 0;
+
             // M14. Taken from the same window the unit tracks are, before the
             // loop, so the two cannot disagree about where the turn began — the
             // whole reason both live on one KeyframeCapture.
@@ -562,7 +585,7 @@ namespace PBAndJ.Mod.Net
                 // M8. Beside the transform track, never inside it: a turn whose
                 // poses cannot travel still plays as M6 always did.
                 var pose = CapturePoses(
-                    unit, persistent.nameInternal.s, entry.Value.keyframesPoses, windowStart,
+                    unit, persistent.nameInternal.s, entry.Value, windowStart, windowEnd,
                     ref strandedKeys);
                 if (pose == null)
                 {
@@ -589,6 +612,20 @@ namespace PBAndJ.Mod.Net
             }
             ReportUncaptured(bonelessUnits, strandedKeys);
             ReportOrphanedLights(poses);
+
+            // Positive first, and only when there is something to say — a quiet
+            // turn is not an incomplete one, which is the distinction stage A
+            // had to add AssetsNoneSent to make.
+            if (AssetReactionsSent > 0 || AssetMeleesSent > 0)
+            {
+                Debug.Log(NetLog.AssetReactionsAndMeleesSent(
+                    AssetReactionsSent, AssetMeleesSent));
+            }
+
+            if (AssetMeleesDropped > 0)
+            {
+                Debug.LogWarning(NetLog.MeleesOverCap(AssetMeleesDropped));
+            }
             WeaponLightPatches.Clear();
             return new KeyframeCapture(windowStart, windowEnd, tracks, poses, assets);
         }
@@ -715,10 +752,12 @@ namespace PBAndJ.Mod.Net
         private static UnitPoseTrack? CapturePoses(
             CombatEntity unit,
             string? name,
-            List<ReplayKeyframeUnitPose> recorded,
+            ReplayUnit track,
             float windowStart,
+            float windowEnd,
             ref int strandedKeys)
         {
+            var recorded = track.keyframesPoses;
             // Explicit null comparisons rather than ?., because a Unity object
             // that has been destroyed is only null through its own operator.
             var view = unit.hasCombatView ? unit.combatView.view : null;
@@ -779,7 +818,108 @@ namespace PBAndJ.Mod.Net
             // ride and would otherwise vanish without a word.
             var lights = WeaponLightPatches.For(unit.id.id);
 
-            return new UnitPoseTrack(name, joints, keys, lights);
+            return new UnitPoseTrack(
+                name,
+                joints,
+                keys,
+                lights,
+                CaptureReactions(track, windowStart),
+                CaptureMelees(track, windowStart, windowEnd));
+        }
+
+        /// <summary>
+        /// This unit's reaction-glow pings inside the turn. M14 stage C.
+        /// </summary>
+        /// <remarks>
+        /// Bare stamps — the recorder's reaction keyframe carries a time and
+        /// nothing else — sliced from the window start exactly as the pose keys
+        /// above are, and for the identical reason: <c>units</c> MAY not be
+        /// cleared between turns, so this list may hold the whole combat's
+        /// pings. The slice is written to be correct either way rather than to
+        /// branch on the setting, per note 2 on <c>CaptureKeyframes</c>.
+        /// <para>
+        /// The cap drops the <i>oldest</i>. Only the newest ping at or before
+        /// the cursor can ever animate, so trimming the front is invisible while
+        /// trimming the back would throw away the live one.
+        /// </para>
+        /// </remarks>
+        private static List<float> CaptureReactions(ReplayUnit track, float windowStart)
+        {
+            var recorded = track.keyframesLightsReactions;
+            if (recorded == null)
+            {
+                return NoReactionPings;
+            }
+
+            var first = TurnStart(recorded.Count, i => recorded[i].time, windowStart);
+            if (recorded.Count - first > PbjMessageCodec.MaxReactionPingsPerUnit)
+            {
+                first = recorded.Count - PbjMessageCodec.MaxReactionPingsPerUnit;
+            }
+
+            var pings = new List<float>(recorded.Count - first);
+            for (var i = first; i < recorded.Count; i++)
+            {
+                pings.Add(recorded[i].time);
+            }
+            AssetReactionsSent += pings.Count;
+            return pings;
+        }
+
+        /// <summary>
+        /// This unit's melee swings whose windows touch the turn. M14 stage C.
+        /// </summary>
+        /// <remarks>
+        /// Sliced by interval <em>overlap</em>, not by a start-time point test:
+        /// a swing straddling the boundary has to arrive in both windows, or the
+        /// client shows the second half of a shockwave with no first half and
+        /// then never clears it.
+        /// <para>
+        /// ⚠️ The slice is what makes the cap safe. With the recorder retaining
+        /// tracks between turns, <c>entitiesMelee</c> holds every swing of the
+        /// fight, so capping the raw list would drop this unit's whole track a
+        /// few turns in — silently, and reading exactly like a turn with no
+        /// melee in it.
+        /// </para>
+        /// </remarks>
+        private static List<MeleeTrajectory> CaptureMelees(
+            ReplayUnit track, float windowStart, float windowEnd)
+        {
+            var recorded = track.entitiesMelee;
+            if (recorded == null)
+            {
+                return NoMelees;
+            }
+
+            var melees = new List<MeleeTrajectory>();
+            for (var i = 0; i < recorded.Count; i++)
+            {
+                var swing = recorded[i];
+                if (!ReplayAssetPlayback.OverlapsWindow(
+                        swing.timeStart, swing.timeEnd, windowStart, windowEnd))
+                {
+                    continue;
+                }
+
+                melees.Add(new MeleeTrajectory(
+                    swing.timeStart,
+                    swing.timeEnd,
+                    swing.partUsed,
+                    swing.shockwaveKey,
+                    ToVec3(swing.posStart),
+                    ToVec3(swing.posEnd)));
+            }
+
+            // Oldest first out, as with the pings: a swing that started earlier
+            // is the one nearer to being over.
+            while (melees.Count > PbjMessageCodec.MaxMeleesPerUnit)
+            {
+                melees.RemoveAt(0);
+                AssetMeleesDropped++;
+            }
+
+            AssetMeleesSent += melees.Count;
+            return melees;
         }
 
         /// <summary>

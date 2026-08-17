@@ -720,6 +720,56 @@ namespace PBAndJ.Core.Net
         }
 
         /// <summary>
+        /// Reaction pings and melee swings leaving the host. M14 stage C.
+        /// </summary>
+        /// <remarks>
+        /// Positive counters, for the reason stage B had to learn twice: a wall
+        /// of zeroed loss counters reads the same whether everything travelled
+        /// or the capture never ran.
+        /// </remarks>
+        public static string AssetReactionsAndMeleesSent(int reactions, int melees)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "{0} reaction ping{1} and {2} melee swing{3} sent",
+                reactions, Plural(reactions), melees, Plural(melees));
+        }
+
+        /// <summary>
+        /// Swings dropped because one unit carried more than the cap. M14 stage C.
+        /// </summary>
+        /// <remarks>
+        /// Should never fire: a unit gets one melee action per turn in practice
+        /// and the capture slices to the turn's window before capping. If it
+        /// does fire, the window slice is the thing to suspect, not the cap —
+        /// an unsliced list accumulates for the whole fight and would breach any
+        /// cap eventually.
+        /// </remarks>
+        public static string MeleesOverCap(int dropped)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "dropped {0} melee swing{1} over the per-unit cap — suspect the window slice",
+                dropped, Plural(dropped));
+        }
+
+        /// <summary>
+        /// What the client actually drove. M14 stage C.
+        /// </summary>
+        /// <remarks>
+        /// Counted at the window edge rather than per call: the newest ping is
+        /// re-stamped every frame, so counting calls would count frames. The
+        /// same shape stage B's <c>lightsFired</c> uses.
+        /// </remarks>
+        public static string ReactionsAndMeleesPlayed(int reactions, int melees)
+        {
+            return Prefix + string.Format(
+                CultureInfo.InvariantCulture,
+                "{0} reaction ping{1} and {2} melee swing{3} played",
+                reactions, Plural(reactions), melees, Plural(melees));
+        }
+
+        /// <summary>
         /// A unit fired but got no pose track, so its weapon lights have no ride.
         /// </summary>
         /// <remarks>
@@ -1151,9 +1201,19 @@ namespace PBAndJ.Core.Net
                 CultureInfo.InvariantCulture, "host started combat on turn {0}", turn);
         }
 
+        /// <summary>
+        /// Says out loud that execute is being held, because the alternative is
+        /// a button that looks live and silently does nothing.
+        /// </summary>
+        /// <remarks>
+        /// A host retrying a fight leaves combat before re-entering it, so this
+        /// is routinely an interregnum rather than an ending. The client keeps
+        /// standing in the loaded battle throughout and gets a fresh
+        /// <c>CombatStart</c> moments later.
+        /// </remarks>
         public static string CombatEndedByHost()
         {
-            return Prefix + "host's combat ended — back to the lobby";
+            return Prefix + "host's combat ended — back to the lobby, holding execute until they return";
         }
 
         // --- the outbound queue ---

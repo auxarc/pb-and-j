@@ -664,6 +664,57 @@ namespace PBAndJ.Core.Tests.Net
                 NetLog.AssetLightsSent(1, 1));
         }
 
+        [Fact]
+        public void AssetReactionsAndMeleesSent_ReportsBoth()
+        {
+            Assert.Equal(
+                "[pb-and-j] 4 reaction pings and 2 melee swings sent",
+                NetLog.AssetReactionsAndMeleesSent(4, 2));
+        }
+
+        [Fact]
+        public void AssetReactionsAndMeleesSent_SpeaksOfOneOfEachInTheSingular()
+        {
+            Assert.Equal(
+                "[pb-and-j] 1 reaction ping and 1 melee swing sent",
+                NetLog.AssetReactionsAndMeleesSent(1, 1));
+        }
+
+        [Fact]
+        public void ReactionsAndMeleesPlayed_ReportsBoth()
+        {
+            Assert.Equal(
+                "[pb-and-j] 4 reaction pings and 2 melee swings played",
+                NetLog.ReactionsAndMeleesPlayed(4, 2));
+        }
+
+        [Fact]
+        public void ReactionsAndMeleesPlayed_SpeaksOfOneOfEachInTheSingular()
+        {
+            Assert.Equal(
+                "[pb-and-j] 1 reaction ping and 1 melee swing played",
+                NetLog.ReactionsAndMeleesPlayed(1, 1));
+        }
+
+        [Fact]
+        public void MeleesOverCap_NamesTheSliceAsTheSuspect()
+        {
+            // The cap is not the thing to raise when this fires. An unsliced
+            // list grows for the whole fight and breaches any cap eventually,
+            // so the message points at the slice instead.
+            Assert.Equal(
+                "[pb-and-j] dropped 3 melee swings over the per-unit cap — suspect the window slice",
+                NetLog.MeleesOverCap(3));
+        }
+
+        [Fact]
+        public void MeleesOverCap_SpeaksOfOneInTheSingular()
+        {
+            Assert.Equal(
+                "[pb-and-j] dropped 1 melee swing over the per-unit cap — suspect the window slice",
+                NetLog.MeleesOverCap(1));
+        }
+
         // The one cost of hanging lights off the pose track, made loud. A unit
         // the recorder skipped drops its flashes with it, and that is invisible
         // on screen among other flashes.
@@ -835,7 +886,9 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void CombatEndedByHost_ComposesTheLine()
         {
-            Assert.Equal("[pb-and-j] host's combat ended — back to the lobby", NetLog.CombatEndedByHost());
+            Assert.Equal(
+                "[pb-and-j] host's combat ended — back to the lobby, holding execute until they return",
+                NetLog.CombatEndedByHost());
         }
 
         [Fact]

@@ -203,12 +203,51 @@ namespace PBAndJ.Core.Net
                 kept[i] = keys[start + i];
             }
 
+            // ⚠️ Every list on the track has to be threaded through here by
+            // hand, because this rebuilds rather than mutates. Stage C's pings
+            // and swings were dropped on the floor at this exact line first time
+            // round: the codec round-trip still passed, since the loss happens
+            // between capture and encode, and only the peer selftest saw it.
             prepared = new UnitPoseTrack(
                 track.Name,
                 track.Joints,
                 Thin(kept, PbjMessageCodec.MaxPoseKeysPerTrack),
-                PrepareLights(track.Lights));
+                PrepareLights(track.Lights),
+                KeepNewest(track.Reactions, PbjMessageCodec.MaxReactionPingsPerUnit),
+                KeepNewest(track.Melees, PbjMessageCodec.MaxMeleesPerUnit));
             return PoseTrackFault.None;
+        }
+
+        /// <summary>
+        /// Caps a list of discrete events by dropping the oldest.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately not <see cref="TrackThinning"/>, which spreads its
+        /// survivors across the whole turn. That is right for weapon lights,
+        /// where every flash is equally worth keeping, and wrong for both of
+        /// these: only the newest reaction ping at or before the cursor can ever
+        /// animate, and an older melee swing is the one nearer to being over. So
+        /// the front is the cheap end here, where for lights there is no cheap
+        /// end at all.
+        /// <para>
+        /// The capture already slices to the turn's window, so this should never
+        /// bite in play. It exists because the codec throws above its caps, and
+        /// a peer must not be able to make us throw by sending a long list.
+        /// </para>
+        /// </remarks>
+        private static IReadOnlyList<T> KeepNewest<T>(IReadOnlyList<T> items, int cap)
+        {
+            if (items.Count <= cap)
+            {
+                return items;
+            }
+
+            var kept = new T[cap];
+            for (var i = 0; i < cap; i++)
+            {
+                kept[i] = items[items.Count - cap + i];
+            }
+            return kept;
         }
 
         /// <summary>

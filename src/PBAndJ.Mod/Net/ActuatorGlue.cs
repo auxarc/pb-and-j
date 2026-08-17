@@ -162,6 +162,75 @@ namespace PBAndJ.Mod.Net
         }
 
         /// <summary>
+        /// The highest <c>reactionTimeLast</c> across the fight's light
+        /// managers. M14 stage C.
+        /// </summary>
+        /// <remarks>
+        /// The field is private, so this reads it the same way
+        /// <see cref="DisplayedUnitCount"/> reads its list — reflection, or say
+        /// nothing at all, never a number that might be a lie.
+        /// <para>
+        /// It answers the one client-side unknown stage B left open. Written
+        /// only by <c>OnReactionPing</c>, whose live path sits behind
+        /// <c>ActionPlaybackSystem</c>'s <c>combat.Simulating</c> gate, it can
+        /// only ever have read its <c>-100</c> initialiser on a client. Anything
+        /// above zero here now means our own ping landed.
+        /// </para>
+        /// <para>
+        /// The maximum rather than the first: one unit having been pinged is the
+        /// fact worth surfacing, and a per-unit dump would bury it.
+        /// </para>
+        /// </remarks>
+        private static string DescribeReactionTime()
+        {
+            var combat = Contexts.sharedInstance.combat;
+            if (!combat.hasCurrentTurn)
+            {
+                return "-";
+            }
+
+            var field = typeof(UnitLightManager).GetField(
+                "reactionTimeLast", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (field == null)
+            {
+                return "?";
+            }
+
+            var seen = false;
+            var highest = 0f;
+            foreach (var unit in combat.GetGroup(CombatMatcher.UnitTag).GetEntities())
+            {
+                if (!unit.hasCombatView || unit.combatView.view == null)
+                {
+                    continue;
+                }
+
+                var visualManager = unit.combatView.view.visualManager;
+                var manager = visualManager != null ? visualManager.GetLightManager() : null;
+                if (manager == null)
+                {
+                    continue;
+                }
+
+                var value = field.GetValue(manager);
+                if (!(value is float stamp))
+                {
+                    continue;
+                }
+
+                if (!seen || stamp > highest)
+                {
+                    highest = stamp;
+                    seen = true;
+                }
+            }
+
+            return seen
+                ? highest.ToString("0.00", CultureInfo.InvariantCulture)
+                : "no light managers";
+        }
+
+        /// <summary>
         /// Presses Deploy on the mission briefing, which raises the confirmation
         /// dialog rather than committing.
         /// </summary>
@@ -413,6 +482,17 @@ namespace PBAndJ.Mod.Net
                     + " trailsRefused=" + KeyframePlayer.TrailsRefused
                     + " lightsRefused=" + KeyframePlayer.LightsRefused
                     + " lightsNoTransform=" + WeaponLightPatches.SkippedNoTransform,
+                // M14 stage C. reactionTimeLast is the answer to the one
+                // client-side unknown stage B left open: it is written only by
+                // OnReactionPing, whose live path is gated behind
+                // combat.Simulating, which a client never sets — so before we
+                // started pinging deliberately it could only ever read -100.
+                // Now it is the regression detector for the ping drive: a value
+                // above zero on a client means our own call landed.
+                "reactionsPlayed=" + KeyframePlayer.ReactionsPlayed
+                    + " meleesPlayed=" + KeyframePlayer.MeleesPlayed
+                    + " meleesRefused=" + KeyframePlayer.MeleesRefused
+                    + " reactionTimeLast=" + DescribeReactionTime(),
                 // The launch splash — logos, then the seizure warning. It sits
                 // OVER the main menu while the game already reports
                 // state=mainmenu, so a script that treats that state as "ready"

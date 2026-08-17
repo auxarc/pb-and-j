@@ -32,6 +32,75 @@ namespace PBAndJ.Core.Tests.Net
             return new UnitPoseTrack("pb_mech_01", names, keys);
         }
 
+        // --- M14 stage C: what Prepare must not quietly drop ---
+        //
+        // TryPrepare rebuilds the track rather than mutating it, so every field
+        // added to UnitPoseTrack has to be threaded through by hand. Reactions
+        // and melees were dropped on the floor here first time round — the wire
+        // round-trip passed, the codec tests passed, and only the peer selftest
+        // saw it, because the loss happens between capture and encode.
+
+        private static UnitPoseTrack TrackWith(
+            IReadOnlyList<float>? reactions, IReadOnlyList<MeleeTrajectory>? melees)
+        {
+            var basic = Track(2, 0f, 0.1f, 0.2f, 0.3f);
+            return new UnitPoseTrack(
+                basic.Name, basic.Joints, basic.Keys, basic.Lights, reactions, melees);
+        }
+
+        private static MeleeTrajectory Swing(float start) =>
+            new MeleeTrajectory(start, start + 1f, true, "k", default, default);
+
+        [Fact]
+        public void Prepare_CarriesReactionPingsThrough()
+        {
+            PoseTracks.TryPrepare(TrackWith(new[] { 0.1f, 0.2f }, null), out var prepared);
+            Assert.Equal(new[] { 0.1f, 0.2f }, prepared!.Reactions);
+        }
+
+        [Fact]
+        public void Prepare_CarriesMeleesThrough()
+        {
+            PoseTracks.TryPrepare(TrackWith(null, new[] { Swing(0f) }), out var prepared);
+            Assert.Single(prepared!.Melees);
+            Assert.Equal("k", prepared.Melees[0].ShockwaveKey);
+        }
+
+        [Fact]
+        public void Prepare_CapsReactionPings_KeepingTheNewest()
+        {
+            // The cap drops from the front: only the newest ping at or before
+            // the cursor can ever animate, so an old one is the cheap thing to
+            // lose and the live one is not.
+            var many = new float[PbjMessageCodec.MaxReactionPingsPerUnit + 3];
+            for (var i = 0; i < many.Length; i++)
+            {
+                many[i] = i;
+            }
+
+            PoseTracks.TryPrepare(TrackWith(many, null), out var prepared);
+
+            Assert.Equal(PbjMessageCodec.MaxReactionPingsPerUnit, prepared!.Reactions.Count);
+            Assert.Equal(many[many.Length - 1], prepared.Reactions[prepared.Reactions.Count - 1]);
+        }
+
+        [Fact]
+        public void Prepare_CapsMelees_KeepingTheNewest()
+        {
+            var many = new MeleeTrajectory[PbjMessageCodec.MaxMeleesPerUnit + 2];
+            for (var i = 0; i < many.Length; i++)
+            {
+                many[i] = Swing(i);
+            }
+
+            PoseTracks.TryPrepare(TrackWith(null, many), out var prepared);
+
+            Assert.Equal(PbjMessageCodec.MaxMeleesPerUnit, prepared!.Melees.Count);
+            Assert.Equal(
+                many[many.Length - 1].TimeStart,
+                prepared.Melees[prepared.Melees.Count - 1].TimeStart);
+        }
+
         // --- Remap ---
 
         [Fact]

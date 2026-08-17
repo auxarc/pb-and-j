@@ -69,6 +69,7 @@ namespace PBAndJ.Mod
             // would have rejected. Goes once the number is in the recon file.
             Net.VfxProbeGlue.RegisterConsoleCommands();
             Net.BeamInjectGlue.RegisterConsoleCommands();
+            Net.StageCProbeGlue.RegisterConsoleCommands();
         }
     }
 

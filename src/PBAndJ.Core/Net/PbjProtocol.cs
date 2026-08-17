@@ -162,8 +162,18 @@ namespace PBAndJ.Core.Net
         /// <c>pbj-peer</c> is refused by this constant or by nothing. It gates
         /// <c>make deploy</c>, which makes that the load-bearing case.
         /// </para>
+        /// <para>
+        /// <b>M14 stage C is the fourth move</b>, and it changes one layout in
+        /// two places at once: a reaction-ping list and a melee-trajectory list
+        /// are both appended to every unit inside <c>Poses</c>. A v6 peer reads
+        /// the ping count as the end of the message, so this breaks exactly as
+        /// stage B's did. Paired for the same reason stage B paired trails with
+        /// weapon lights — one break rather than two, from two features that
+        /// share no code. <see cref="ModVersion"/> moved to 0.19.0 in the same
+        /// commit.
+        /// </para>
         /// </remarks>
-        public const int Version = 6;
+        public const int Version = 7;
 
         /// <summary>
         /// This build of the mod, as peers announce it to each other.
@@ -176,8 +186,18 @@ namespace PBAndJ.Core.Net
         /// on someone else's machine. Must be kept equal to <c>ver:</c> in
         /// mod/metadata.yaml; the Makefile refuses to build a distributable when
         /// they disagree, since that is the one file this constant cannot reach.
+        /// <para>
+        /// <b>0.18.0 moves this constant without moving <see cref="Version"/></b>,
+        /// which is the shape worth naming: no layout changed, but
+        /// <c>ScenarioPayload</c>'s digest now merges numbered content parts
+        /// before hashing, so a save over <c>MaxPartBytes</c> digests differently
+        /// than it did in 0.17.0. Two peers on either side of that change would
+        /// disagree about whether a client already holds a large fight — a
+        /// semantic break with an identical layout, which is precisely what a mod
+        /// version is for and what a protocol version cannot express.
+        /// </para>
         /// </remarks>
-        public const string ModVersion = "0.17.0";
+        public const string ModVersion = "0.19.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.
