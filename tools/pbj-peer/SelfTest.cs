@@ -2708,11 +2708,22 @@ namespace PBAndJ.Peer
 
                 // Changing the save must take every agreement back, on both
                 // sides, or somebody loads a save they never confirmed.
+                //
+                // The version is 3, not 2, and getting that wrong made this leg
+                // fail about one run in five. Selecting spends a version
+                // (LobbyBarrier.cs:50 hands back Version + 1) and the load above
+                // already spent one, so the client lands on 3. Asserting 2 here
+                // inverted the race: WaitFor polls until its condition is TRUE,
+                // so the leg passed only while the new LobbyState was still in
+                // flight and failed — burning the whole 10s deadline — as soon
+                // as it arrived. An assertion that holds only until the thing it
+                // is testing happens is worse than no assertion, because it
+                // reports the correct behaviour as the failure.
                 host.Post(new LocalLobbySelectEvent("pbj_other", null));
                 if (!WaitFor("changing the save cleared every ready",
                         () => !hostSession.LobbyIsSatisfied
                               && hostSession.LobbyReadyCount == 0
-                              && clientSession.LobbySelectionVersion == 2
+                              && clientSession.LobbySelectionVersion == 3
                               && !clientSession.LobbyReadySent))
                 {
                     return 1;
