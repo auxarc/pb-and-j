@@ -523,6 +523,33 @@ namespace PBAndJ.Core.Net
             return ScenarioRejection.None;
         }
 
+        /// <summary>
+        /// The identity of the save, deliberately blind to how it was framed for
+        /// the wire.
+        /// </summary>
+        /// <remarks>
+        /// Numbered content parts are merged back into one logical
+        /// <see cref="ContentFileName"/> before hashing. Without that, a save
+        /// over <see cref="MaxPartBytes"/> could never match itself: the host
+        /// offers <c>content.zip.0/.1/.2</c> while the client's own copy sits on
+        /// disk as a single <c>content.zip</c>, and <see cref="HashFile"/> mixes
+        /// both the name and the per-file length — so the two forms disagreed by
+        /// construction and every large fight re-transferred on every offer, for
+        /// ever.
+        /// <para>
+        /// A payload that never split is untouched by this: with no numbered
+        /// part present the merge does not run, so every digest computed before
+        /// this existed still holds. Only the previously-broken case moves.
+        /// </para>
+        /// <para>
+        /// Merging is by part <em>index</em>, taken from the name, never by
+        /// position in the list — arrival order is no more of a protocol
+        /// guarantee than directory enumeration order is. Gaps are tolerated
+        /// rather than rejected because this runs in the constructor, ahead of
+        /// <see cref="Inspect"/>: a malformed payload must still produce a
+        /// digest rather than throw on its way to being refused.
+        /// </para>
+        /// </remarks>
         private static string ComputeDigest(IReadOnlyList<ScenarioFile> files)
         {
             unchecked
@@ -532,12 +559,77 @@ namespace PBAndJ.Core.Net
                 // change a save's identity. Addition rather than XOR for the
                 // reason StateDigest gives: XOR makes an identical pair cancel.
                 var total = FnvOffsetBasis;
+                byte[]?[]? parts = null;
                 for (var i = 0; i < files.Count; i++)
                 {
-                    total += HashFile(files[i]);
+                    var file = files[i];
+                    var part = PartIndexOf(file.Name);
+                    if (part < 0)
+                    {
+                        total += HashFile(file);
+                        continue;
+                    }
+
+                    if (parts == null)
+                    {
+                        parts = new byte[PartNames.Length][];
+                    }
+                    parts[part] = file.Content;
                 }
+
+                if (parts != null)
+                {
+                    total += HashFile(new ScenarioFile(ContentFileName, Join(parts)));
+                }
+
                 return total.ToString("x8", CultureInfo.InvariantCulture);
             }
+        }
+
+        /// <summary>
+        /// Which numbered content part this file is, or -1 for anything else.
+        /// </summary>
+        private static int PartIndexOf(string? name)
+        {
+            for (var i = 0; i < PartNames.Length; i++)
+            {
+                if (string.Equals(name, PartNames[i], StringComparison.Ordinal))
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Concatenates the parts present, in index order, skipping any gap.
+        /// </summary>
+        private static byte[] Join(byte[]?[] parts)
+        {
+            var length = 0;
+            for (var i = 0; i < parts.Length; i++)
+            {
+                var part = parts[i];
+                if (part != null)
+                {
+                    length += part.Length;
+                }
+            }
+
+            var merged = new byte[length];
+            var offset = 0;
+            for (var i = 0; i < parts.Length; i++)
+            {
+                var part = parts[i];
+                if (part == null)
+                {
+                    continue;
+                }
+
+                Array.Copy(part, 0, merged, offset, part.Length);
+                offset += part.Length;
+            }
+            return merged;
         }
 
         private static uint HashFile(ScenarioFile file)

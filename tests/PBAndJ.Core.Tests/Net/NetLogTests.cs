@@ -664,6 +664,7 @@ namespace PBAndJ.Core.Tests.Net
                 NetLog.AssetLightsSent(1, 1));
         }
 
+
         // The one cost of hanging lights off the pose track, made loud. A unit
         // the recorder skipped drops its flashes with it, and that is invisible
         // on screen among other flashes.
@@ -835,7 +836,9 @@ namespace PBAndJ.Core.Tests.Net
         [Fact]
         public void CombatEndedByHost_ComposesTheLine()
         {
-            Assert.Equal("[pb-and-j] host's combat ended — back to the lobby", NetLog.CombatEndedByHost());
+            Assert.Equal(
+                "[pb-and-j] host's combat ended — back to the lobby, holding execute until they return",
+                NetLog.CombatEndedByHost());
         }
 
         [Fact]

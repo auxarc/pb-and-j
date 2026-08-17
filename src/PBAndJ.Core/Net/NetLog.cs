@@ -1151,9 +1151,19 @@ namespace PBAndJ.Core.Net
                 CultureInfo.InvariantCulture, "host started combat on turn {0}", turn);
         }
 
+        /// <summary>
+        /// Says out loud that execute is being held, because the alternative is
+        /// a button that looks live and silently does nothing.
+        /// </summary>
+        /// <remarks>
+        /// A host retrying a fight leaves combat before re-entering it, so this
+        /// is routinely an interregnum rather than an ending. The client keeps
+        /// standing in the loaded battle throughout and gets a fresh
+        /// <c>CombatStart</c> moments later.
+        /// </remarks>
         public static string CombatEndedByHost()
         {
-            return Prefix + "host's combat ended — back to the lobby";
+            return Prefix + "host's combat ended — back to the lobby, holding execute until they return";
         }
 
         // --- the outbound queue ---

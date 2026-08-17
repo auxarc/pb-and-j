@@ -217,7 +217,13 @@ namespace PBAndJ.Core.Tests.Net
             // 0.17.0 for M14 stage B — trails and weapon lights — which moves
             // PbjProtocol.Version to 6 alongside it. Pairing the two features in
             // one release is what makes that a single wire break instead of two.
-            Assert.Equal("0.17.0", PbjProtocol.ModVersion);
+            // 0.18.0 for the scenario digest merging numbered content parts. No
+            // layout moves, so PbjProtocol.Version stays at 6 — but a save over
+            // MaxPartBytes digests differently than it did in 0.17.0, so two
+            // peers across that change disagree about whether a client already
+            // holds a large fight. A semantic break under an identical layout is
+            // exactly the case the mod version exists to catch.
+            Assert.Equal("0.18.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

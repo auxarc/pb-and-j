@@ -692,8 +692,18 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Empty(All<SendEffect>(client.Handle(new LocalUnreadyEvent())));
         }
 
+        // The combat-retry interregnum. A host retrying a fight leaves combat
+        // first, so a client gets CombatEnd while still standing in the loaded
+        // battle, and the host comes back moments later with a fresh CombatStart.
+        //
+        // Unlocking here was the defect: State goes to Lobby, HandleLocalReady
+        // opens with `if (State != Planning) return;`, so the button the client
+        // was just handed back does nothing at all and says nothing about why.
+        // Holding it locked makes the refusal visible before the fact, which is
+        // the standing rule — and CombatStart unlocks again on the host's return.
+
         [Fact]
-        public void CombatEnd_ReturnsToLobbyDropsOwnedUnitsAndUnlocks()
+        public void CombatEnd_ReturnsToLobbyDropsOwnedUnitsAndHoldsExecute()
         {
             var client = Welcomed();
             client.HandleMessage(ClientSession.HostConnectionId, new AssignmentsMessage(new[]
@@ -705,17 +715,31 @@ namespace PBAndJ.Core.Tests.Net
             var effects = client.HandleMessage(ClientSession.HostConnectionId, new CombatEndMessage());
             Assert.Equal(ClientSessionState.Lobby, client.State);
             Assert.Empty(client.OwnedUnits);
-            Assert.False(Single<SetExecutionLockEffect>(effects).Locked);
+            Assert.True(Single<SetExecutionLockEffect>(effects).Locked);
         }
 
         [Fact]
-        public void CombatEnd_WhileWatchingStillUnlocks()
+        public void CombatEnd_WhileWatchingAlsoHoldsExecute()
         {
             var client = Welcomed();
             client.HandleMessage(ClientSession.HostConnectionId, new TurnCommitMessage(3));
             Assert.Equal(ClientSessionState.Watching, client.State);
 
             var effects = client.HandleMessage(ClientSession.HostConnectionId, new CombatEndMessage());
+            Assert.True(Single<SetExecutionLockEffect>(effects).Locked);
+        }
+
+        [Fact]
+        public void CombatEnd_ThenCombatStart_HandsExecuteBack()
+        {
+            // The interregnum has to actually end. This is the whole reason the
+            // lock is safe: the same session that holds the button also releases
+            // it, without the player doing anything.
+            var client = Welcomed();
+            client.HandleMessage(ClientSession.HostConnectionId, new CombatEndMessage());
+
+            var effects = client.HandleMessage(
+                ClientSession.HostConnectionId, new CombatStartMessage(0));
             Assert.False(Single<SetExecutionLockEffect>(effects).Locked);
         }
 

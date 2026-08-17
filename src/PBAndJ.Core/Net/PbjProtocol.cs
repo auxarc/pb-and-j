@@ -176,8 +176,18 @@ namespace PBAndJ.Core.Net
         /// on someone else's machine. Must be kept equal to <c>ver:</c> in
         /// mod/metadata.yaml; the Makefile refuses to build a distributable when
         /// they disagree, since that is the one file this constant cannot reach.
+        /// <para>
+        /// <b>0.18.0 moves this constant without moving <see cref="Version"/></b>,
+        /// which is the shape worth naming: no layout changed, but
+        /// <c>ScenarioPayload</c>'s digest now merges numbered content parts
+        /// before hashing, so a save over <c>MaxPartBytes</c> digests differently
+        /// than it did in 0.17.0. Two peers on either side of that change would
+        /// disagree about whether a client already holds a large fight — a
+        /// semantic break with an identical layout, which is precisely what a mod
+        /// version is for and what a protocol version cannot express.
+        /// </para>
         /// </remarks>
-        public const string ModVersion = "0.17.0";
+        public const string ModVersion = "0.18.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.

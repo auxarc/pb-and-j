@@ -294,17 +294,30 @@ unfillable, which in play looks like "Execute does nothing, for ever".
   `pbj.ship-fight`, or a host that stopped hosting mid-write — cost the session. There is an ignore
   arm now, and the glue posts only while hosting.
 
-### Two things named rather than fixed
+### Two things named rather than fixed — ✅ BOTH NOW FIXED (2026-08-16, mod 0.18.0)
 
-- **The combat-retry interregnum.** Host retry leaves combat first, so clients get `CombatEnd` and an
-  unlocked Execute that does nothing while they are still standing in the loaded fight, until the
-  host re-enters and re-ships. It re-converges without code, but the human sees something
-  unexplained. Worth a line on screen before the playtest.
-- **A >256 KiB fight re-transfers every time.** Above `MaxPartBytes` the host's `ReadScenario` splits
-  the content, and the digest mixes each part's *name* (`ScenarioPayload.cs:543-551`), so the split
-  digest never equals the unsplit `SaveCatalogueGlue.Digest` the client checks "am I already holding
-  this" against. `LoadGlue` compares unsplit-to-unsplit and still loads, so this costs bandwidth
-  rather than correctness. Fights measure ~119 KB today.
+- **The combat-retry interregnum.** ✅ **Fixed.** Host retry leaves combat first, so clients got
+  `CombatEnd` and an unlocked Execute that did nothing while they were still standing in the loaded
+  fight, until the host re-entered and re-shipped. It re-converged without code, but the human saw
+  something unexplained.
+  **The fix is to hold the lock rather than release it** — `ClientSession`'s `CombatEnd` arm now
+  emits `SetExecutionLockEffect(true)`. 🔑 The unlock was not merely cosmetic: `State` goes to
+  `Lobby` and `HandleLocalReady` opens with `if (State != Planning) return;`, so the button handed
+  back was **already dead and silent** — the same silent-refusal class M10c paid for. A held button
+  is a refusal visible before the fact, which is the standing rule. `CombatStart` releases it on the
+  host's return; `Bye` and `Reject` release it if they never come back. The log line says so out
+  loud: *"host's combat ended — back to the lobby, holding execute until they return"*.
+- **A >256 KiB fight re-transfers every time.** ✅ **Fixed.** Above `MaxPartBytes` the host's
+  `ReadScenario` splits the content, and the digest mixed each part's *name* and per-file length, so
+  the split digest could never equal the unsplit `SaveCatalogueGlue.Digest` the client checks "am I
+  already holding this" against. `LoadGlue` compared unsplit-to-unsplit and still loaded, so it cost
+  bandwidth rather than correctness. Fights measure ~119 KB today, so nothing in play had reached it.
+  **`ScenarioPayload.ComputeDigest` now merges numbered content parts back into one logical
+  `content.zip` before hashing**, by part index rather than by list position, tolerating gaps because
+  the digest is computed in the constructor ahead of `Inspect`. **A payload that never split is
+  digested exactly as before**, so only the previously-broken case moves — but that *is* a semantic
+  break between mod versions under an identical layout, which is why `ModVersion` went to **0.18.0**
+  while `PbjProtocol.Version` stayed at **6**.
 
 **Residual, accepted:** `SaveFromECS` can return without writing while `DoSave` proceeds to
 `SaveData` anyway, so "no throw" is a weaker success signal than it looks. `CanSave(false)` pre-covers
