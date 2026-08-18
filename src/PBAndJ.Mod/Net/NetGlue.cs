@@ -182,7 +182,8 @@ namespace PBAndJ.Mod.Net
         /// Reconnects to the last host, reclaiming the units we held.
         /// </summary>
         /// <remarks>
-        /// Separate from <see cref="Join"/> because a client session is faulted
+        /// Separate from <see cref="Join(string, int, string)"/> because a client session
+        /// is faulted
         /// terminally by a disconnect — coming back means a fresh transport and a
         /// fresh session, carrying the token the old one was issued.
         /// </remarks>

@@ -159,7 +159,7 @@ namespace PBAndJ.Mod.Net
         /// <remarks>
         /// The whole FinalIK hazard hangs on this. MechAnimationSystem's
         /// non-reactive Execute calls UpdateAnimationsForAll every frame when
-        /// !Simulating && timeScale > 0, and that calls LateUpdateUnit directly
+        /// !Simulating &amp;&amp; timeScale &gt; 0, and that calls LateUpdateUnit directly
         /// — so on a client, where Simulating is always false, timeScale alone
         /// decides whether manual IK solves fight replayed bone writes.
         /// </remarks>
