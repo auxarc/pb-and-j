@@ -1096,7 +1096,8 @@ namespace PBAndJ.Mod.Net
         /// rule here that no amount of testing on a host would surface.
         /// <c>CombatPuppetView.OnVisibility</c> is a <c>SetActive</c> on the
         /// puppet view's own root, and the puppet master and behaviour objects
-        /// that <see cref="Dress"/> deactivates are children of it. Hide first
+        /// that <see cref="Dress(CombatEntity, Target, UnitPoseTrack)"/> deactivates
+        /// are children of it. Hide first
         /// and the later unwind sets those children active <i>under an inactive
         /// root</i>, so no <c>OnEnable</c> ever fires, the puppet never
         /// re-initialises, and the cascade goes off later in a state no vanilla
