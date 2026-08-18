@@ -189,8 +189,17 @@ namespace PBAndJ.Core.Net
         /// with weapon lights. <see cref="ModVersion"/> moved to 0.20.0 in
         /// the same commit.
         /// </para>
+        /// <para>
+        /// <b>9 — M16, and a layout move for the same reason 6 and 8 were.</b>
+        /// Every unit's snapshot record gained a presence bit for
+        /// <c>unitFrameIntegrity</c> and a second variable-length part list, both
+        /// at the tail. A v8 peer stops reading before them and a v9 peer reading
+        /// a v8 record would take the next unit's name length as a part count, so
+        /// there is no partial compatibility to preserve. <see cref="ModVersion"/>
+        /// moved to 0.21.0 in the same commit.
+        /// </para>
         /// </remarks>
-        public const int Version = 8;
+        public const int Version = 9;
 
         /// <summary>
         /// This build of the mod, as peers announce it to each other.
@@ -214,7 +223,7 @@ namespace PBAndJ.Core.Net
         /// version is for and what a protocol version cannot express.
         /// </para>
         /// </remarks>
-        public const string ModVersion = "0.20.0";
+        public const string ModVersion = "0.21.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.

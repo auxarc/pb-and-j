@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
@@ -239,6 +240,52 @@ namespace PBAndJ.Mod.Net
                 }
             }
             return parts + " on " + units + " unit(s)";
+        }
+
+        /// <summary>
+        /// Every part's damage on this machine, as a comparable fingerprint. M16.
+        /// </summary>
+        /// <remarks>
+        /// Walks the combat unit group rather than the persistent context, so
+        /// both machines walk the fight's roster and nothing else — a campaign's
+        /// stored units would otherwise drown the reading and differ for reasons
+        /// that have nothing to do with combat. Ordering is <see
+        /// cref="PartStateDigest"/>'s problem, not this walk's.
+        /// </remarks>
+        private static string DescribePartState()
+        {
+            if (!IDUtility.IsGameState("combat"))
+            {
+                return "n/a";
+            }
+
+            var entries = new List<PartStateEntry>();
+            foreach (var unit in Contexts.sharedInstance.combat
+                .GetGroup(CombatMatcher.UnitTag).GetEntities())
+            {
+                var persistent = IDUtility.GetLinkedPersistentEntity(unit);
+                if (persistent == null || !persistent.hasNameInternal)
+                {
+                    continue;
+                }
+
+                foreach (var part in EquipmentUtility.GetPartsInUnit(persistent))
+                {
+                    if (part == null || !part.hasPartParentUnit)
+                    {
+                        continue;
+                    }
+
+                    entries.Add(new PartStateEntry(
+                        persistent.nameInternal.s,
+                        part.partParentUnit.socket,
+                        part.hasIntegrityNormalized ? part.integrityNormalized.f : 1f,
+                        part.hasBarrierNormalized ? part.barrierNormalized.f : 1f));
+                }
+            }
+
+            var digest = PartStateDigest.Compute(entries);
+            return "count=" + digest.Count + " digest=" + digest.Digest;
         }
 
         /// <summary>
@@ -611,6 +658,28 @@ namespace PBAndJ.Mod.Net
                     + " wrecksRefused=" + KeyframePlayer.WrecksRefused
                     + " wreckedUnitsEcs=" + DescribeWreckedUnitsInEcs()
                     + " wreckedUnitsHeld=" + KeyframePlayer.HeldWreckedUnits,
+                // 🔑 M16's cross-machine comparison, and unlike the wreck pair
+                // above BOTH machines compute this the same way from their own
+                // ECS — so it verifies the sync end to end rather than verifying
+                // that we believe in it. Host partState must equal client
+                // partState.
+                //
+                // ⚠️ Only between turns, with no hold active. A client holds a
+                // turn's damage until its window settles, so during a replay,
+                // throughout a held frame, and for the whole of a turn whose
+                // keyframes never arrived, a CORRECT client disagrees by design.
+                //
+                // ⚠️ And only beside a non-zero partsSynced. Two machines with no
+                // damage agree perfectly with the sync entirely unwired — the
+                // vacuous pass this project has shipped instruments for before.
+                // partsHeld above zero between turns is the tell that a window
+                // never settled; partsUnresolved above zero is a roster or
+                // content divergence rather than a timing one.
+                "partState=" + DescribePartState()
+                    + " partsSynced=" + KeyframePlayer.PartsSynced
+                    + " partsHeld=" + KeyframePlayer.PartsHeld
+                    + " partsUnresolved=" + KeyframePlayer.PartsUnresolved
+                    + " partsRefused=" + KeyframePlayer.PartsRefused,
                 // The launch splash — logos, then the seizure warning. It sits
                 // OVER the main menu while the game already reports
                 // state=mainmenu, so a script that treats that state as "ready"

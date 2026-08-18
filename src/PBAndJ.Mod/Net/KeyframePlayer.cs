@@ -531,6 +531,40 @@ namespace PBAndJ.Mod.Net
         private static readonly DestructionState destruction = new DestructionState();
 
         /// <summary>
+        /// Which parts hold which damage, and when this client may say so. M16.
+        /// </summary>
+        /// <remarks>
+        /// Static and outliving any one window for the same reason
+        /// <see cref="destruction"/> is, and settled on three paths rather than
+        /// one — see <see cref="PartIntegrityState"/>.
+        /// </remarks>
+        private static readonly PartIntegrityState partIntegrity = new PartIntegrityState();
+
+        /// <summary>Parts whose integrity was written into this client's ECS. M16.</summary>
+        /// <remarks>
+        /// 🔑 <b>Read this beside the cross-machine <c>partState</c> digest or
+        /// that digest is vacuous.</b> Two machines with no damage agree
+        /// perfectly with the sync entirely unwired; a non-zero count here is what
+        /// says the comparison had anything to compare.
+        /// </remarks>
+        internal static int PartsSynced { get; private set; }
+
+        /// <summary>Parts named by a snapshot that this client could not resolve. M16.</summary>
+        /// <remarks>
+        /// Expected to be zero. The two machines loaded the same save, so a
+        /// non-zero reading is a roster or content divergence rather than a
+        /// timing one, and it is the reading that separates "the sync did
+        /// nothing" from "the sync had nothing to write to".
+        /// </remarks>
+        internal static int PartsUnresolved { get; private set; }
+
+        /// <summary>Part or frame writes that threw inside game code. M16.</summary>
+        internal static int PartsRefused { get; private set; }
+
+        /// <summary>Parts waiting for a window to settle them. M16.</summary>
+        internal static int PartsHeld => partIntegrity.HeldCount;
+
+        /// <summary>
         /// Part destructions whose moment the cursor crossed. M15.
         /// </summary>
         /// <remarks>
@@ -1883,6 +1917,11 @@ namespace PBAndJ.Mod.Net
                 // instead — there is no reason to believe a fault means the turn
                 // is over.
                 ApplySettled(destruction.SettleWindow());
+
+                // M16, and after the destruction settle for the same reason the
+                // snapshot path orders them that way: M15 writes a synthesised
+                // integrity to the visual, and the real value has to land last.
+                SettlePartIntegrity();
                 Stop();
             }
         }
@@ -2186,6 +2225,170 @@ namespace PBAndJ.Mod.Net
         }
 
         /// <summary>
+        /// Takes a snapshot's part damage and writes whatever is due now. M16.
+        /// </summary>
+        /// <remarks>
+        /// What is due now is the <i>previous</i> snapshot's set, not this one's:
+        /// this one describes a turn whose replay has not played yet, and showing
+        /// its damage first is the causality error the hold exists to prevent.
+        /// The frame-integrity half is not held at all — nothing draws it during
+        /// a fight.
+        /// </remarks>
+        internal static void ReceivePartIntegrity(IReadOnlyList<UnitSnapshot> snapshot)
+        {
+            ApplyPartIntegrity(partIntegrity.Receive(snapshot));
+        }
+
+        /// <summary>
+        /// Writes whatever the window was holding, because it is over. M16.
+        /// </summary>
+        /// <remarks>
+        /// Called from two places and both are load-bearing: the end of a window
+        /// that played, and combat end. The second is what keeps the final turn's
+        /// damage, since an absent window never reaches the first and there is no
+        /// next snapshot after a fight.
+        /// </remarks>
+        internal static void SettlePartIntegrity()
+        {
+            ApplyPartIntegrity(partIntegrity.SettleWindow());
+        }
+
+        /// <summary>
+        /// Forgets every part's damage, for a combat that has ended. M16.
+        /// </summary>
+        internal static void ClearPartIntegrity()
+        {
+            partIntegrity.Clear();
+            PartsSynced = 0;
+            PartsUnresolved = 0;
+            PartsRefused = 0;
+        }
+
+        /// <summary>
+        /// Writes part damage and frame-integrity presence into this client's own
+        /// ECS. M16.
+        /// </summary>
+        /// <remarks>
+        /// Resolved against the <b>persistent</b> context by name rather than
+        /// against the combat group, and that is not a stylistic choice. This runs
+        /// at combat end as well as between turns, when combat entities and their
+        /// views are being torn down — and it is the persistent entities that
+        /// carry the fields a save will record, so they are the ones that have to
+        /// be right.
+        /// <para>
+        /// ⚠️ <b>Deliberately unguarded by any last-written-value table.</b> M15
+        /// needs one because its ramp re-drives a part on every frame of a
+        /// half-second; this runs at most three times a turn, so a guard would
+        /// buy nothing measurable and cost two real failure modes — the
+        /// throw-after-record poisoning <c>DestructionState.Forget</c> exists to
+        /// undo, and a permanent standoff with M15's synthesised <c>1f</c> on the
+        /// un-wreck path, which would bypass any guard we added. Writing
+        /// unconditionally is what makes that placeholder self-correcting.
+        /// </para>
+        /// <para>
+        /// The visual call goes beside the component write because the two are
+        /// separate systems in the game: <c>CombatDamageSystem.cs:585</c> drives
+        /// the model's damage appearance directly and nothing reacts to the
+        /// component to do it, so a component-only write would leave a client's
+        /// mech looking pristine while its health bar read correctly.
+        /// </para>
+        /// </remarks>
+        private static void ApplyPartIntegrity(PartIntegrityUpdate update)
+        {
+            if (update.IsEmpty)
+            {
+                return;
+            }
+
+            var frames = update.Frames;
+            for (var i = 0; i < frames.Count; i++)
+            {
+                var persistent = IDUtility.GetPersistentEntity(frames[i].Unit);
+                if (persistent == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (frames[i].Present)
+                    {
+                        persistent.ReplaceUnitFrameIntegrity(frames[i].Integrity);
+                    }
+                    else if (persistent.hasUnitFrameIntegrity)
+                    {
+                        // The removal a client cannot skip. Its own save loader
+                        // installed this component (DataManagerSave.cs:2293-2301)
+                        // where the host's combat setup stripped it, so the two
+                        // disagree from combat entry and only an explicit remove
+                        // closes it.
+                        persistent.RemoveUnitFrameIntegrity();
+                    }
+                }
+                catch (Exception e)
+                {
+                    PartsRefused++;
+                    Debug.LogWarning(
+                        "[pb-and-j] frame integrity for '" + frames[i].Unit + "' was refused: "
+                            + e.Message);
+                }
+            }
+
+            var parts = update.Parts;
+            for (var i = 0; i < parts.Count; i++)
+            {
+                var persistent = IDUtility.GetPersistentEntity(parts[i].Unit);
+                if (persistent == null)
+                {
+                    PartsUnresolved++;
+                    continue;
+                }
+
+                var part = EquipmentUtility.GetPartInUnit(persistent, parts[i].Socket, false);
+                if (part == null)
+                {
+                    PartsUnresolved++;
+                    continue;
+                }
+
+                try
+                {
+                    part.ReplaceIntegrityNormalized(parts[i].Integrity);
+                    part.ReplaceBarrierNormalized(parts[i].Barrier);
+                    DriveVisualIntegrity(persistent, parts[i].Socket, parts[i].Integrity);
+                    PartsSynced++;
+                }
+                catch (Exception e)
+                {
+                    PartsRefused++;
+                    Debug.LogWarning(
+                        "[pb-and-j] part state for socket '" + parts[i].Socket + "' was refused: "
+                            + e.Message);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Tells the unit's visual manager what its socket's integrity now is.
+        /// </summary>
+        /// <remarks>
+        /// Silently skipped when there is no view, which is the ordinary case at
+        /// combat end and for a unit that never had one. The component write above
+        /// is the half that must not be skipped; this one is appearance.
+        /// </remarks>
+        private static void DriveVisualIntegrity(
+            PersistentEntity persistent, string? socket, float integrity)
+        {
+            var unit = IDUtility.GetLinkedCombatEntity(persistent);
+            if (unit == null || !unit.hasCombatView || unit.combatView.view == null
+                || unit.combatView.view.visualManager == null)
+            {
+                return;
+            }
+            unit.combatView.view.visualManager.OnIntegrityChange(socket, integrity);
+        }
+
+        /// <summary>
         /// Plays one unit's own wreck visual, or undoes it. M15 §3.1.
         /// </summary>
         /// <remarks>
@@ -2252,6 +2455,12 @@ namespace PBAndJ.Mod.Net
             WrecksPlayed = 0;
             WrecksSettled = 0;
             WrecksRefused = 0;
+
+            // M16. The caller settles the held part damage before reaching here —
+            // see CombatGameBridge.StopKeyframes — so this only forgets, and the
+            // seen-set it forgets is what makes the next fight's first snapshot
+            // settle at once rather than waiting for a window.
+            ClearPartIntegrity();
         }
 
         /// <summary>

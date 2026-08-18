@@ -6,7 +6,7 @@ namespace PBAndJ.Core.Tests.Net
     public class PbjProtocolTests
     {
         [Fact]
-        public void Version_IsEight()
+        public void Version_IsNine()
         {
             // Pinned deliberately: bumping the wire format must be an explicit
             // edit here and in Write_MinimalOrder_ProducesExactBytes.
@@ -37,7 +37,12 @@ namespace PBAndJ.Core.Tests.Net
             // pilot component, so both fields were constant on a unit for their
             // whole life. The unit's own IsWrecked/WreckedAt go in on the same
             // move, so M15's two halves cost one break between them.
-            Assert.Equal(8, PbjProtocol.Version);
+            // v9 (M16) appends a frame-integrity presence bit and a second
+            // counted part list — every part's integrity and barrier — to the
+            // same unit record. A v8 peer stops reading before both, and a v9
+            // peer reading a v8 record takes the next unit's name length as a
+            // part count, so there is no partial compatibility to preserve.
+            Assert.Equal(9, PbjProtocol.Version);
         }
 
         [Fact]
@@ -244,7 +249,14 @@ namespace PBAndJ.Core.Tests.Net
             // wrecked-part list, the unit's own wreck flag and stamp, and loses
             // the two dead death fields — all in one break, rather than keeping
             // a field known to be constant alive until some later one.
-            Assert.Equal("0.20.0", PbjProtocol.ModVersion);
+            // 0.21.0 for M16 — per-part integrity sync — which moves
+            // PbjProtocol.Version to 9. The unit record gains every part's
+            // integrity and barrier, plus the presence bit that finally makes
+            // the frame-integrity field honest: it used to travel as a bare 0f
+            // that meant "absent on the host" and was written as a real value on
+            // the client, which the digest could not see because both machines
+            // then read zero.
+            Assert.Equal("0.21.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

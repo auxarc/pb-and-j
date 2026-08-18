@@ -66,6 +66,54 @@ namespace PBAndJ.Core.Net
     }
 
     /// <summary>
+    /// One of a unit's parts and how damaged it is. M16.
+    /// </summary>
+    /// <remarks>
+    /// The two fields the game's damage resolution actually writes
+    /// (<c>CombatDamageSystem.cs:511,563</c>) and the two a save round-trips
+    /// (<c>DataHelperSaveSerialization.cs:1297-1298</c>,
+    /// <c>DataManagerSave.cs:2750-2751</c>). Nothing in the mod touched either
+    /// before M16, so a client's parts sat at their combat-setup values for the
+    /// whole fight — which is why its health bars, its post-combat frame
+    /// integrity and any save it took were all wrong together.
+    /// <para>
+    /// <b>Every part travels, never only the damaged ones.</b> "Absent means
+    /// pristine" is wrong for integrity: combat setup writes each part's value
+    /// from the unit's pre-combat frame integrity
+    /// (<c>EquipmentUtility.cs:677-684</c>), so a part legitimately starts below
+    /// one and a sparse encoding could not tell that from undamaged. Barrier
+    /// happens not to share that — <c>UnitUtilities.cs:2043-2046</c> resets it to
+    /// <c>1f</c> at combat-unit creation — but one dense rule beats a dense rule
+    /// and a sparse rule in the same record.
+    /// </para>
+    /// <para>
+    /// Deliberately kept separate from <see cref="PartDestruction"/> rather than
+    /// merged into a single <c>(socket, integrity, barrier, wreckTime)</c> list,
+    /// which would be smaller and is the obvious end state. M15 shipped days
+    /// before this with its unit-wreck path still unverified in game, and
+    /// rewriting the membership test <see cref="DestructionState.Receive"/>
+    /// performs on that list would have invalidated the verification that does
+    /// exist. The redundancy is a few socket strings a turn.
+    /// </para>
+    /// </remarks>
+    public readonly struct PartState
+    {
+        public PartState(string? socket, float integrity, float barrier)
+        {
+            Socket = socket;
+            Integrity = integrity;
+            Barrier = barrier;
+        }
+
+        /// <summary>The mount socket — <c>part.partParentUnit.socket</c>.</summary>
+        public string? Socket { get; }
+
+        public float Integrity { get; }
+
+        public float Barrier { get; }
+    }
+
+    /// <summary>
     /// One unit's authoritative state at the end of an executed turn, as the
     /// host saw it. Hard-set on a client.
     /// </summary>
@@ -107,6 +155,7 @@ namespace PBAndJ.Core.Net
     public readonly struct UnitSnapshot
     {
         private static readonly PartDestruction[] NoParts = new PartDestruction[0];
+        private static readonly PartState[] NoPartStates = new PartState[0];
 
         public UnitSnapshot(
             string? name,
@@ -121,8 +170,12 @@ namespace PBAndJ.Core.Net
             float arrivalTime = 0f,
             bool isWrecked = false,
             float wreckedAt = 0f,
-            IReadOnlyList<PartDestruction>? wreckedParts = null)
+            IReadOnlyList<PartDestruction>? wreckedParts = null,
+            IReadOnlyList<PartState>? parts = null,
+            bool hasFrameIntegrity = false)
         {
+            Parts = parts ?? NoPartStates;
+            HasFrameIntegrity = hasFrameIntegrity;
             Name = name;
             Position = position;
             Rotation = rotation;
@@ -340,6 +393,41 @@ namespace PBAndJ.Core.Net
         /// </para>
         /// </remarks>
         public IReadOnlyList<PartDestruction> WreckedParts { get; }
+
+        /// <summary>
+        /// Every part of this unit and how damaged it is. M16.
+        /// </summary>
+        /// <remarks>
+        /// The live values, like <see cref="WreckedParts"/> and for the same
+        /// reason: a delta loses a client that joined late, a client whose window
+        /// never played, and a view rebuilt mid-fight. Being state rather than an
+        /// event is also what lets the client's own
+        /// <c>EquipmentUtility.RefreshFrameIntegrityFromParts</c> come out right
+        /// after combat with no patch at all — the recompute is correct once its
+        /// inputs are.
+        /// </remarks>
+        public IReadOnlyList<PartState> Parts { get; }
+
+        /// <summary>
+        /// Whether the host has a <c>unitFrameIntegrity</c> component at all.
+        /// M16.
+        /// </summary>
+        /// <remarks>
+        /// Travels because it varies per unit and because a client cannot
+        /// possibly derive it — see <see cref="FrameIntegrityDrive.Present"/> for
+        /// the mechanism, which is that the two machines take different paths
+        /// into combat and only one of them strips the component.
+        /// <para>
+        /// It is what makes <see cref="Integrity"/> honest. Before M16 that field
+        /// was captured as <c>has ? f : 0f</c> and applied unconditionally, so it
+        /// carried a zero that meant "absent on the host" and wrote it as a real
+        /// value on the client. The digest agreed afterwards
+        /// (<c>StateDigest.cs:104</c>) because both machines then read zero,
+        /// which is exactly how a field can be wrong for a whole milestone
+        /// without any counter noticing.
+        /// </para>
+        /// </remarks>
+        public bool HasFrameIntegrity { get; }
 
         /// <summary>
         /// Projects onto the narrower type the digest is defined over.
