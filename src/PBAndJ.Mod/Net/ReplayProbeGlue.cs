@@ -432,11 +432,58 @@ namespace PBAndJ.Mod.Net
 
         private static string F(float f) => f.ToString("0.####");
 
+        /// <summary>
+        /// The pose digest, for comparing two machines or two builds. M18.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ <b>Read it HELD or do not read it.</b> Playback advances with real
+        /// time, so two unheld readings sample different moments and differ for
+        /// reasons that are nobody's defect. <c>pbj.fx-hold 1.0</c> clamps the
+        /// cursor first; compare at the same value.
+        /// <para>
+        /// ⚠️ <b>And read the count.</b> <c>bones=0</c> is the vacuous pass — two
+        /// machines posing nothing agree perfectly with playback entirely
+        /// unwired, which is the shape this project has shipped instruments for
+        /// before.
+        /// </para>
+        /// </remarks>
+        [Command("pbj.pose-digest", "M18: fingerprint of the skeleton being drawn — read it HELD")]
+        public static string PoseDigestNow()
+        {
+            if (!IDUtility.IsGameState("combat"))
+            {
+                return "[pb-and-j] not in combat";
+            }
+
+            var (count, digest) = KeyframePlayer.DigestPose();
+            var line = "[pb-and-j] pose | bones=" + count
+                + " digest=" + digest
+                + " | playing=" + KeyframePlayer.IsPlaying
+                + " holding=" + KeyframePlayer.Holding
+                + " posedUnits=" + KeyframePlayer.PosedUnits
+                + (count == 0
+                    ? "  ⚠️ VACUOUS: nothing is posed — a match here proves nothing"
+                    : string.Empty)
+                + (KeyframePlayer.Holding
+                    ? string.Empty
+                    : "  ⚠️ NOT HELD: pin the cursor with pbj.fx-hold before comparing");
+            Debug.Log(line);
+            return line;
+        }
+
         internal static void RegisterConsoleCommands()
         {
             var method = typeof(ReplayProbeGlue).GetMethod(
                 nameof(ReplayProbe), BindingFlags.Static | BindingFlags.Public, null, new Type[0], null);
             QuantumConsoleProcessor.TryAddCommand(new CommandData(method, "pbj.replay-probe"));
+
+            // ⚠️ Explicitly registered, like every pbj.* command: QC's attribute
+            // scan does not reach this assembly, so the [Command] above is
+            // documentation. Omitting this line leaves a green build, a green
+            // deploy, and a command that simply does not exist.
+            var pose = typeof(ReplayProbeGlue).GetMethod(
+                nameof(PoseDigestNow), BindingFlags.Static | BindingFlags.Public, null, new Type[0], null);
+            QuantumConsoleProcessor.TryAddCommand(new CommandData(pose, "pbj.pose-digest"));
         }
     }
 }

@@ -89,6 +89,7 @@ NONWIRE_FILES := $(NONWIRE_ROOT) $(addprefix src/PBAndJ.Core/Net/, \
                  NetLog.cs PartIntegrityPlayback.cs PartStateDigest.cs  \
                  PassengerRules.cs PbjEffect.cs PbjInboundEvent.cs  \
                  PbjMailbox.cs PbjPeerRegistry.cs PbjProtocolException.cs  \
+                 PoseDigest.cs  \
                  PbjRuntime.cs PoseBuffer.cs PoseTracks.cs ReactionPings.cs  \
                  ReplayAssetParts.cs ReplayAssetPlayback.cs  \
                  ReplayVisibility.cs StateDigest.cs TrackThinning.cs  \

@@ -2907,6 +2907,60 @@ namespace PBAndJ.Mod.Net
         /// initialised flag — but this driver poses whatever has bones.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// Digests the skeleton this machine is drawing right now. M18.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 <b>The measurement this file never had.</b> Thirty-eight counters
+        /// reach <c>pbj.drive-state</c> from here and not one of them can tell a
+        /// correct pose from a wrong one — <see cref="PosedUnits"/> counts units
+        /// bones were written for, never whether the bones were right. So the
+        /// whole playback path could be refactored, every number could match, and
+        /// every mech could hold the wrong pose.
+        /// <para>
+        /// Read from the same <see cref="Target.Bones"/> the driver writes, in
+        /// local space because that is what <see cref="ApplyPose"/> sets, and by
+        /// bone index because two joints that swapped are the defect worth
+        /// catching.
+        /// </para>
+        /// <para>
+        /// ⚠️ Meaningful only at a pinned cursor — see <c>pbj.fx-hold</c> — and
+        /// only beside a non-zero count. A machine posing nothing digests to the
+        /// empty basis and matches another machine posing nothing.
+        /// </para>
+        /// </remarks>
+        internal static (int Count, string Digest) DigestPose()
+        {
+            var entries = new List<PoseBoneEntry>();
+            for (var i = 0; i < targets.Count; i++)
+            {
+                var target = targets[i];
+                var bones = target.Bones;
+                if (bones == null || string.IsNullOrEmpty(target.Name))
+                {
+                    continue;
+                }
+
+                for (var b = 0; b < bones.Count; b++)
+                {
+                    var bone = bones[b];
+                    if (bone == null)
+                    {
+                        continue;
+                    }
+
+                    var p = bone.localPosition;
+                    var r = bone.localRotation;
+                    entries.Add(new PoseBoneEntry(
+                        target.Name, b,
+                        new Vec3(p.x, p.y, p.z),
+                        new Vec4(r.x, r.y, r.z, r.w)));
+                }
+            }
+
+            return PoseDigest.Compute(entries);
+        }
+
         private static void ApplyPose(Target target)
         {
             var bones = target.Bones;
