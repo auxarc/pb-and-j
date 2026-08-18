@@ -234,6 +234,19 @@ namespace PBAndJ.Peer
                 // and lose every part without being wrecked itself.
                 hostBridge.Units[2].IsWrecked = true;
                 hostBridge.Units[2].WreckedAt = 1.75f;
+                // M16. Two parts with integrity and barrier disagreeing in
+                // opposite directions, so a codec that read one field into the
+                // other cannot pass, plus the value a wrecked part really holds.
+                hostBridge.Units[1].Parts = new[]
+                {
+                    new PartState("core", 0.25f, 0.75f),
+                    new PartState("equipment_left", 0f, 0f),
+                };
+                // Presence is the field that had no carrier before M16, and
+                // absence is what a host in combat actually reports for its whole
+                // player squad. Set on a DIFFERENT unit from the one carrying the
+                // parts, so neither can stand in for the other.
+                hostBridge.Units[0].HasFrameIntegrity = false;
                 var hostDigest = hostBridge.ComputeStateDigest();
 
                 if (clientBridge.ComputeStateDigest() == hostDigest)
@@ -284,6 +297,28 @@ namespace PBAndJ.Peer
                 }
                 Console.WriteLine(
                     "[selftest] OK   position, integrity, wrecked parts and the unit wreck all crossed intact");
+
+                // M16, asserted separately from the block above so a failure says
+                // which half moved. Both directions of the presence bit are
+                // checked: unit 0 must have LOST it, and the others must keep it.
+                if (corrected[1].Parts.Count != 2
+                    || corrected[1].Parts[0].Socket != "core"
+                    || corrected[1].Parts[0].Integrity != 0.25f
+                    || corrected[1].Parts[0].Barrier != 0.75f
+                    || corrected[1].Parts[1].Socket != "equipment_left"
+                    || corrected[1].Parts[1].Integrity != 0f
+                    || corrected[1].Parts[1].Barrier != 0f
+                    || corrected[0].Parts.Count != 0
+                    || corrected[0].HasFrameIntegrity
+                    || !corrected[1].HasFrameIntegrity
+                    || !corrected[2].HasFrameIntegrity)
+                {
+                    Console.WriteLine(
+                        "[selftest] FAIL part state or frame-integrity presence did not cross intact");
+                    return 1;
+                }
+                Console.WriteLine(
+                    "[selftest] OK   per-part integrity, barrier and frame-integrity presence crossed intact");
 
                 if (clientBridge.ClearLocalOrdersCalls == 0)
                 {

@@ -48,6 +48,28 @@ namespace PBAndJ.Peer
         public bool IsWrecked { get; set; }
 
         public float WreckedAt { get; set; }
+
+        /// <summary>
+        /// Every part's damage. M16.
+        /// </summary>
+        /// <remarks>
+        /// Carried for the same reason <see cref="WreckedParts"/> is: it is what
+        /// the snapshot leg asserts on, and a stand-in bridge that dropped it
+        /// would let a codec regression through with every count still matching.
+        /// </remarks>
+        public IReadOnlyList<PartState> Parts { get; set; } = new PartState[0];
+
+        /// <summary>
+        /// Whether this unit has a frame-integrity component at all. M16.
+        /// </summary>
+        /// <remarks>
+        /// Defaults to <c>true</c> where the wire type defaults to <c>false</c>,
+        /// deliberately: the harness's units are stand-ins for units out of
+        /// combat, which is the state that <i>has</i> the component. It also means
+        /// the selftest's absent case is something a leg has to set, rather than
+        /// the value it would get by accident.
+        /// </remarks>
+        public bool HasFrameIntegrity { get; set; } = true;
     }
 
     [ExcludeFromCodeCoverage]
@@ -137,7 +159,9 @@ namespace PBAndJ.Peer
                     unit.Integrity,
                     isWrecked: unit.IsWrecked,
                     wreckedAt: unit.WreckedAt,
-                    wreckedParts: unit.WreckedParts));
+                    wreckedParts: unit.WreckedParts,
+                    parts: unit.Parts,
+                    hasFrameIntegrity: unit.HasFrameIntegrity));
             }
             return snapshot;
         }
@@ -167,6 +191,8 @@ namespace PBAndJ.Peer
                     WreckedParts = incoming.WreckedParts,
                     IsWrecked = incoming.IsWrecked,
                     WreckedAt = incoming.WreckedAt,
+                    Parts = incoming.Parts,
+                    HasFrameIntegrity = incoming.HasFrameIntegrity,
                 });
             }
         }

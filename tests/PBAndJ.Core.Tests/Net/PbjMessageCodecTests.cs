@@ -705,6 +705,90 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal("socket_0", m.Units[0].WreckedParts[0].Socket);
         }
 
+        // M16. Per unit and with a different count on each, so a decoder that
+        // read one unit's list into the next unit's record cannot pass. This is
+        // now the LAST list in the record, which is where a reader that dropped a
+        // field lands.
+        [Fact]
+        public void RoundTrip_Snapshot_PreservesPartStatePerUnit()
+        {
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f),
+                new UnitSnapshot("pb_mech_02", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f,
+                    parts: new[] { new PartState("core", 0.375f, 0.5f) }),
+                new UnitSnapshot("pb_mech_03", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f,
+                    parts: new[]
+                    {
+                        // Integrity and barrier are independent, so the pair here
+                        // is deliberately asymmetric in both directions: a decoder
+                        // that read one into the other cannot pass.
+                        new PartState("equipment_left", 0f, 1f),
+                        new PartState("equipment_right", 1f, 0f),
+                    }),
+            }));
+
+            Assert.Empty(m.Units[0].Parts);
+
+            var one = Assert.Single(m.Units[1].Parts);
+            Assert.Equal("core", one.Socket);
+            Assert.Equal(0.375f, one.Integrity);
+            Assert.Equal(0.5f, one.Barrier);
+
+            Assert.Equal(2, m.Units[2].Parts.Count);
+            Assert.Equal(0f, m.Units[2].Parts[0].Integrity);
+            Assert.Equal(1f, m.Units[2].Parts[0].Barrier);
+            Assert.Equal(1f, m.Units[2].Parts[1].Integrity);
+            Assert.Equal(0f, m.Units[2].Parts[1].Barrier);
+        }
+
+        // M16, and the pairing this exists for: the two states a single float
+        // could not tell apart are "absent on the host" — which is the whole
+        // player squad, mid-combat — and "present and zero", which is a real
+        // value the game writes for a wrecked unit. Before M16 both travelled as
+        // a bare 0f and the client wrote a component the host did not have.
+        [Fact]
+        public void RoundTrip_Snapshot_PreservesFrameIntegrityPresenceAndValue()
+        {
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 0f),
+                new UnitSnapshot("pb_mech_02", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 0f, hasFrameIntegrity: true),
+                new UnitSnapshot("pb_mech_03", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 0.625f, hasFrameIntegrity: true),
+            }));
+
+            Assert.False(m.Units[0].HasFrameIntegrity);
+            Assert.True(m.Units[1].HasFrameIntegrity);
+            Assert.Equal(0f, m.Units[1].Integrity);
+            Assert.True(m.Units[2].HasFrameIntegrity);
+            Assert.Equal(0.625f, m.Units[2].Integrity);
+        }
+
+        [Fact]
+        public void RoundTrip_Snapshot_TruncatesAnOversizePartStateList()
+        {
+            var parts = new PartState[PbjMessageCodec.MaxPartsPerUnit + 5];
+            for (var i = 0; i < parts.Length; i++)
+            {
+                parts[i] = new PartState("socket_" + i, 1f, 1f);
+            }
+
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f, parts: parts),
+            }));
+
+            Assert.Equal(PbjMessageCodec.MaxPartsPerUnit, m.Units[0].Parts.Count);
+            Assert.Equal("socket_0", m.Units[0].Parts[0].Socket);
+        }
+
         // Presence and value travel separately, so the pairs chosen here are the
         // two a single combined field could not tell apart: absent (which a host
         // reports for its whole player squad) and present-but-negative (which a

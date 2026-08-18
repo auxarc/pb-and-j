@@ -53,9 +53,10 @@ namespace PBAndJ.Mod.Net
             new List<KeyValuePair<int, string>>();
 
         /// <summary>
-        /// Reports whether M15 has anything to show, and on which units.
+        /// Reports whether M15 has anything to show, and on which units, plus
+        /// M16's frame-integrity presence per unit.
         /// </summary>
-        [Command("pbj.destruct-probe", "M15: whether this content can draw a wreck, per unit")]
+        [Command("pbj.destruct-probe", "M15/M16: wreck content per unit, and frame-integrity presence")]
         public static string DestructProbe()
         {
             if (!IDUtility.IsGameState("combat"))
@@ -69,6 +70,8 @@ namespace PBAndJ.Mod.Net
             ReportContent(sb);
             sb.Append(" | held: units=").Append(KeyframePlayer.HeldWreckedUnits)
                 .Append(" parts=").Append(KeyframePlayer.HeldDestructions);
+            sb.Append(" | ");
+            ReportFrameIntegrity(sb);
 
             var line = sb.ToString();
             Debug.Log(line);
@@ -139,6 +142,72 @@ namespace PBAndJ.Mod.Net
                 .Append(" parts=").Append(parts)
                 .Append(" composites=").Append(composites)
                 .Append(" hidden=").Append(hidden);
+        }
+
+        /// <summary>
+        /// Which units hold <c>unitFrameIntegrity</c>, and at what value. M16's
+        /// step 2, and the one reading in its run sheet nothing else substitutes
+        /// for.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 <b>The two machines take different paths into combat.</b>
+        /// <c>CombatScenarioSetupSystem.cs:60-64</c> early-returns while a load
+        /// is in progress, so a client never runs it and its state comes from
+        /// <c>DataManagerSave.cs:2293-2301</c> instead — which installs this
+        /// component <b>unconditionally at 1f</b> where the host's setup strips
+        /// it. The two therefore disagree from combat entry, before anything
+        /// crosses the wire, and only <c>KeyframePlayer</c>'s explicit
+        /// <c>RemoveUnitFrameIntegrity</c> closes it.
+        /// <para>
+        /// ⚠️ <b>Every other reading in M16's run sheet passes whether or not
+        /// that remove fires</b>, because the per-part values it also syncs are
+        /// correct either way. Expected: on a client, <b>true</b> for the player
+        /// squad before the first snapshot and <b>false</b> after it, matching
+        /// the host — so this must be read on both machines and at both moments,
+        /// not once at the end.
+        /// </para>
+        /// <para>
+        /// Only units that <i>hold</i> the component are listed, name-sorted, so
+        /// the two windows compare as sets: a name present on one machine and
+        /// absent on the other is the defect, and the <c>present=</c> count
+        /// alone would hide which unit it was. Names are the wire's own key
+        /// (<c>persistent.nameInternal.s</c>) and are stable across machines,
+        /// unlike unit indices, which are process-local.
+        /// </para>
+        /// </remarks>
+        private static void ReportFrameIntegrity(StringBuilder sb)
+        {
+            var units = 0;
+            var named = new List<KeyValuePair<string, float>>();
+
+            foreach (var unit in Contexts.sharedInstance.combat
+                .GetGroup(CombatMatcher.UnitTag).GetEntities())
+            {
+                units++;
+
+                var persistent = IDUtility.GetLinkedPersistentEntity(unit);
+                if (persistent == null || !persistent.hasNameInternal)
+                {
+                    continue;
+                }
+                if (!persistent.hasUnitFrameIntegrity)
+                {
+                    continue;
+                }
+
+                named.Add(new KeyValuePair<string, float>(
+                    persistent.nameInternal.s, persistent.unitFrameIntegrity.f));
+            }
+
+            named.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
+
+            sb.Append("frameIntegrity: present=").Append(named.Count)
+                .Append('/').Append(units);
+            for (var i = 0; i < named.Count; i++)
+            {
+                sb.Append(' ').Append(named[i].Key).Append('=')
+                    .Append(named[i].Value.ToString("0.000", CultureInfo.InvariantCulture));
+            }
         }
 
         /// <summary>

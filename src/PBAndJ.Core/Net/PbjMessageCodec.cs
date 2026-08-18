@@ -230,14 +230,33 @@ namespace PBAndJ.Core.Net
         /// bounded by how many parts it has rather than by how long the fight
         /// has run, and it therefore cannot climb.
         /// <para>
-        /// The worst case still has to be affordable, because the snapshot is one
-        /// blob: 128 units × 32 parts × (a short socket string plus a float)
-        /// stays comfortably inside <see cref="PbjWriter.MaxBytesLength"/>, which
-        /// <b>throws</b> rather than truncates and would take every effect queued
-        /// behind it (the failure M11e paid for).
+        /// ⚠️ <b>The worst case is bounded by
+        /// <see cref="PbjRuntime.MaxFrameLength"/>, not by
+        /// <c>PbjWriter.MaxBytesLength</c>, and this comment said otherwise until
+        /// M16.</b> That 512 KiB limit guards <c>WriteBytes</c>; a snapshot is
+        /// written field by field and never calls it, exactly as the asset-part
+        /// note above already records for its own payload. So the real ceiling is
+        /// the 1 MiB frame, and the arithmetic — 128 units × (32 wrecked + 32
+        /// stated) parts × (a short socket string plus two floats) — lands around
+        /// 230 KB, comfortably inside it. The mis-citation mattered because it
+        /// pointed at a limit that <b>throws</b>, and a throw inside the effect
+        /// pump takes every effect queued behind it (the failure M11e paid for).
         /// </para>
         /// </remarks>
         public const int MaxWreckedPartsPerUnit = 32;
+
+        /// <summary>
+        /// Cap on stated parts carried on one unit's snapshot record. M16.
+        /// </summary>
+        /// <remarks>
+        /// Mirrors <see cref="MaxWreckedPartsPerUnit"/> deliberately: it bounds
+        /// the same set of parts asked a different question, so the two could
+        /// only differ by accident. Truncation rather than a fault, for the
+        /// reason that governs the whole record — a snapshot is a correction, and
+        /// refusing one over a part list would cost that unit its position and
+        /// visibility too.
+        /// </remarks>
+        public const int MaxPartsPerUnit = 32;
 
         /// <summary>Longest pool key an asset track may carry, in characters.</summary>
         /// <remarks>
@@ -806,6 +825,22 @@ namespace PBAndJ.Core.Net
                 writer.WriteString(parts[i].Socket);
                 writer.WriteSingle(parts[i].Time);
             }
+
+            // M16, and last in the record on purpose: it is the newest field, so
+            // the tail is where a peer one version behind stops reading rather
+            // than misreading everything after it.
+            writer.WriteBool(unit.HasFrameIntegrity);
+            var stated = unit.Parts;
+            var statedCount = stated.Count < MaxPartsPerUnit
+                ? stated.Count
+                : MaxPartsPerUnit;
+            writer.WriteInt32(statedCount);
+            for (var i = 0; i < statedCount; i++)
+            {
+                writer.WriteString(stated[i].Socket);
+                writer.WriteSingle(stated[i].Integrity);
+                writer.WriteSingle(stated[i].Barrier);
+            }
         }
 
         // Every field is read into its own local rather than into the argument
@@ -838,10 +873,19 @@ namespace PBAndJ.Core.Net
                 parts[i] = new PartDestruction(socket, reader.ReadSingle());
             }
 
+            var hasFrameIntegrity = reader.ReadBool();
+            var statedCount = ReadCount(reader, MaxPartsPerUnit, "stated part");
+            var stated = new PartState[statedCount];
+            for (var i = 0; i < statedCount; i++)
+            {
+                var socket = reader.ReadString();
+                stated[i] = new PartState(socket, reader.ReadSingle(), reader.ReadSingle());
+            }
+
             return new UnitSnapshot(
                 name, position, rotation, facing, integrity,
                 isHidden, isHiddenDetectable, isDeployed, hasArrivalTime, arrivalTime,
-                isWrecked, wreckedAt, parts);
+                isWrecked, wreckedAt, parts, stated, hasFrameIntegrity);
         }
 
         /// <summary>

@@ -196,7 +196,13 @@ namespace PBAndJ.Mod.Net
                 var position = unit.hasPosition ? unit.position.v : Vector3.zero;
                 var rotation = unit.hasRotation ? unit.rotation.q : Quaternion.identity;
                 var facing = unit.hasFacing ? unit.facing.v : Vector3.forward;
-                var integrity = persistent.hasUnitFrameIntegrity ? persistent.unitFrameIntegrity.f : 0f;
+                // M16. Presence travels beside the value, because the two
+                // machines take different paths into combat and only one of them
+                // strips the component — see FrameIntegrityDrive.Present. Before
+                // M16 this captured a bare 0f for the host's whole player squad
+                // and the client wrote it as a real value.
+                var hasIntegrity = persistent.hasUnitFrameIntegrity;
+                var integrity = hasIntegrity ? persistent.unitFrameIntegrity.f : 0f;
 
                 // Walked once and used twice — the set itself travels, and the
                 // unit's wreck moment is derived from it below.
@@ -234,7 +240,12 @@ namespace PBAndJ.Mod.Net
                     // M15 §3.2. The live wrecked set, not this turn's additions
                     // — see UnitSnapshot.WreckedParts for why the difference is
                     // the design rather than a convenience.
-                    wrecked));
+                    wrecked,
+                    // M16. Every part, not only the damaged ones: combat setup
+                    // seeds each part's integrity from the unit's pre-combat
+                    // frame integrity, so "absent means pristine" would be wrong.
+                    PartStatesOf(persistent),
+                    hasIntegrity));
 
                 if (units.Count == PbjMessageCodec.MaxUnitsPerSnapshot)
                 {
@@ -295,6 +306,53 @@ namespace PBAndJ.Mod.Net
         }
 
         private static readonly PartDestruction[] NoWreckedParts = new PartDestruction[0];
+
+        /// <summary>
+        /// Every part of this unit and how damaged it is. M16.
+        /// </summary>
+        /// <remarks>
+        /// A second walk of the same set <see cref="WreckedPartsOf"/> takes,
+        /// rather than one walk producing both. It runs once per unit per turn
+        /// against a blueprint-bounded part count, so the saving is not worth the
+        /// coupling — and the two lists answer questions that will diverge, since
+        /// the wrecked set is destined to keep its destruction stamps while this
+        /// one is a plain state mirror.
+        /// <para>
+        /// A part with no socket is dropped here rather than sent and skipped on
+        /// the far side. The socket is the only join key; without it the record
+        /// can address nothing.
+        /// </para>
+        /// </remarks>
+        private static IReadOnlyList<PartState> PartStatesOf(PersistentEntity persistent)
+        {
+            List<PartState>? states = null;
+            foreach (var part in EquipmentUtility.GetPartsInUnit(persistent))
+            {
+                if (part == null || !part.hasPartParentUnit)
+                {
+                    continue;
+                }
+
+                var socket = part.partParentUnit.socket;
+                if (string.IsNullOrEmpty(socket))
+                {
+                    continue;
+                }
+
+                // Both components are read defensively because the game itself
+                // does: GetPartIntegrity checks hasIntegrityNormalized before
+                // reading it (CombatReplayHelper.cs:1823-1827), and a part
+                // created outside the ordinary path can reach here without one.
+                states ??= new List<PartState>(8);
+                states.Add(new PartState(
+                    socket,
+                    part.hasIntegrityNormalized ? part.integrityNormalized.f : 1f,
+                    part.hasBarrierNormalized ? part.barrierNormalized.f : 1f));
+            }
+            return (IReadOnlyList<PartState>?)states ?? NoPartStates;
+        }
+
+        private static readonly PartState[] NoPartStates = new PartState[0];
 
         /// <summary>
         /// When this unit was wrecked, derived from its parts. M15 §3.1.
@@ -394,7 +452,11 @@ namespace PBAndJ.Mod.Net
                 unit.ReplaceRotation(new Quaternion(
                     state.Rotation.X, state.Rotation.Y, state.Rotation.Z, state.Rotation.W));
                 unit.ReplaceFacing(new Vector3(state.Facing.X, state.Facing.Y, state.Facing.Z));
-                persistent.ReplaceUnitFrameIntegrity(state.Integrity);
+
+                // M16 moved unitFrameIntegrity out of this loop. It is no longer
+                // a value to write but a presence to mirror, and the removal case
+                // reaches units this loop cannot — so the whole field is owned by
+                // ReceivePartIntegrity below, in one place.
                 byName.Remove(persistent.nameInternal.s);
             }
 
@@ -404,6 +466,13 @@ namespace PBAndJ.Mod.Net
             // entry here either, and it is exactly the unit whose parts need
             // putting right.
             KeyframePlayer.ReceiveDestruction(snapshot);
+
+            // M16, and AFTER the destruction settle rather than before it. M15's
+            // settle writes a synthesised 0f or 1f to the visual for a part it is
+            // wrecking or reviving (KeyframePlayer.cs:2346); once real values are
+            // on the wire that is a placeholder, so it must be overwritten rather
+            // than allowed to overwrite. For a wrecked part the two agree at 0.
+            KeyframePlayer.ReceivePartIntegrity(snapshot);
 
             // Entities are never created from a snapshot. A roster difference is
             // a structural mismatch that hard-setting positions cannot fix, so
@@ -1397,6 +1466,16 @@ namespace PBAndJ.Mod.Net
         public void StopKeyframes()
         {
             KeyframePlayer.Stop();
+
+            // M16, and BEFORE the clear below discards what it is holding. This
+            // is the third settle path and it is not optional: SettleWindow has
+            // one call site, on a window's natural finish, so a turn whose
+            // keyframes never arrived — the mutual-destruction ending, where the
+            // host legitimately sends none — has no window to settle and, here at
+            // combat end, no next snapshot either. Without this the final turn's
+            // damage would be discarded in exactly the fight that produced most
+            // of it.
+            KeyframePlayer.SettlePartIntegrity();
 
             // M15, and only here rather than in Stop itself. Every emitter of
             // this effect means the fight is over for this client — CombatEnd,
