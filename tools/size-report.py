@@ -84,11 +84,30 @@ def measure(files):
     for path, text in files.items():
         lines = text.split("\n")
         sizes[path] = len(lines)
+        # (name, last line) so a type is POPPED when its body ends. Without the
+        # end the stack only ever grew, and every method declared after a nested
+        # type was attributed to that type: BuildShows was reported as
+        # AssetShow.BuildShows. Harmless while a file never changes -- both sides
+        # agree on the wrong owner -- and a false-positive machine the moment one
+        # is split, because the same method in a file with no nested types gets
+        # the right owner and the identity appears brand new. Six of those on the
+        # first KeyframePlayer split, in the one operation this tool exists for.
         enclosing, i = [], 0
         while i < len(lines):
+            while enclosing and i > enclosing[-1][1]:
+                enclosing.pop()
             t = TYPE.match(lines[i])
             if t:
-                enclosing.append(t.group('name'))
+                depth, tend = 0, len(lines) - 1
+                started = False
+                for k in range(i, len(lines)):
+                    depth += lines[k].count('{') - lines[k].count('}')
+                    if '{' in lines[k]:
+                        started = True
+                    if started and depth == 0:
+                        tend = k
+                        break
+                enclosing.append((t.group('name'), tend))
             m = DECL_START.match(lines[i])
             if m and not TYPE.match(lines[i]):
                 # Accumulate until the parameter list closes. 125 declaration
@@ -120,7 +139,7 @@ def measure(files):
                             body = "\n".join(lines[i:end + 1])
                             code = len([l for l in lines[i:end + 1]
                                         if l.strip() and not l.strip().startswith('//')])
-                            owner = enclosing[-1] if enclosing else '?'
+                            owner = enclosing[-1][0] if enclosing else '?'
                             params = sig[sig.index('(') + 1:sig.rindex(')')]
                             ident = (owner, m.group('name'), arity(params))
                             methods[ident] = (path, code, shape(path, m.group('name'), body))
