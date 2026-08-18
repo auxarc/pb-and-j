@@ -153,10 +153,29 @@ def from_rev(rev, paths):
     return out
 
 
-def tracked(rev=None):
-    cmd = ['git', 'ls-tree', '-r', '--name-only', rev or 'HEAD', '--', 'src', 'tools', 'tests']
+def tracked(rev):
+    """Files as of a commit. Only ever the BASELINE side."""
+    cmd = ['git', 'ls-tree', '-r', '--name-only', rev, '--', 'src', 'tools', 'tests']
     return [p for p in subprocess.run(cmd, capture_output=True, text=True).stdout.split("\n")
             if p.endswith('.cs') and '/obj/' not in p and '/bin/' not in p]
+
+
+def working():
+    """Files as they are on disk, INCLUDING ones git has never seen.
+
+    The 'now' side must not come from `git ls-tree HEAD`: a split writes ten new
+    files before any commit, and reading HEAD makes them invisible. --census then
+    reports FEWER methods than exist and it reads exactly like the split lost
+    them -- which is what it did report, during the first split this tool was
+    used on. A new 900-line file would likewise go unmentioned until committed.
+    """
+    import os
+    out = []
+    for root in ('src', 'tools', 'tests'):
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in ('obj', 'bin')]
+            out += [os.path.join(dirpath, f) for f in filenames if f.endswith('.cs')]
+    return sorted(out)
 
 
 
@@ -261,7 +280,7 @@ def selftest():
 def census():
     """Every current violation, ignoring the ratchet. For triage and for
     setting limits -- never for gating, since it reports standing debt."""
-    sizes, methods = measure(from_disk(tracked()))
+    sizes, methods = measure(from_disk(working()))
     big = sorted(((n, p) for p, n in sizes.items() if n > FILE_LIMIT), reverse=True)
     shapes = collections.Counter()
     over = []
@@ -297,7 +316,7 @@ def main():
         print(f"size report: no baseline at '{base}' — nothing to compare, skipping.")
         return 0
 
-    now_sizes, now_methods = measure(from_disk(tracked()))
+    now_sizes, now_methods = measure(from_disk(working()))
     was_sizes, was_methods = measure(from_rev(base, tracked(base)))
 
     findings = compare(was_sizes, was_methods, now_sizes, now_methods)
