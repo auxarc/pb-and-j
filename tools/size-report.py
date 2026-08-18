@@ -35,15 +35,14 @@ import re, subprocess, sys, collections
 FILE_LIMIT = 500
 FUNC_LIMIT = 60
 
-DECL = re.compile(
+DECL_START = re.compile(
     r'^(?P<indent>[ \t]*)'
-    r'(?!.*\b(?:if|for|foreach|while|switch|catch|using|lock|fixed|do)\s*\()'
-    r'(?P<sig>(?:\[[^\]]*\]\s*)*'
+    r'(?!.*\b(?:if|for|foreach|while|switch|catch|using|lock|fixed|do|return|new)\s*\()'
+    r'(?:\[[^\]]*\]\s*)*'
     r'(?:(?:public|private|protected|internal|static|sealed|override|virtual|'
     r'async|extern|unsafe|new|partial|readonly)\s+)+'
-    r'[\w<>\[\],\.\?\s]+?'
-    r'(?P<name>[A-Za-z_]\w*)\s*(?:<[^()]*>)?\s*'
-    r'\((?P<params>[^;]*?)\)\s*)(?:where[^{]*)?\s*$')
+    r'[\w<>\[\],\.\?\s]*?'
+    r'(?P<name>[A-Za-z_]\w*)\s*(?:<[^()]*>)?\s*\(')
 TYPE = re.compile(r'^\s*(?:\[[^\]]*\]\s*)*(?:(?:public|private|protected|internal|'
                   r'static|sealed|abstract|partial|readonly|record)\s+)*'
                   r'(?:class|struct|interface|record)\s+(?P<name>[A-Za-z_]\w*)')
@@ -90,27 +89,43 @@ def measure(files):
             t = TYPE.match(lines[i])
             if t:
                 enclosing.append(t.group('name'))
-            m = DECL.match(lines[i])
-            if m and not TYPE.match(lines[i]) and '=>' not in lines[i] and ';' not in lines[i]:
-                j = i + 1
-                while j < len(lines) and lines[j].strip() == '':
-                    j += 1
-                if j < len(lines) and lines[j].strip() == '{':
-                    depth, end = 0, None
-                    for k in range(j, len(lines)):
-                        depth += lines[k].count('{') - lines[k].count('}')
-                        if depth == 0:
-                            end = k
-                            break
-                    if end:
-                        body = "\n".join(lines[i:end + 1])
-                        code = len([l for l in lines[i:end + 1]
-                                    if l.strip() and not l.strip().startswith('//')])
-                        owner = enclosing[-1] if enclosing else '?'
-                        ident = (owner, m.group('name'), arity(m.group('params')))
-                        methods[ident] = (path, code, shape(path, m.group('name'), body))
-                        seen_any = True
-                        i = end
+            m = DECL_START.match(lines[i])
+            if m and not TYPE.match(lines[i]):
+                # Accumulate until the parameter list closes. 125 declaration
+                # sites in this repo wrap their parameters, and a pattern that
+                # required them to close on the declaration line skipped every
+                # one -- so the report counted fewer methods than exist and a
+                # long method with a wrapped signature could never be flagged.
+                depth, sig_end, buf = 0, None, []
+                for k in range(i, min(i + 25, len(lines))):
+                    buf.append(lines[k])
+                    depth += lines[k].count('(') - lines[k].count(')')
+                    if depth == 0:
+                        sig_end = k
+                        break
+                sig = "\n".join(buf)
+                if sig_end is not None and ';' not in sig and '=>' not in sig:
+                    j = sig_end + 1
+                    while j < len(lines) and (lines[j].strip() == ''
+                                              or lines[j].strip().startswith('where ')):
+                        j += 1
+                    if j < len(lines) and lines[j].strip() == '{':
+                        depth, end = 0, None
+                        for k in range(j, len(lines)):
+                            depth += lines[k].count('{') - lines[k].count('}')
+                            if depth == 0:
+                                end = k
+                                break
+                        if end:
+                            body = "\n".join(lines[i:end + 1])
+                            code = len([l for l in lines[i:end + 1]
+                                        if l.strip() and not l.strip().startswith('//')])
+                            owner = enclosing[-1] if enclosing else '?'
+                            params = sig[sig.index('(') + 1:sig.rindex(')')]
+                            ident = (owner, m.group('name'), arity(params))
+                            methods[ident] = (path, code, shape(path, m.group('name'), body))
+                            seen_any = True
+                            i = end
             i += 1
     # Positive control: a matcher that matches nothing reports "no violations",
     # which is the same output as "everything is fine". Refuse instead.
@@ -212,6 +227,25 @@ def selftest():
     check("file already over, unchanged -> silent",
           compare({'a.cs': 600}, {}, {'a.cs': 600}, {}), False)
 
+    # PARSING, not just the ratchet. The synthetic cases above drive compare()
+    # and would pass with a parser that saw no methods at all. This case pins the
+    # defect that shipped in the first version: a wrapped parameter list made a
+    # method invisible, so the report silently measured a smaller codebase than
+    # it had. 65 methods here were hidden that way.
+    wrapped = """namespace N {
+    internal static class C {
+        private static int Wrapped(
+            int a,
+            int b)
+        {
+            return a + b;
+        }
+    }
+}"""
+    _, m = measure({'w.cs': wrapped})
+    check("method with a WRAPPED parameter list is seen", m, True)
+    check("  ... and its arity is right", [k for k in m if k == ('C', 'Wrapped', 2)], True)
+
     # The instrument's own vacuity control, exercised rather than trusted.
     try:
         measure({'x.cs': 'namespace N { }'})
@@ -224,9 +258,36 @@ def selftest():
     return ok
 
 
+def census():
+    """Every current violation, ignoring the ratchet. For triage and for
+    setting limits -- never for gating, since it reports standing debt."""
+    sizes, methods = measure(from_disk(tracked()))
+    big = sorted(((n, p) for p, n in sizes.items() if n > FILE_LIMIT), reverse=True)
+    shapes = collections.Counter()
+    over = []
+    for (owner, name, ar), (path, code, sh) in methods.items():
+        if code > FUNC_LIMIT:
+            shapes[sh or 'REAL LOGIC'] += 1
+            if not sh:
+                over.append((code, path, f"{owner}.{name}/{ar}"))
+    print(f"{len(sizes)} files, {len(methods)} methods")
+    print(f"\nfiles over {FILE_LIMIT} total lines: {len(big)}")
+    for n, p in big[:10]:
+        print(f"  {n:>5}  {p}")
+    print(f"\nmethods over {FUNC_LIMIT} code lines, by shape:")
+    for k, v in shapes.most_common():
+        print(f"  {v:>4}  {k}")
+    print(f"\nenforceable (no exempt shape): {len(over)}")
+    for n, path, label in sorted(over, reverse=True)[:10]:
+        print(f"  {n:>5}  {path}  {label}")
+    return 0
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == '--selftest':
         return selftest()
+    if len(sys.argv) > 1 and sys.argv[1] == '--census':
+        return census()
     base = sys.argv[1] if len(sys.argv) > 1 else 'HEAD^'
     if subprocess.run(['git', 'rev-parse', '--verify', '--quiet', base],
                       capture_output=True).returncode != 0:
