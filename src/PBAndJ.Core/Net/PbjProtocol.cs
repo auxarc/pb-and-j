@@ -223,7 +223,7 @@ namespace PBAndJ.Core.Net
         /// version is for and what a protocol version cannot express.
         /// </para>
         /// </remarks>
-        public const string ModVersion = "0.21.0";
+        public const string ModVersion = "0.22.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.
