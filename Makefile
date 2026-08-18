@@ -94,7 +94,7 @@ NONWIRE_FILES := $(NONWIRE_ROOT) $(addprefix src/PBAndJ.Core/Net/, \
                  ReplayVisibility.cs StateDigest.cs TrackThinning.cs  \
                  TurnBarrier.cs UnitAssignments.cs)
 
-.PHONY: test build dist deploy check-no-drive-channel check-game-hash check-mod-version check-wire-surface check-wire-partition check-coverage-scope record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
+.PHONY: measure-net-coverage test build dist deploy check-no-drive-channel check-game-hash check-mod-version check-wire-surface check-wire-partition check-coverage-scope record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
 
 # metadata.yaml is the one place PbjProtocol.ModVersion cannot reach, and a
 # disagreement between them is invisible until a peer is refused by a host —
@@ -186,14 +186,49 @@ check-wire-surface: check-wire-partition
 COVERED_PROJECTS   := src/PBAndJ.Core
 
 # Each entry needs a reason, not just a name.
-#   PBAndJ.Net — 601 lines of TCP transport. Exercised end to end by
-#     `peer-selftest` over real sockets, never by unit tests, and not measured at
-#     all. This is a real gap rather than a decision: reaching 100% here means
-#     unit-testing socket error branches, which is worth doing and is not done.
+#   PBAndJ.Net — 601 lines of TCP transport, EXCLUDED ON PURPOSE. Every type
+#     carries [ExcludeFromCodeCoverage] with the reason in its own doc comment:
+#     the humble-object split puts socket-and-thread glue outside the gate, and
+#     every protocol decision lives in PBAndJ.Core, which IS at 100%.
+#     ⭐ MEASURED 2026-08-18, because "exercised by the self-test" was an
+#     assertion nobody had checked and it is the whole justification for the
+#     exclusion: `make measure-net-coverage` reports ~83% line / ~68% branch /
+#     96% method from peer-selftest alone. ⚠️ Branch drifts run to run (67.4 and
+#     69.8 on two consecutive runs) because this is real threads over real
+#     sockets and some branches are timing-dependent — read it as a band, not a
+#     figure, and never gate on it. The claim holds. The residual is
+#     almost entirely `catch (SocketException)` / `catch (Exception)` blocks and
+#     a few defensive guards -- failure paths a clean loopback run cannot
+#     produce. Re-take the reading if the transports change.
 #   PBAndJ.Mod — Unity and Harmony types. Cannot load in a test host, so it is
 #     unmeasurable rather than unmeasured; this is why [ExcludeFromCodeCoverage]
 #     appears there and never in Core.
 UNCOVERED_PROJECTS := src/PBAndJ.Net src/PBAndJ.Mod
+
+# Measures what peer-selftest actually covers in PBAndJ.Net, which the gate
+# cannot see because every type there is [ExcludeFromCodeCoverage].
+#
+# 🔴 THE REASON THIS EXISTS: adding PBAndJ.Net to the coverage filter reports
+# 100% while nothing tests it -- the attributes exclude every type, so the gate
+# measures an empty set and calls it perfect. Verified by doing it. That is a
+# check whose "all clear" output is also its "I compared nothing" output, and it
+# is the most convincing possible way to close this gap wrongly.
+#
+# So the honest instrument strips the attributes into a scratch copy, runs the
+# real self-test over real loopback sockets, and reports the number. Never wired
+# into `dist`: it needs a global tool, it mutates sources temporarily, and it
+# takes as long as a full self-test. Run it when the transports change.
+measure-net-coverage:
+	@command -v coverlet >/dev/null || { \
+		echo "FATAL: coverlet.console is not installed."; \
+		echo "  dotnet tool install --global coverlet.console"; exit 1; }
+	@tmp=$$(mktemp -d); trap 'for f in src/PBAndJ.Net/*.cs; do cp "$$tmp/$$(basename $$f)" "$$f"; done; rm -rf "$$tmp"' EXIT; \
+	for f in src/PBAndJ.Net/*.cs; do cp "$$f" "$$tmp/$$(basename $$f)"; done; \
+	sed -i '/^\s*\[ExcludeFromCodeCoverage\]$$/d' src/PBAndJ.Net/*.cs; \
+	$(DOTNET_ENV) dotnet build tools/pbj-peer -c Debug >/dev/null || exit 1; \
+	coverlet tools/pbj-peer/bin/Debug/net9.0 \
+		--target tools/pbj-peer/bin/Debug/net9.0/pbj-peer --targetargs selftest \
+		--include "[PBAndJ.Net]*" --format lcov --output "$$tmp/net" | tail -8
 
 check-coverage-scope:
 	@listed=$$(printf '%s\n' $(COVERED_PROJECTS) $(UNCOVERED_PROJECTS) | sort); \
