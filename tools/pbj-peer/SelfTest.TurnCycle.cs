@@ -12,15 +12,12 @@ using PBAndJ.Net;
 
 namespace PBAndJ.Peer
 {
-    /// <summary>
-    /// The turn-cycle scenario.
-    /// </summary>
-    /// <remarks>
-    /// One part of <c>SelfTest</c>, which is a single class split across
-    /// files. The scenario table in SelfTest.cs is checked against the
-    /// methods declared here at run time, so a part whose registration is
-    /// lost fails loudly rather than silently running fewer scenarios.
-    /// </remarks>
+    // The turn-cycle scenario.
+    //
+    // One part of SelfTest, a single class split across files. Class-level
+    // XML doc lives ONLY in SelfTest.cs: /// on a partial part is concatenated
+    // by the compiler into one type entry, so eleven parts would produce
+    // eleven summaries glued together. Caught by diffing the emitted XML.
     internal static partial class SelfTest
     {
         private static int RunTurnCycle()
