@@ -70,6 +70,12 @@ namespace PBAndJ.Mod.Net
             ReportContent(sb);
             sb.Append(" | held: units=").Append(KeyframePlayer.HeldWreckedUnits)
                 .Append(" parts=").Append(KeyframePlayer.HeldDestructions);
+            // M17 stage 1. Read BETWEEN turns, and read twice: frozen must equal
+            // the wrecked-unit count after the window that killed them and again
+            // a turn later. A figure that climbs turn on turn is the one defect
+            // this feature can have while still looking correct on screen.
+            sb.Append(" | pose: frozen=").Append(KeyframePlayer.FrozenUnits)
+                .Append(" unfrozen=").Append(KeyframePlayer.Unfrozen);
             sb.Append(" | ");
             ReportFrameIntegrity(sb);
 

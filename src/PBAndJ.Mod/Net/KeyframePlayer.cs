@@ -143,12 +143,24 @@ namespace PBAndJ.Mod.Net
         /// </remarks>
         private sealed class Sleeper
         {
-            public Sleeper(CombatMechAnimationView view)
+            public Sleeper(CombatMechAnimationView view, string? name)
             {
                 View = view;
+                Name = name;
             }
 
             public CombatMechAnimationView View { get; }
+
+            /// <summary>
+            /// The persistent entity's internal name — the wire's own join key.
+            /// </summary>
+            /// <remarks>
+            /// Carried so the wake can ask <c>DestructionState</c> whether this
+            /// unit is a corpse before handing its animator back. Cached at
+            /// install like every other handle here, and for the same reason:
+            /// the wake runs on paths where the entity may be gone.
+            /// </remarks>
+            public string? Name { get; }
             public GameObject? FullBodyIk { get; set; }
             public GameObject? PuppetMaster { get; set; }
             public GameObject? PuppetBehaviour { get; set; }
@@ -267,6 +279,21 @@ namespace PBAndJ.Mod.Net
 
         private static readonly List<Target> targets = new List<Target>();
         private static readonly List<Sleeper> sleepers = new List<Sleeper>();
+
+        /// <summary>
+        /// Units the host has wrecked, left asleep on purpose. M17 stage 1.
+        /// </summary>
+        /// <remarks>
+        /// <b>A map keyed by unit name, never a list, and the difference is not
+        /// bookkeeping.</b> The host keeps recording bones for a wrecked unit, so
+        /// a corpse is re-dressed and re-slept every subsequent window and would
+        /// be appended here once per turn for the rest of the fight — a leak that
+        /// also makes the feature's own counter climb without anything being
+        /// wrong. Re-freezing replaces, and the newest handle is the right one to
+        /// keep because the view can be rebuilt underneath us.
+        /// </remarks>
+        private static readonly Dictionary<string, Sleeper> frozen =
+            new Dictionary<string, Sleeper>();
         private static readonly List<VisibilityWatch> watches = new List<VisibilityWatch>();
         private static readonly List<AssetShow> shows = new List<AssetShow>();
         private static float windowStart;
@@ -627,6 +654,22 @@ namespace PBAndJ.Mod.Net
         /// <summary>How many units this client has been told are wrecked.</summary>
         internal static int HeldWreckedUnits => destruction.WreckedUnitCount;
 
+        /// <summary>
+        /// Corpses currently held asleep rather than re-posed. M17 stage 1.
+        /// </summary>
+        /// <remarks>
+        /// A live count, not a running total, and the acceptance test reads it
+        /// twice for that reason: it must equal the wrecked-unit count after the
+        /// window that killed them <b>and still equal it a turn later</b>. A
+        /// figure that doubles on the second turn is the append-instead-of-replace
+        /// defect, which is the one way this feature can look like it works while
+        /// leaking a handle per unit per turn.
+        /// </remarks>
+        internal static int FrozenUnits => frozen.Count;
+
+        /// <summary>Corpses handed back to their animator by a revival.</summary>
+        internal static int Unfrozen { get; private set; }
+
         /// <summary>Repositioned per key; see <c>ApplyWeaponLights</c>.</summary>
         private static Transform? lightAnchor;
 
@@ -958,7 +1001,7 @@ namespace PBAndJ.Mod.Net
             }
             target.MechView = mechView;
 
-            var sleeper = new Sleeper(mechView);
+            var sleeper = new Sleeper(mechView, target.Name);
             sleepers.Add(sleeper);
 
             // Order matters on the way down: pauseUpdates last, so nothing
@@ -1122,7 +1165,10 @@ namespace PBAndJ.Mod.Net
                 if (sleeper.View != null && target.MechView != null
                     && ReferenceEquals(sleeper.View, target.MechView))
                 {
-                    WakeSleeper(sleeper);
+                    // Through the split, not straight to the wake. This is the
+                    // route a hidden wreck takes, and taking it unconditionally
+                    // stood every one of them back up. M17 stage 1.
+                    WakeOrFreeze(sleeper);
                     sleepers.RemoveAt(i);
                 }
             }
@@ -1665,6 +1711,14 @@ namespace PBAndJ.Mod.Net
             // Visibility first, and Wake second. The same ordering argument as
             // Show's: a puppet root left inactive would swallow the sleep
             // unwind's SetActive calls on its own children.
+            //
+            // M17 stage 1 inverts that argument for a frozen unit without
+            // breaking it: its unwind is deliberately never run, so there is
+            // nothing for an inactive root to swallow. RestoreVisibility may
+            // re-activate the CombatPuppetView root of a corpse, and that is
+            // harmless only because the puppetMaster and puppetBehaviour holders
+            // beneath it stay inactive across a root toggle. Anyone "fixing"
+            // this ordering should know it is now carrying two arguments.
             RestoreVisibility();
             Wake();
             // Melee trails on the same argument as the effects below, and for a
@@ -1716,9 +1770,82 @@ namespace PBAndJ.Mod.Net
         {
             for (var i = 0; i < sleepers.Count; i++)
             {
-                WakeSleeper(sleepers[i]);
+                WakeOrFreeze(sleepers[i]);
             }
             sleepers.Clear();
+        }
+
+        /// <summary>
+        /// Hands a unit back to its animator — unless the host has wrecked it,
+        /// in which case it is left exactly as the window left it. M17 stage 1.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 <b>The decision lives here rather than in <see cref="Wake"/>, and
+        /// that placement is the fix rather than a detail of it.</b>
+        /// <see cref="WakeOne"/> is a second, entirely separate route into
+        /// <see cref="WakeSleeper"/>: a unit whose visibility changes mid-window
+        /// is woken early and removed from <see cref="sleepers"/>, so it never
+        /// reaches <see cref="Wake"/> at all. And it fires more often than it
+        /// looks — <c>Show</c> compares against a <c>bool?</c> that starts null,
+        /// so a unit <i>hidden at window start</i> counts as changed on its very
+        /// first frame. A split written one level up would have left every
+        /// hidden wreck standing back up, which is precisely the case the
+        /// feature exists for.
+        /// <para>
+        /// Freezing is the <b>absence</b> of an action, not an extra one. The
+        /// sleep already disabled the animator and the IK, deactivated the two
+        /// puppet holders and set <c>pauseUpdates</c>; leaving all of it in place
+        /// is what keeps the corpse in the pose the host recorded for it.
+        /// </para>
+        /// <para>
+        /// ⚠️ Deliberately does <b>not</b> call
+        /// <c>UnitUtilities.OnUnitNonfunctional</c>, which an earlier draft of
+        /// this reached for as the host's own wreck call. It sets
+        /// <c>PuppetMaster.mode = Active</c> / <c>state = Dead</c>, and
+        /// <c>PuppetMaster.OnEnable</c> (<c>:423-431</c>) responds to exactly
+        /// that pair by calling <c>ActivateRagdoll(kinematic: false)</c> and
+        /// re-activating every behaviour GameObject. On a client the puppet is
+        /// only ever <c>Alive</c>/<c>Kinematic</c>, so planting the host's state
+        /// would arm live corpse physics on any later activation while
+        /// protecting nothing — and it is also why the revival path below needs
+        /// no <c>OnUnitGetUp</c> inverse: nothing was ever changed to invert.
+        /// </para>
+        /// </remarks>
+        private static void WakeOrFreeze(Sleeper sleeper)
+        {
+            if (!string.IsNullOrEmpty(sleeper.Name)
+                && destruction.IsUnitWrecked(sleeper.Name))
+            {
+                frozen[sleeper.Name!] = sleeper;
+                return;
+            }
+            WakeSleeper(sleeper);
+        }
+
+        /// <summary>
+        /// Hands a revived unit back to its animator. M17 stage 1.
+        /// </summary>
+        /// <remarks>
+        /// The only exit from <see cref="frozen"/> that restores anything. A
+        /// revived unit that stayed frozen would be a permanent statue, which is
+        /// the same defect as the one this feature fixes with the sign flipped —
+        /// and M15 verified revival across eight units, so the path is real.
+        /// <para>
+        /// Keyed by name rather than by the sleeper handle because the view can
+        /// be rebuilt between the freeze and the revival, and the name is the
+        /// wire's own join key on both machines.
+        /// </para>
+        /// </remarks>
+        private static void Unfreeze(string? unit)
+        {
+            if (string.IsNullOrEmpty(unit) || !frozen.TryGetValue(unit!, out var sleeper))
+            {
+                return;
+            }
+
+            frozen.Remove(unit!);
+            WakeSleeper(sleeper);
+            Unfrozen++;
         }
 
         private static void WakeSleeper(Sleeper sleeper)
@@ -2448,6 +2575,16 @@ namespace PBAndJ.Mod.Net
         /// </remarks>
         internal static void ClearDestruction()
         {
+            // M17 stage 1. Forgotten rather than woken, and the ordering that
+            // makes it safe is CombatGameBridge.StopKeyframes': Stop() — hence
+            // the wake, hence the freeze — runs BEFORE this, so the corpses are
+            // already down by the time the set is dropped. Waking them here
+            // would stand every one of them up for whatever remains of the
+            // client's stay in the combat state. The views are instantiated per
+            // combat and destroyed with the scene, so the handles die with them.
+            frozen.Clear();
+            Unfrozen = 0;
+
             destruction.Clear();
             DestructionsPlayed = 0;
             DestructionsRefused = 0;
@@ -2522,6 +2659,14 @@ namespace PBAndJ.Mod.Net
                 {
                     hiddenByName.TryGetValue(wreck.Unit!, out var hidden);
                     DriveWreck(unitVisuals, hidden, wreck.Wrecked);
+                    if (!wreck.Wrecked)
+                    {
+                        // M17 stage 1, and only on this path: ApplyDestruction's
+                        // drive is always a wreck, so an un-wreck can only ever
+                        // arrive as a settled one. A revived unit still held
+                        // asleep would be a statue for the rest of the fight.
+                        Unfreeze(wreck.Unit);
+                    }
                     WrecksSettled++;
                 }
                 catch (Exception e)

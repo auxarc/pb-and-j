@@ -1465,6 +1465,15 @@ namespace PBAndJ.Mod.Net
 
         public void StopKeyframes()
         {
+            // 🔴 ORDER IS LOAD-BEARING, and in three ways rather than the two
+            // documented below. Stop() runs the wake, and M17 stage 1 turned the
+            // wake into a wake-or-freeze that asks the destruction state whether
+            // each unit is a corpse. So Stop() must come BEFORE ClearDestruction
+            // or every wreck is handed back to its animator and stands up on the
+            // way out of the fight — silently, with no counter moving and no
+            // test failing. DestructionStateTests covers the half of that
+            // coupling it can see (the flag surviving SettleWindow and not
+            // surviving Clear); this comment is the other half.
             KeyframePlayer.Stop();
 
             // M16, and BEFORE the clear below discards what it is holding. This

@@ -331,6 +331,41 @@ namespace PBAndJ.Core.Net
         }
 
         /// <summary>
+        /// Whether the host has this unit wrecked, right now. M17 stage 1.
+        /// </summary>
+        /// <remarks>
+        /// Asked by the client's playback wake, which must not hand a corpse
+        /// back to its animator: on the host a wrecked mech is held down by its
+        /// PuppetMaster being <c>Mode.Active</c>/<c>State.Dead</c>, and a client
+        /// never sets <c>Wrecked</c>, so waking one re-poses it to a standing
+        /// idle. The collapse really did play; it is the wake that undoes it.
+        /// <para>
+        /// Deliberately reads the <b>held</b> flag rather than
+        /// <see cref="Held.WreckPlayed"/>. The question at wake time is "is this
+        /// unit a corpse", not "did I draw the explosion" — a unit whose wreck
+        /// is still waiting for its moment inside the window being closed is
+        /// nonetheless a corpse by the time the window ends, and a unit settled
+        /// with no window at all never had a moment to draw.
+        /// </para>
+        /// <para>
+        /// ⚠️ <b>Answers correctly after <see cref="SettleWindow"/> and stops
+        /// answering after <see cref="Clear"/>, and both are load-bearing.</b>
+        /// A window's natural end settles and then stops, and combat end runs
+        /// <c>Stop</c> — hence the wake — before <c>ClearDestruction</c>. If
+        /// settling forgot the flag, every corpse would stand up at every turn
+        /// boundary; if clearing did not, a view could be held down into the
+        /// next fight. Both directions are covered by tests, because nothing
+        /// else in the suite would notice either break.
+        /// </para>
+        /// </remarks>
+        public bool IsUnitWrecked(string? unit)
+        {
+            return !string.IsNullOrEmpty(unit)
+                && held.TryGetValue(unit!, out var record)
+                && record.Wrecked;
+        }
+
+        /// <summary>
         /// Takes a snapshot's wrecked sets, and says what to settle immediately.
         /// </summary>
         /// <remarks>

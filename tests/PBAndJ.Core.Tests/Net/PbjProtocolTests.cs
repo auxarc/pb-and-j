@@ -256,7 +256,18 @@ namespace PBAndJ.Core.Tests.Net
             // that meant "absent on the host" and was written as a real value on
             // the client, which the digest could not see because both machines
             // then read zero.
-            Assert.Equal("0.21.0", PbjProtocol.ModVersion);
+            // 0.22.0 for M17 stage 1 — a client's wrecked mech staying down
+            // instead of being stood back up by our own wake — which moves
+            // PbjProtocol.Version NOT AT ALL, and is the first bump in the
+            // project's history to move the mod version without moving a byte on
+            // the wire. Nothing in the snapshot changed: the flag the fix reads
+            // has ridden every unit record since M15, and the whole change is
+            // what a client does with it at the end of a playback window. The
+            // version still moves, because the two machines must agree on which
+            // build they are watching a fight on, and check-wire-surface is
+            // satisfied by the hash being unchanged rather than by the version
+            // standing still.
+            Assert.Equal("0.22.0", PbjProtocol.ModVersion);
         }
 
         [Fact]
