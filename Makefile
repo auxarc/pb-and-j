@@ -48,6 +48,20 @@ WIRE_FILES  := $(addprefix src/PBAndJ.Core/Net/, \
 
 # The other half of the partition, and the reason it exists.
 #
+# 🔴 SCOPE IS ALL OF src/PBAndJ.Core, RECURSIVELY, AND BY FULL PATH — three
+# corrections to the first version of this guard, each of which let a file
+# through while it printed "wire partition OK":
+#   * `ls .../Net/*.cs` does not descend, so the first `mkdir Net/Codec` put a
+#     new wire helper outside the guard entirely. Verified by creating one and
+#     watching the check pass. A modularization program is a machine for making
+#     new files and directories, so this was not hypothetical.
+#   * The scan stopped at Net/, but Core's root already holds eight .cs files
+#     and nothing stops a wire type landing beside them.
+#   * Comparing BASENAMES let two files with the same name in different
+#     directories satisfy each other. Full repo-relative paths cannot.
+# The rule to keep: the guard must ENUMERATE THE TREE, never a directory it was
+# told about. Any narrowing of this scan is a silent re-opening.
+#
 # WIRE_FILES is an ALLOWLIST, and an allowlist only notices what leaves it. A
 # file that goes missing is caught loudly (check-wire-surface tests for each
 # one). A file that is NEWLY EXTRACTED out of a wire-bearing file is not caught
@@ -58,7 +72,15 @@ WIRE_FILES  := $(addprefix src/PBAndJ.Core/Net/, \
 # Naming both halves turns that silence into a build failure. Every .cs in
 # Core/Net must appear in exactly one list, so a new file cannot be ignored by
 # accident -- only by a decision someone had to write down.
-NONWIRE_FILES := $(addprefix src/PBAndJ.Core/Net/, \
+# Core's root files. None carries wire layout — they are console/report/version
+# helpers — but they are named so the partition can cover the whole assembly
+# rather than one directory inside it.
+NONWIRE_ROOT  := $(addprefix src/PBAndJ.Core/, \
+                 ActionDumpFormatter.cs ActionSnapshot.cs InjectionReport.cs \
+                 LoadBanner.cs ModVersion.cs SnapshotDiff.cs UpdateLog.cs \
+                 UpdateOffer.cs)
+
+NONWIRE_FILES := $(NONWIRE_ROOT) $(addprefix src/PBAndJ.Core/Net/, \
                  AssetBuffer.cs AssetPoolDigest.cs ClientSession.cs  \
                  ConnectForm.cs ConnectSettings.cs ConnectText.cs  \
                  DestructionPlayback.cs HostSession.cs KeyframePlayback.cs  \
@@ -101,21 +123,21 @@ check-mod-version:
 # Every .cs in Core/Net must be classified as wire-bearing or not. See
 # NONWIRE_FILES for why an allowlist alone is not enough.
 check-wire-partition:
-	@listed=$$(for f in $(WIRE_FILES) $(NONWIRE_FILES); do basename "$$f"; done | sort); \
-	actual=$$(ls src/PBAndJ.Core/Net/*.cs | xargs -n1 basename | sort); \
+	@listed=$$(printf '%s\n' $(WIRE_FILES) $(NONWIRE_FILES) | sort); \
+	actual=$$(find src/PBAndJ.Core -name '*.cs' -not -path '*/obj/*' -not -path '*/bin/*' | sort); \
 	unclassified=$$(comm -13 <(printf '%s\n' "$$listed") <(printf '%s\n' "$$actual")); \
 	phantom=$$(comm -23 <(printf '%s\n' "$$listed") <(printf '%s\n' "$$actual")); \
 	dupes=$$(printf '%s\n' "$$listed" | uniq -d); \
 	fail=0; \
 	if [ -n "$$unclassified" ]; then \
-		echo "FATAL: Core/Net files in neither WIRE_FILES nor NONWIRE_FILES:"; \
+		echo "FATAL: PBAndJ.Core files in neither WIRE_FILES nor NONWIRE_FILES:"; \
 		printf '  %s\n' $$unclassified; \
 		echo "  Decide whether each one carries bytes a peer parses, then add it to"; \
 		echo "  the matching list in the Makefile. A file extracted out of a wire type"; \
 		echo "  belongs in WIRE_FILES, and leaving it out silently narrows the hash."; \
 		fail=1; fi; \
 	if [ -n "$$phantom" ]; then \
-		echo "FATAL: listed but absent from src/PBAndJ.Core/Net:"; printf '  %s\n' $$phantom; fail=1; fi; \
+		echo "FATAL: listed but absent from src/PBAndJ.Core:"; printf '  %s\n' $$phantom; fail=1; fi; \
 	if [ -n "$$dupes" ]; then \
 		echo "FATAL: classified twice — a file must be in exactly one list:"; printf '  %s\n' $$dupes; fail=1; fi; \
 	[ "$$fail" = "0" ] || exit 1
