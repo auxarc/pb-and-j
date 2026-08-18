@@ -6,6 +6,13 @@ MOD_ID      := pb-and-j
 # of somebody's home directory has no business in a public repo, and this also
 # makes `make -C` work. Safe to evaluate here because there are no includes, so
 # MAKEFILE_LIST holds exactly this file.
+# Declared rather than inherited. The partition checks below use process
+# substitution, which is a bashism, and make's default shell is /bin/sh --
+# bash on this machine, dash on plenty of others, where the guards would fail
+# with a syntax error rather than a verdict. A guard that cannot run is worse
+# than no guard, because it fails in the direction of looking fine.
+SHELL       := /bin/bash
+
 REPO        := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 DBX         := distrobox enter pb-dev --
 DOTNET_ENV  := export NUGET_PACKAGES=$(REPO)/.packages;
@@ -39,7 +46,33 @@ WIRE_FILES  := $(addprefix src/PBAndJ.Core/Net/, \
                  PbjWriter.cs PbjReader.cs FloatBits.cs FrameEncoder.cs FrameDecoder.cs \
                  PbjProtocol.cs Seams.cs)
 
-.PHONY: test build dist deploy check-no-drive-channel check-game-hash check-mod-version check-wire-surface record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
+# The other half of the partition, and the reason it exists.
+#
+# WIRE_FILES is an ALLOWLIST, and an allowlist only notices what leaves it. A
+# file that goes missing is caught loudly (check-wire-surface tests for each
+# one). A file that is NEWLY EXTRACTED out of a wire-bearing file is not caught
+# at all: the remaining files' hash moves, the guard fires once, the developer
+# bumps the version and re-records -- and from that moment the extracted layout
+# is permanently unguarded while the guard keeps printing "wire surface OK".
+#
+# Naming both halves turns that silence into a build failure. Every .cs in
+# Core/Net must appear in exactly one list, so a new file cannot be ignored by
+# accident -- only by a decision someone had to write down.
+NONWIRE_FILES := $(addprefix src/PBAndJ.Core/Net/, \
+                 AssetBuffer.cs AssetPoolDigest.cs ClientSession.cs  \
+                 ConnectForm.cs ConnectSettings.cs ConnectText.cs  \
+                 DestructionPlayback.cs HostSession.cs KeyframePlayback.cs  \
+                 LoadBarrier.cs LobbyBarrier.cs LobbySaveWrites.cs  \
+                 LobbySaves.cs LobbyView.cs MeleeTrajectoryPlayback.cs  \
+                 NetLog.cs PartIntegrityPlayback.cs PartStateDigest.cs  \
+                 PassengerRules.cs PbjEffect.cs PbjInboundEvent.cs  \
+                 PbjMailbox.cs PbjPeerRegistry.cs PbjProtocolException.cs  \
+                 PbjRuntime.cs PoseBuffer.cs PoseTracks.cs ReactionPings.cs  \
+                 ReplayAssetParts.cs ReplayAssetPlayback.cs  \
+                 ReplayVisibility.cs StateDigest.cs TrackThinning.cs  \
+                 TurnBarrier.cs UnitAssignments.cs)
+
+.PHONY: test build dist deploy check-no-drive-channel check-game-hash check-mod-version check-wire-surface check-wire-partition record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
 
 # metadata.yaml is the one place PbjProtocol.ModVersion cannot reach, and a
 # disagreement between them is invisible until a peer is refused by a host —
@@ -65,7 +98,30 @@ check-mod-version:
 # that is the intended default rather than a rough edge — the codec is the wire.
 # When the change genuinely does not move any byte, re-record with:
 #     make record-wire-surface
-check-wire-surface:
+# Every .cs in Core/Net must be classified as wire-bearing or not. See
+# NONWIRE_FILES for why an allowlist alone is not enough.
+check-wire-partition:
+	@listed=$$(for f in $(WIRE_FILES) $(NONWIRE_FILES); do basename "$$f"; done | sort); \
+	actual=$$(ls src/PBAndJ.Core/Net/*.cs | xargs -n1 basename | sort); \
+	unclassified=$$(comm -13 <(printf '%s\n' "$$listed") <(printf '%s\n' "$$actual")); \
+	phantom=$$(comm -23 <(printf '%s\n' "$$listed") <(printf '%s\n' "$$actual")); \
+	dupes=$$(printf '%s\n' "$$listed" | uniq -d); \
+	fail=0; \
+	if [ -n "$$unclassified" ]; then \
+		echo "FATAL: Core/Net files in neither WIRE_FILES nor NONWIRE_FILES:"; \
+		printf '  %s\n' $$unclassified; \
+		echo "  Decide whether each one carries bytes a peer parses, then add it to"; \
+		echo "  the matching list in the Makefile. A file extracted out of a wire type"; \
+		echo "  belongs in WIRE_FILES, and leaving it out silently narrows the hash."; \
+		fail=1; fi; \
+	if [ -n "$$phantom" ]; then \
+		echo "FATAL: listed but absent from src/PBAndJ.Core/Net:"; printf '  %s\n' $$phantom; fail=1; fi; \
+	if [ -n "$$dupes" ]; then \
+		echo "FATAL: classified twice — a file must be in exactly one list:"; printf '  %s\n' $$dupes; fail=1; fi; \
+	[ "$$fail" = "0" ] || exit 1
+	@echo "wire partition OK ($(words $(WIRE_FILES)) wire, $(words $(NONWIRE_FILES)) not)"
+
+check-wire-surface: check-wire-partition
 	@for f in $(WIRE_FILES); do \
 		test -f "$$f" || { echo "FATAL: wire-surface file missing: $$f"; \
 			echo "  Fix the list in the Makefile — a missing name would silently hash nothing."; exit 1; }; \
@@ -146,7 +202,31 @@ dist: build check-mod-version check-wire-surface
 # listing literals would look stricter while testing nothing — verified by
 # building with the channel in and watching the literal not match. The type names
 # are the load-bearing evidence anyway: no type, no code.
-DRIVE_SYMBOLS := DriveGlue DriveProbeGlue
+# Files that exist ONLY for the drive channel: wholly wrapped in #if PBJ_DRIVE,
+# so a clean build must contain nothing they declare.
+DRIVE_FILES := src/PBAndJ.Mod/Net/DriveGlue.cs src/PBAndJ.Mod/Net/DriveProbeGlue.cs
+
+# Files that merely CALL into the drive channel behind #if PBJ_DRIVE. Their own
+# types ship and must not be grepped for.
+DRIVE_CALLSITE_FILES := src/PBAndJ.Mod/ModEntry.cs src/PBAndJ.Mod/Net/ActuatorGlue.cs \
+                        src/PBAndJ.Mod/Net/NetGlue.cs src/PBAndJ.Mod/Net/VfxProbeGlue.cs
+
+# Derived from DRIVE_FILES rather than written out, because a hardcoded name
+# fails in two directions at once: a RENAMED type makes the grep pass
+# vacuously (it looks for a string nothing is called any more), and a NEWLY
+# EXTRACTED type is simply not on the list. Reading the names out of the source
+# closes both -- for the files we know about; the partition check below is what
+# closes the case of a drive type moving into a file nobody listed.
+#
+# Top-level declarations only (indented at most one level, i.e. inside the
+# namespace and not inside another type). That is not a shortcut: a nested type
+# cannot reach the assembly without its enclosing type, and the enclosing type
+# is exactly what this greps for. It also keeps generic nested names like
+# 'Request' out of the list, which would match almost any assembly and turn the
+# guard into a permanent false alarm.
+DRIVE_SYMBOLS = $(shell grep -hE '^ {0,4}(internal|public|private|sealed|static).*(class|struct|enum|interface) +[A-Za-z_]' \
+                  $(DRIVE_FILES) | grep -oE '(class|struct|enum|interface) +[A-Za-z_][A-Za-z0-9_]*' \
+                  | awk '{print $$2}' | sort -u)
 
 check-no-drive-channel:
 	@if [ "$(PBJ_DRIVE)" = "true" ]; then \
@@ -155,6 +235,16 @@ check-no-drive-channel:
 		exit 1; \
 	fi
 	@test -f dist/$(MOD_ID)/Libraries/PBAndJ.Mod.dll || { echo "FATAL: no built assembly to check"; exit 1; }
+	@touching=$$(grep -rl "PBJ_DRIVE" src --include=*.cs | sort); \
+	known=$$(printf '%s\n' $(DRIVE_FILES) $(DRIVE_CALLSITE_FILES) | sort); \
+	stray=$$(comm -23 <(printf '%s\n' "$$touching") <(printf '%s\n' "$$known")); \
+	if [ -n "$$stray" ]; then \
+		echo "FATAL: files use PBJ_DRIVE but are in neither DRIVE_FILES nor DRIVE_CALLSITE_FILES:"; \
+		printf '  %s\n' $$stray; \
+		echo "  A drive-only file must be in DRIVE_FILES so its types are grepped for."; \
+		echo "  A file that merely calls into the channel goes in DRIVE_CALLSITE_FILES."; \
+		exit 1; fi
+	@test -n "$(DRIVE_SYMBOLS)" || { echo "FATAL: no drive symbols derived — the extraction regex has rotted"; exit 1; }
 	@for sym in $(DRIVE_SYMBOLS); do \
 		if grep -qa "$$sym" dist/$(MOD_ID)/Libraries/PBAndJ.Mod.dll; then \
 			echo "FATAL: '$$sym' is present in the assembly about to ship."; \
