@@ -94,7 +94,7 @@ NONWIRE_FILES := $(NONWIRE_ROOT) $(addprefix src/PBAndJ.Core/Net/, \
                  ReplayVisibility.cs StateDigest.cs TrackThinning.cs  \
                  TurnBarrier.cs UnitAssignments.cs)
 
-.PHONY: measure-net-coverage test build dist deploy check-no-drive-channel check-game-hash check-mod-version check-wire-surface check-wire-partition check-coverage-scope record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
+.PHONY: check-file-sizes size-report-selftest measure-net-coverage test build dist deploy check-no-drive-channel check-game-hash check-mod-version check-wire-surface check-wire-partition check-coverage-scope record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
 
 # metadata.yaml is the one place PbjProtocol.ModVersion cannot reach, and a
 # disagreement between them is invisible until a peer is refused by a host —
@@ -205,6 +205,32 @@ COVERED_PROJECTS   := src/PBAndJ.Core
 #     appears there and never in Core.
 UNCOVERED_PROJECTS := src/PBAndJ.Net src/PBAndJ.Mod
 
+# Advisory size report, and ADVISORY IS THE DESIGN rather than timidity.
+#
+# It is NOT a dependency of dist, and it exits 0 even when it reports. The thing
+# it would otherwise gate is `deploy`, and `deploy` gates the two-instance
+# playtest rig — the scarcest resource in this project. A feature branch adding
+# one line to a 2343-line session class must not become unable to playtest until
+# that class is split mid-milestone; that trains the override habit, and an
+# override habit is worth less than no gate.
+#
+# Measured before choosing the trigger, because the number is what says whether
+# you are building a guard or a tax: 67% of code commits here touch a file over
+# the 500-line budget. So the ratchet reports only what a commit MADE WORSE, and
+# existing debt stays silent until someone touches it.
+#
+# `--selftest` drives the ratchet directly with synthetic data — eleven cases,
+# each asserted in both directions, including the one the whole design turns on:
+# an over-limit method MOVED between files with an identical body must be
+# SILENT. Both were mutation-checked: keying identity by file (the naive
+# diff-scoped version) fails that case, and dropping the shape exemption fails
+# another.
+check-file-sizes:
+	@python3 tools/size-report.py $(BASE)
+
+size-report-selftest:
+	@python3 tools/size-report.py --selftest
+
 # Measures what peer-selftest actually covers in PBAndJ.Net, which the gate
 # cannot see because every type there is [ExcludeFromCodeCoverage].
 #
@@ -278,6 +304,12 @@ test:
 # turns it on for its own dependency chain only (GNU Make passes target-specific
 # variables down to prerequisites). `package` refuses to run with it set.
 PBJ_DRIVE ?= false
+
+# What the size ratchet compares against. HEAD^ for a post-commit report: it
+# sidesteps every merge-base failure (inert on the default branch where
+# merge-base(main,main) is HEAD, firing on foreign debt after a rebase, undefined
+# in a shallow clone, and ambiguous between working tree and commits).
+BASE ?= HEAD^
 
 build: test
 	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet build src/PBAndJ.Mod -c Release -p:PbjDrive=$(PBJ_DRIVE)'
