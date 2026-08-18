@@ -94,7 +94,7 @@ NONWIRE_FILES := $(NONWIRE_ROOT) $(addprefix src/PBAndJ.Core/Net/, \
                  ReplayVisibility.cs StateDigest.cs TrackThinning.cs  \
                  TurnBarrier.cs UnitAssignments.cs)
 
-.PHONY: test build dist deploy check-no-drive-channel check-game-hash check-mod-version check-wire-surface check-wire-partition record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
+.PHONY: test build dist deploy check-no-drive-channel check-game-hash check-mod-version check-wire-surface check-wire-partition check-coverage-scope record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
 
 # metadata.yaml is the one place PbjProtocol.ModVersion cannot reach, and a
 # disagreement between them is invisible until a peer is refused by a host —
@@ -167,6 +167,59 @@ check-wire-surface: check-wire-partition
 	echo "  Run: make record-wire-surface"; \
 	exit 1
 
+# Which projects the 100% coverage gate actually measures, and which it does not.
+#
+# 🔴 THE GATE IS AN ASSEMBLY FILTER, and that makes its scope INVISIBLE. `test`
+# passes /p:Include="[PBAndJ.Core]*", and tests/PBAndJ.Core.Tests references only
+# Core. So a helper MOVED OUT of Core into a sibling produces a green build, a
+# green 100%, and permanently ungated logic — with no warning anywhere, because
+# the total is computed over the included assembly alone. Nothing that says
+# "coverage is fine" is lying; it is answering a narrower question than it looks.
+#
+# This partition cannot catch that move on its own — Net is already declared
+# uncovered, so relocating into it adds no new project. What it does catch is the
+# scope changing by accident: a NEW project appearing and being measured by
+# nobody. The move itself is a MANIFEST RULE for splits (any type leaving
+# PBAndJ.Core leaves the gate, and must be acknowledged in writing), because no
+# cheap mechanism detects it and pretending otherwise would be its own vacuous
+# guard.
+COVERED_PROJECTS   := src/PBAndJ.Core
+
+# Each entry needs a reason, not just a name.
+#   PBAndJ.Net — 601 lines of TCP transport. Exercised end to end by
+#     `peer-selftest` over real sockets, never by unit tests, and not measured at
+#     all. This is a real gap rather than a decision: reaching 100% here means
+#     unit-testing socket error branches, which is worth doing and is not done.
+#   PBAndJ.Mod — Unity and Harmony types. Cannot load in a test host, so it is
+#     unmeasurable rather than unmeasured; this is why [ExcludeFromCodeCoverage]
+#     appears there and never in Core.
+UNCOVERED_PROJECTS := src/PBAndJ.Net src/PBAndJ.Mod
+
+check-coverage-scope:
+	@listed=$$(printf '%s\n' $(COVERED_PROJECTS) $(UNCOVERED_PROJECTS) | sort); \
+	actual=$$(find src -name '*.csproj' -not -path '*/obj/*' -not -path '*/bin/*' \
+	          | xargs -n1 dirname | sort); \
+	unclassified=$$(printf '%s\n' "$$listed" "$$listed" "$$actual" | sort | uniq -u); \
+	phantom=$$(printf '%s\n' "$$actual" "$$actual" "$$listed" | sort | uniq -u); \
+	fail=0; \
+	if [ -n "$$unclassified" ]; then \
+		echo "FATAL: projects under src/ that the coverage gate has never been told about:"; \
+		printf '  %s\n' $$unclassified; \
+		echo "  Add each to COVERED_PROJECTS (and to the Include filter in 'test'),"; \
+		echo "  or to UNCOVERED_PROJECTS with a written reason. A project nobody"; \
+		echo "  classified is a project nobody measures, and the gate still says 100%."; \
+		fail=1; fi; \
+	if [ -n "$$phantom" ]; then \
+		echo "FATAL: classified but no longer present:"; printf '  %s\n' $$phantom; fail=1; fi; \
+	for p in $(COVERED_PROJECTS); do \
+		n=$$(basename $$p); \
+		grep -q "Include=\"\[$$n\]\*\"" Makefile || { \
+			echo "FATAL: $$p is listed as covered but '[$$n]*' is not in the test filter."; \
+			fail=1; }; \
+	done; \
+	[ "$$fail" = "0" ] || exit 1
+	@echo "coverage scope OK ($(words $(COVERED_PROJECTS)) measured, $(words $(UNCOVERED_PROJECTS)) declared not)"
+
 # Deliberately not a dependency of anything: re-recording is the developer saying
 # "yes, I meant that", and a build step that says it for them is no guard at all.
 record-wire-surface:
@@ -194,7 +247,7 @@ PBJ_DRIVE ?= false
 build: test
 	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet build src/PBAndJ.Mod -c Release -p:PbjDrive=$(PBJ_DRIVE)'
 
-dist: build check-mod-version check-wire-surface
+dist: build check-mod-version check-wire-surface check-coverage-scope
 	rm -rf dist/$(MOD_ID)
 	mkdir -p dist/$(MOD_ID)/Libraries
 	cp mod/metadata.yaml dist/$(MOD_ID)/
