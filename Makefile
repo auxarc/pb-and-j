@@ -188,8 +188,9 @@ dist: build check-mod-version check-wire-surface
 # The mod is a compile-time opt-in (PBJ_DRIVE, see PBAndJ.Mod.csproj), so a
 # shipped build genuinely does not contain the code. This proves that against
 # the built artifact rather than trusting the build to have been invoked right —
-# the same reasoning as check-wire-surface. Type and literal names live in the
-# assembly's metadata strings, so a plain grep of the DLL finds them.
+# the same reasoning as check-wire-surface. What a grep of the DLL can actually
+# see is narrower than it looks, and the paragraph below is the rule; this
+# sentence used to say "type and literal names" and was wrong about half of it.
 #
 # ⭐ This is an invariant, not a nicety: the mod is intended for the Steam
 # Workshop eventually, and a dev channel reaching a published build is the one
