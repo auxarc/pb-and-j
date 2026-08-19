@@ -6,10 +6,13 @@ using Xunit;
 
 namespace PBAndJ.Core.Tests.Net
 {
-    // Assignments: which units a client stores as its own.
-    // An empty `// --- roster ---` banner used to head this section, and was
-    // removed with the split: a client has no roster tests, because the roster
-    // is the host's concern and is tested in HostSessionTests.Roster.cs.
+    // Assignments: which units a client stores as its own -- and, under the same
+    // banner the author gave them, the two tests that log a peer joining or
+    // leaving.
+    // An empty `// --- roster ---` banner headed this section until the commit
+    // after the split removed it. A client mirrors the roster the host sends
+    // (see .Lobby.cs) but never builds one, so there was nothing for that banner
+    // to head; building it is the host's job, tested in HostSessionTests.Roster.cs.
     //
     // One part of ClientSessionTests, a single class split across 12 files.
     // Helpers used by more than one part live in ClientSessionTests.cs; a helper lives

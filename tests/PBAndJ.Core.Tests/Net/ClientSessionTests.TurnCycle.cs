@@ -9,8 +9,9 @@ namespace PBAndJ.Core.Tests.Net
     // The turn cycle: readying, the filter that cuts the Ready batch down to the
     // units this client owns, and un-readying.
     // The filter has its own banner because it was found in the stage 2 run
-    // rather than designed in. Assigned is here because both of the parts that
-    // would want it are this one.
+    // rather than designed in, and Assigned belongs to it alone: all five of
+    // that helper's call sites are inside the filter's section, none in the
+    // turn-cycle or un-ready sections either side of it.
     //
     // One part of ClientSessionTests, a single class split across 12 files.
     // Helpers used by more than one part live in ClientSessionTests.cs; a helper lives

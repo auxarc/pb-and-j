@@ -9,9 +9,9 @@ namespace PBAndJ.Core.Tests.Net
     public partial class ClientSessionTests
     {
         // The shared fixture. Each of the six helpers below is called from more
-        // than one part -- checked, not assumed: the least-shared of them,
-        // Welcome, is called from this file and from .Construction.cs, and the
-        // most-shared, Welcomed, from thirteen parts.
+        // than one part -- counted, not assumed: the least-shared, Welcome, from
+        // this file and .Construction.cs; the most-shared, Welcomed and Single,
+        // from all eleven of the other parts.
         //
         // A helper whose callers all land in ONE part lives with that part
         // instead. None had to be moved here to satisfy that: where a helper

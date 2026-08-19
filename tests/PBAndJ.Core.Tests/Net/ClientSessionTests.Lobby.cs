@@ -8,9 +8,10 @@ namespace PBAndJ.Core.Tests.Net
 {
     // The lobby (M11a), the counts the screen derives from it (M11c), and the
     // synchronised load it ends in (M11d).
-    // All three share a part because Lobby, InLobby and CampaignSave are called
-    // from across them; separating the load would have moved three helpers into
-    // the shared fixture to buy nothing.
+    // All three share a part because InLobby is called from all of them, and it
+    // calls Lobby, which calls CampaignSave. Separating the load would have
+    // pushed InLobby into the shared fixture and those two after it, for three
+    // helpers hoisted and one more file.
     //
     // One part of ClientSessionTests, a single class split across 12 files.
     // Helpers used by more than one part live in ClientSessionTests.cs; a helper lives
