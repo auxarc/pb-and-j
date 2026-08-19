@@ -226,8 +226,9 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         // The size claim the one-track-per-message decision rests on — and note
-        // the names are at their cap too, which the M6 sibling above does NOT
-        // do. Its "pb_mech_00" names hide the fact that PbjWriter would accept a
+        // the names are at their cap too, which the M6 sibling does NOT do:
+        // Encode_KeyframesAtBothCaps_StaysUnderTheFrameLimit, in .Keyframes.cs.
+        // Its "pb_mech_00" names hide the fact that PbjWriter would accept a
         // 4096-byte one; with names at that limit the analogous keyframe bound
         // does not actually hold. An oversize frame is not a local failure, it
         // is a PbjProtocolException on the RECEIVER, which drops the sender as

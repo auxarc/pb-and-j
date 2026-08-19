@@ -312,7 +312,8 @@ namespace PBAndJ.Core.Tests.Net
         // full lists rather than at the one a sender packs — a decoder cannot
         // assume the sender packed the way we do, so the bound has to hold for
         // anything it will accept. Names are at their cap too, for the reason
-        // the pose sibling above spells out.
+        // Encode_PosesAtEveryCapIncludingNames_StaysUnderTheFrameLimit, in
+        // .StageC.cs, spells out.
         [Fact]
         public void Encode_ReplayAssetsAtEveryCap_StaysUnderTheFrameLimit()
         {
