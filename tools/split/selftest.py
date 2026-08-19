@@ -309,6 +309,23 @@ def main():
     rc, out = run("ownership.py", "Target", real)
     check("counts a real call", "2 call sites" in out, out[:300])
 
+    # THE SHAPE THE CASE ABOVE CANNOT REACH. Both calls there share a line with
+    # `void C() {`, so something disqualifying always precedes the name. A
+    # helper invoked as a STATEMENT has nothing before it but indentation --
+    # and indentation matched the declaration prefix, so every such call was
+    # subtracted as its own declaration. On ScenarioTransferTests.cs that hid
+    # 11 of 15 sites and turned a 93% owner into an 80% shared helper.
+    stmt = os.path.join(tmp, "stmt.cs")
+    with open(stmt, "w") as fh:
+        fh.write("class D\n{\n"
+                 "    private void Target(int i)\n    {\n    }\n\n"
+                 "    private void Caller()\n    {\n"
+                 "        Target(1);\n        Target(2);\n    }\n}\n")
+    rc, out = run("ownership.py", "Target", stmt)
+    check("counts a bare-statement call, which has only indentation before it "
+          "and so once looked exactly like a declaration",
+          "2 call sites" in out, out[:400])
+
     verbatim = os.path.join(tmp, "verbatim.cs")
     with open(verbatim, "w") as fh:
         fh.write('class C { string s = @"Target(1)"; }\n')
