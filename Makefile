@@ -242,6 +242,12 @@ check-file-sizes:
 size-report-selftest:
 	@python3 tools/size-report.py --selftest
 
+# The split kit's own selftest: 27 negative cases, one per defect that bit.
+# Not wired into `dist` for the same reason as check-file-sizes -- a local gate
+# sits in front of `deploy`, and `deploy` gates the playtest rig.
+split-selftest:
+	@python3 tools/split/selftest.py
+
 # Measures what peer-selftest actually covers in PBAndJ.Net, which the gate
 # cannot see because every type there is [ExcludeFromCodeCoverage].
 #
