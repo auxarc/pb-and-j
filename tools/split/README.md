@@ -18,6 +18,12 @@ the incident; read them before trusting a tool.
      the whole job is which neighbours to group;
    - *no banners* → the seams come from subject, which is where grouping
      errors live. Lean much harder on step 5.
+
+   Then check each banner still heads what it introduced. A later commit can
+   insert whole sections between a banner and its tests: on
+   ScenarioPayloadTests.cs, M11e left `--- digest agreement ---` heading
+   nothing and its four tests stranded 265 lines below, under a banner about
+   something else. `git log -S` on the banner text dates both.
 2. **Map the members.** `splitspec.py <file>` prints the member table.
 3. **Write the spec** (see below) assigning every member to a part.
 4. **Prove the tiling.** `partition.py <spec>` — every line in exactly one
@@ -70,10 +76,11 @@ comments.
 make split-selftest
 ```
 
-27 cases, all negative: what each tool must REFUSE. Every case names a defect
-that actually bit. The suite has been mutation-checked — breaking any one guard
-makes it fail — because a bite test that cannot fail is this project's most
-repeated mistake.
+36 cases: what each tool must REFUSE, and the sound input it must still
+accept. Each names a defect that actually bit, or the control proving the
+refusal is not simply always-on. The suite has been mutation-checked —
+breaking any one guard makes it fail — because a bite test that cannot fail is
+this project's most repeated mistake.
 
 ## What these tools cannot tell you
 
