@@ -150,76 +150,147 @@ class Spec:
 def member_map(path):
     """(class, member, first_line, last_line) for every top-level member.
 
-    Brace-depth walk, not a line regex. first_line is pulled back over any
-    attached [attr] / /// / // lines directly above the declaration.
+    A DECLARATION IS PARSED, NOT PATTERN-MATCHED. The tool reads the
+    declaration statement -- from the modifier to the first `;`, `{` or `=>`
+    at paren depth zero -- and classifies it by whether a call-parenthesis
+    opened before that terminator. Methods, fields, properties and nested
+    types then each get the span their own shape implies.
 
-    WRAPPED SIGNATURES ARE THE KNOWN TRAP: size-report.py missed 65 methods
-    because their parameter lists ran onto a second line. A declaration here is
-    recognised by its access modifier, and its span by matching braces, so a
-    wrapped signature is found like any other.
+    IT DID NOT ALWAYS. The first version asked only "does the line start with
+    an access modifier and contain a '('", which on real fixture code read
+
+        private readonly FakeGameBridge bridge = new FakeGameBridge();
+
+    as a METHOD named FakeGameBridge, then ran its "body" to the next brace
+    balance and swallowed the real method below it. On PbjRuntimeTests.cs that
+    hid four members -- HostRuntime, GoodHello, WithHandshakenPeer and five
+    fields -- while still reporting a confident 56. A field with no parens at
+    all (`private HostSession host = null!;`) was worse: the scan ran forward
+    hunting a '(' and consumed whatever came next.
+
+    Only the spec's stale-plan guard caught it, by noticing the plan named
+    members the map did not have. That is defence in depth working, not a
+    reason to leave the map wrong.
+
+    WRAPPED SIGNATURES ARE THE OTHER KNOWN TRAP: size-report.py missed 65
+    methods whose parameter lists ran onto a second line. Accumulating the
+    declaration statement across lines handles those by construction.
     """
     with open(path) as fh:
         src = fh.read().split("\n")
     n = len(src)
+
+    def statement(i):
+        """Read the declaration statement starting at line i.
+
+        Returns (text, terminator, end_line). The terminator is ';', '{' or
+        '=>' -- whichever comes first at paren depth zero.
+        """
+        text, depth, j = "", 0, i
+        while j <= n:
+            line = src[j - 1]
+            k = 0
+            while k < len(line):
+                c = line[k]
+                if c == '(':
+                    depth += 1
+                elif c == ')':
+                    depth -= 1
+                elif depth == 0:
+                    if c == ';':
+                        return text + line[:k], ';', j
+                    if c == '{':
+                        return text + line[:k], '{', j
+                    if c == '=' and k + 1 < len(line) and line[k + 1] == '>':
+                        return text + line[:k], '=>', j
+                k += 1
+            text += line + "\n"
+            j += 1
+        return text, None, n
+
+    def brace_block(i):
+        d, j, seen = 0, i, False
+        while j <= n:
+            d += src[j - 1].count('{') - src[j - 1].count('}')
+            if src[j - 1].count('{'):
+                seen = True
+            if seen and d <= 0:
+                return j
+            j += 1
+        return n
+
+    def semicolon_after(i):
+        j = i
+        while j <= n and ';' not in src[j - 1]:
+            j += 1
+        return min(j, n)
+
+    MOD = r'(?:public|private|internal|protected)'
+    members = []
     depth = 0
     cls = None
-    members = []
     i = 1
     while i <= n:
         line = src[i - 1]
         stripped = line.strip()
-        m = re.match(r'^(?:public|internal)\s+(?:partial\s+)?'
-                     r'(?:sealed\s+)?(?:static\s+)?class\s+(\w+)', stripped)
+        m = re.match(r'^(?:public|internal)\s+(?:partial\s+)?(?:sealed\s+)?'
+                     r'(?:static\s+)?class\s+(\w+)', stripped)
         if m and depth == 1:
             cls = m.group(1)
-        if depth == 2 and re.match(r'^(?:public|private|internal|protected)\s',
-                                   stripped):
-            j = i
-            # a wrapped signature: walk on until the '(' list closes
-            while j <= n and '(' not in src[j - 1]:
-                j += 1
-            name_line = " ".join(src[i - 1:j])
-            hit = re.search(r'(\w+)\s*(?:<[^<>]*>)?\s*\(', name_line)
-            if hit:
-                name = hit.group(1)
-                d = depth
-                k = i
-                started = False
-                while k <= n:
-                    for ch in src[k - 1]:
-                        if ch == '{':
-                            d += 1
-                            started = True
-                        elif ch == '}':
-                            d -= 1
-                    if started and d == 2:
-                        break
-                    k += 1
-                members.append([cls, name, i, k])
-                for q in range(i, k + 1):
-                    for ch in src[q - 1]:
-                        if ch == '{':
-                            depth += 1
-                        elif ch == '}':
-                            depth -= 1
-                i = k + 1
-                continue
-        for ch in line:
-            if ch == '{':
-                depth += 1
-            elif ch == '}':
-                depth -= 1
+            depth += line.count('{') - line.count('}')
+            i += 1
+            continue
+
+        if depth == 2 and re.match(r'^' + MOD + r'\s', stripped):
+            text, term, decl_end = statement(i)
+            is_type = re.search(r'\b(class|struct|interface|enum|record)\s+\w',
+                                text) is not None
+            # A METHOD IS A '(' IN THE DECLARATOR -- before any '='. Testing
+            # for a '(' anywhere in the statement is the original bug wearing
+            # a new hat: `... FakeGameBridge bridge = new FakeGameBridge()`
+            # has one, in its INITIALISER, and reads as a method declaration.
+            is_method = (not is_type) and '(' in text.split('=')[0]
+
+            if is_method:
+                name = re.findall(r'(\w+)\s*(?:<[^<>]*>)?\s*\(', text)[0]
+                end = (brace_block(decl_end) if term == '{'
+                       else semicolon_after(decl_end) if term == '=>'
+                       else decl_end)
+            elif is_type:
+                name = re.search(r'\b(?:class|struct|interface|enum|record)\s+'
+                                 r'(\w+)', text).group(1)
+                end = brace_block(decl_end)
+            else:
+                # the field's NAME is the last identifier of the DECLARATOR,
+                # i.e. before any '='. Reading to the end of the statement
+                # instead picks a word out of the initialiser: `FakeGameBridge`
+                # for `... FakeGameBridge bridge = new FakeGameBridge()`, and
+                # `null` for `private HostSession host = null!`.
+                declarator = text.split('=')[0]
+                ids = re.findall(r'\b(\w+)\b', declarator)
+                name = ids[-1] if ids else f"field_line_{i}"
+                end = (decl_end if term == ';'
+                       else semicolon_after(brace_block(decl_end))
+                       if term == '{' else semicolon_after(decl_end))
+            members.append([cls, name, i, end])
+            for q in range(i, end + 1):
+                depth += src[q - 1].count('{') - src[q - 1].count('}')
+            i = end + 1
+            continue
+
+        depth += line.count('{') - line.count('}')
         i += 1
-    for m in members:
-        s = m[2]
-        while s - 1 >= 1:
-            prev = src[s - 2].strip()
+
+    for mem in members:
+        s0 = mem[2]
+        while s0 - 1 >= 1:
+            prev = src[s0 - 2].strip()
             if prev.startswith('[') or prev.startswith('//'):
-                s -= 1
+                s0 -= 1
             else:
                 break
-        m[2] = s
-    return [tuple(m) for m in members]
+        mem[2] = s0
+    return [tuple(mem) for mem in members]
 
 
 if __name__ == "__main__":
