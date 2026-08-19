@@ -92,7 +92,10 @@ NONWIRE_FILES := $(NONWIRE_ROOT) $(addprefix src/PBAndJ.Core/Net/, \
                  KeyframePlayback.cs  \
                  LoadBarrier.cs LobbyBarrier.cs LobbySaveWrites.cs  \
                  LobbySaves.cs LobbyView.cs MeleeTrajectoryPlayback.cs  \
-                 NetLog.cs PartIntegrityPlayback.cs PartStateDigest.cs  \
+                 NetLog.cs NetLog.Combat.cs NetLog.Effects.cs  \
+                 NetLog.Link.cs NetLog.Lobby.cs NetLog.Playback.cs  \
+                 NetLog.Session.cs NetLog.TurnCycle.cs  \
+                 PartIntegrityPlayback.cs PartStateDigest.cs  \
                  PassengerRules.cs PbjEffect.cs PbjInboundEvent.cs  \
                  PbjMailbox.cs PbjPeerRegistry.cs PbjProtocolException.cs  \
                  PoseDigest.cs  \
@@ -242,7 +245,7 @@ check-file-sizes:
 size-report-selftest:
 	@python3 tools/size-report.py --selftest
 
-# The split kit's own selftest: 36 cases -- what each tool must refuse, and
+# The split kit's own selftest: 52 cases -- what each tool must refuse, and
 # what it must still accept.
 # Not wired into `dist` for the same reason as check-file-sizes -- a local gate
 # sits in front of `deploy`, and `deploy` gates the playtest rig.
