@@ -14,6 +14,11 @@ no error.
 
 The `partial` keyword on a split class is the ONE content line a pure move is
 expected to lose; totalcontent.py is where that is declared and checked.
+
+A synthetic block marked `"emit": "class_doc"` is the one exception to "the
+wrapper is regenerated": it is copied verbatim from the original bytes above
+that part's class declaration, because a class-level /// doc belongs to the
+type, not to the wrapper. splitspec.py refuses more than one.
 """
 import filecmp
 import os
@@ -31,6 +36,13 @@ def render(spec, part):
     out += ["", f"namespace {spec.namespace}", "{"]
     for line in cfg.get("header", "").rstrip("\n").split("\n"):
         out.append(("    // " + line).rstrip())
+    # The class-level /// doc, kept verbatim from the original bytes on the
+    # one part the spec names. Not retyped, and not regenerated: see
+    # splitspec.py on why exactly one part may carry it.
+    doc = getattr(spec, "class_doc", None)
+    if doc and doc["part"] == part:
+        a, b = doc["lines"]
+        out += spec.lines[a - 1:b]
     kw = "partial " if cfg.get("partial") else ""
     out.append(f"    public {kw}class {cfg['class']}")
     out.append("    {")

@@ -70,6 +70,36 @@ namespace Demo
 '''
 
 
+DOC_SAMPLE = '''using Xunit;
+
+namespace Demo
+{
+    /// <summary>
+    /// The type's own doc, which the compiler concatenates across parts.
+    /// </summary>
+    public class DocTests
+    {
+        private static string Helper()
+        {
+            return "x";
+        }
+
+        [Fact]
+        public void First_Works()
+        {
+            Assert.Equal("x", Helper());
+        }
+
+        [Fact]
+        public void Second_Works()
+        {
+            Assert.Equal("x", Helper());
+        }
+    }
+}
+'''
+
+
 def spec_for(tmp, members, synthetic, parts, forward_gaps=None):
     return {
         "root": tmp,
@@ -231,6 +261,49 @@ def main():
     check("emits the moved member ahead of its anchor, not in original order",
           rc == 0 and body.index("Second_Works") < body.index("First_Works"),
           out[:300])
+
+    print("class doc (the compiler CONCATENATES /// across parts -- seen on "
+          "the SelfTest split, where it spliced eleven summaries into one)")
+    doc_src = os.path.join(tmp, "DocTests.cs")
+    with open(doc_src, "w") as fh:
+        fh.write(DOC_SAMPLE)
+    DOC_MEMBERS = {"Helper": "primary", "First_Works": "primary",
+                   "Second_Works": "second"}
+    DOC_PARTS = {
+        "primary": {"file": "DocTests.cs", "class": "DocTests", "partial": True,
+                    "usings": ["Xunit"], "header": "primary"},
+        "second": {"file": "DocTests.Second.cs", "class": "DocTests",
+                   "partial": True, "usings": ["Xunit"], "header": "second"},
+    }
+    def doc_spec(entries, name):
+        return write_spec(tmp, {
+            "root": tmp, "source": "DocTests.cs", "outdir": ".",
+            "namespace": "Demo", "members": DOC_MEMBERS,
+            "synthetic": entries, "forward_gaps": {}, "parts": DOC_PARTS}, name)
+
+    HEAD = [{"lines": [1, 4], "part": "primary", "why": "usings + namespace"},
+            {"lines": [8, 9], "part": "primary", "why": "class decl"},
+            {"lines": [26, -1], "part": "primary", "why": "closing braces"}]
+    ONE = HEAD + [{"lines": [5, 7], "part": "primary", "emit": "class_doc",
+                   "why": "the type's own doc"}]
+    TWO = HEAD + [{"lines": [5, 7], "part": "primary", "emit": "class_doc",
+                   "why": "the type's own doc"},
+                  {"lines": [5, 7], "part": "second", "emit": "class_doc",
+                   "why": "and again, which is the defect"}]
+
+    rc, out = run("writeparts.py", doc_spec(TWO, "doc2.json"))
+    check("REFUSES a spec where two parts carry the class /// doc",
+          rc != 0 and "concatenates" in out, out[:300])
+
+    rc, out = run("writeparts.py", doc_spec(ONE, "doc1.json"))
+    prim = open(os.path.join(tmp, "DocTests.cs")).read()
+    sec = open(os.path.join(tmp, "DocTests.Second.cs")).read()
+    check("writes the /// doc above the class on the one part named",
+          rc == 0 and "/// <summary>" in prim
+          and prim.index("/// <summary>") < prim.index("public partial class"),
+          out[:300])
+    check("...and on no other part, so nothing is concatenated",
+          "///" not in sec, sec[:200])
 
     with open(src, "w") as fh:
         fh.write(SAMPLE)
