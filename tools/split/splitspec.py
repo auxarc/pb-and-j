@@ -54,6 +54,7 @@ decided by READING, so any gap with content must be named in "forward_gaps"
 (attaching it to the member below) or it stays with the member above. A gap
 with content that is named in neither is reported by partition.py, loudly.
 """
+import collections
 import json
 import os
 import re
@@ -61,6 +62,38 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def member_keys(members):
+    """The name a spec uses for each member, unambiguous by construction.
+
+    A member was addressed by its bare NAME, which silently assumes every name
+    in the file is unique. Overloads break that, and so do same-named members
+    of two nested classes -- `Describe(LoadOutcome)` and `Describe(string?)` in
+    NetLog.cs, three repeated names in DestructionPlayback.cs, and a `Postfix`
+    per patch class in NetGlue.cs. EVERY remaining file on the split queue has
+    at least one. The old plan dict simply lost one of each pair, and the count
+    check caught it as "a duplicate member name?" -- correctly refusing, but
+    with no way to proceed.
+
+    The shortest unambiguous form wins, so specs stay readable:
+        Name                 when the name is unique in the file
+        Class.Name           when it is not, but the pair is
+        Class.Name@line      for true overloads in one class
+
+    Returns the parallel list of keys.
+    """
+    by_name = collections.Counter(m[1] for m in members)
+    by_pair = collections.Counter((m[0], m[1]) for m in members)
+    keys = []
+    for cls, name, start, _ in members:
+        if by_name[name] == 1:
+            keys.append(name)
+        elif by_pair[(cls, name)] == 1:
+            keys.append(f"{cls}.{name}")
+        else:
+            keys.append(f"{cls}.{name}@{start}")
+    return keys
 
 
 class Spec:
@@ -80,6 +113,7 @@ class Spec:
             self.lines = fh.read().split("\n")
         self.n = len(self.lines)
         self.members = member_map(self.source)
+        self.keys = member_keys(self.members)
         self._check_plan()
         self._tile()
 
@@ -90,7 +124,7 @@ class Spec:
         two of three tools ran to completion and printed confidently
         mislabelled output. Only the tool that asserted this refused.
         """
-        have = {m[1] for m in self.members}
+        have = set(self.keys)
         want = set(self.plan)
         if have != want:
             msg = ["FATAL: the spec does not describe this file."]
@@ -123,6 +157,36 @@ class Spec:
             raise SystemExit(f"FATAL: members assigned to undeclared parts: "
                              f"{sorted(unknown)}")
         self._check_class_doc()
+        self._check_modifiers()
+
+    def _check_modifiers(self):
+        """Each part must redeclare the class with the ORIGINAL's modifiers.
+
+        writeparts once hardcoded "public", so a `public static class` came out
+        as `public class` -- a semantically different type. The decompile oracle
+        would eventually catch it (a static class is abstract+sealed), but only
+        after a rebuild, and only if someone read the diff. This refuses first,
+        and names the modifiers it expected.
+        """
+        for cfg in self.parts.values():
+            name = cfg["class"]
+            pat = re.compile(r'^\s*((?:(?:public|internal|private|protected|'
+                             r'static|sealed|abstract|partial|unsafe|file)\s+)*)'
+                             r'class\s+' + re.escape(name) + r'\b')
+            want = None
+            for line in self.lines:
+                m = pat.match(line)
+                if m:
+                    want = [w for w in m.group(1).split() if w != "partial"]
+                    break
+            if want is None:
+                continue          # a part may declare a class the source lacks
+            got = cfg.get("modifiers", "public").split()
+            if got != want:
+                raise SystemExit(
+                    f"FATAL: part {cfg['file']!r} would declare {name} as "
+                    f"{' '.join(got)}, but the source declares it "
+                    f"{' '.join(want)}. Set \"modifiers\" on the part.")
 
     def _check_class_doc(self):
         """At most one part may carry the class-level /// doc.
@@ -173,10 +237,10 @@ class Spec:
         self.synthetic_lines = set(self.owner)
 
         starts = {m[2] for m in self.members}
-        for cls, name, s, e in self.members:
-            part = self.plan[name]
+        for (cls, name, s, e), key in zip(self.members, self.keys):
+            part = self.plan[key]
             a = s
-            fg = self.forward_gaps.get(name)
+            fg = self.forward_gaps.get(key)
             if fg:
                 a = fg[0]
             end = e
@@ -188,7 +252,7 @@ class Spec:
                 j += 1
             claim(a, end, part, f"{cls}.{name}")
             self.blocks[part].append((a, end))
-            self.member_blocks[name] = (a, end)
+            self.member_blocks[key] = (a, end)
         for v in self.blocks.values():
             v.sort()
         self._apply_before()

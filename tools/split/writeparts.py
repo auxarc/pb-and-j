@@ -44,7 +44,11 @@ def render(spec, part):
         a, b = doc["lines"]
         out += spec.lines[a - 1:b]
     kw = "partial " if cfg.get("partial") else ""
-    out.append(f"    public {kw}class {cfg['class']}")
+    # MODIFIERS ARE NOT ALWAYS "public". Hardcoding it silently turned
+    # `public static class NetLog` into `public partial class NetLog` -- a
+    # different type, and one that no longer refuses instantiation. splitspec
+    # checks this against the original declaration rather than trusting it.
+    out.append(f"    {cfg.get('modifiers', 'public')} {kw}class {cfg['class']}")
     out.append("    {")
     body = []
     for a, b in spec.blocks[part]:
