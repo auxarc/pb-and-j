@@ -1,0 +1,43 @@
+# The size ratchet, enforced where enforcing it costs nothing.
+#
+# `make check-file-sizes` is advisory on purpose and stays that way: a local
+# gate would sit in front of `deploy`, and `deploy` gates the two-instance
+# playtest rig, which is the scarcest resource in this project. Blocking a
+# playtest until a file is split mid-milestone is a worse outcome than the
+# oversized file.
+#
+# A pull request has no such cost, so this is where the ratchet bites. It
+# compares the branch against the base commit and fails only on what THIS
+# branch made worse -- a file newly over 500 lines, or one already over that
+# grew. Existing debt stays silent until someone touches it, which is
+# deliberate: 67% of code commits here touch a file over the budget, and a
+# check that fires two times in three is a tax rather than a guard.
+#
+# No build, no game DLLs, no dotnet. The tool reads source text through git,
+# so this needs Python and history and nothing else.
+name: size
+
+on:
+  pull_request:
+
+jobs:
+  ratchet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The ratchet reads the base revision out of git, so the default
+          # shallow clone would leave it with no baseline -- and its
+          # no-baseline behaviour is to skip, which would make this job pass
+          # by comparing nothing.
+          fetch-depth: 0
+
+      # Runs first, and on purpose: eleven synthetic cases covering the
+      # ratchet's own logic, including the one the whole design turns on (an
+      # over-limit method MOVED between files must stay silent). A guard whose
+      # logic is untested is a guard whose green means nothing.
+      - name: The ratchet's own selftest
+        run: python3 tools/size-report.py --selftest
+
+      - name: Size ratchet vs the base branch
+        run: python3 tools/size-report.py --strict "${{ github.event.pull_request.base.sha }}"

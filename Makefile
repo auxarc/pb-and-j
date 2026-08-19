@@ -232,6 +232,10 @@ UNCOVERED_PROJECTS := src/PBAndJ.Net src/PBAndJ.Mod
 # SILENT. Both were mutation-checked: keying identity by file (the naive
 # diff-scoped version) fails that case, and dropping the shape exemption fails
 # another.
+# Advisory here, ENFORCED in CI. `.github/workflows/size.yml` runs the same
+# tool with --strict on every pull request, which exits 1 on a regression.
+# The split is deliberate: a local gate would sit in front of `deploy`, and
+# `deploy` gates the playtest rig. A PR check costs nobody a playtest.
 check-file-sizes:
 	@python3 tools/size-report.py $(BASE)
 

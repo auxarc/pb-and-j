@@ -24,11 +24,16 @@ Without that, relocating an over-limit method reads as brand new to a
 file-scoped diff and the ratchet fires on every split commit -- self-defeating
 for a program whose whole purpose is splitting files.
 
-ADVISORY. Never wired into `dist`, and it exits 0 even when it reports. It gates
-nothing, because the thing it would gate is `deploy`, and `deploy` gates the
-two-instance playtest rig -- the scarcest resource in this project. A feature
-branch adding one line to a 2343-line session class must not be unable to
-playtest until that class is split mid-milestone.
+ADVISORY BY DEFAULT, and that is about WHERE it bites rather than whether. Run
+plain, it exits 0 even when it reports, because the thing a `make` gate would
+block is `deploy`, and `deploy` gates the two-instance playtest rig -- the
+scarcest resource in this project. A feature branch adding one line to a
+2343-line class must not be unable to playtest until that class is split
+mid-milestone.
+
+`--strict` exits 1 instead, and exists so CI can enforce what `make` deliberately
+does not. A pull request is the right place: it blocks a merge that makes size
+worse and cannot touch anyone's ability to playtest locally.
 """
 import re, subprocess, sys, collections
 
@@ -326,7 +331,9 @@ def main():
         return selftest()
     if len(sys.argv) > 1 and sys.argv[1] == '--census':
         return census()
-    base = sys.argv[1] if len(sys.argv) > 1 else 'HEAD^'
+    argv = [a for a in sys.argv[1:] if a != '--strict']
+    strict = '--strict' in sys.argv
+    base = argv[0] if argv else 'HEAD^'
     if subprocess.run(['git', 'rev-parse', '--verify', '--quiet', base],
                       capture_output=True).returncode != 0:
         # No parent (initial commit) or a bad ref: report nothing rather than
@@ -344,11 +351,14 @@ def main():
         print(f"size report: nothing crossed or grew since {base}. "
               f"({len(now_sizes)} files, {len(now_methods)} methods)")
         return 0
-    print(f"size report vs {base} — ADVISORY, this gates nothing:")
+    label = "FAILING" if strict else "ADVISORY, this gates nothing"
+    print(f"size report vs {base} — {label}:")
     for f in findings:
         print(f)
     print(f"  ({len(findings)} item(s). Existing debt is deliberately silent until touched.)")
-    return 0
+    if strict:
+        print("  Split the file, shorten the function, or say why the budget should move.")
+    return 1 if strict else 0
 
 
 if __name__ == '__main__':
