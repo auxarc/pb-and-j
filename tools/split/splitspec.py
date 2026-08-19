@@ -11,6 +11,7 @@ A SPLIT SPEC is JSON:
 
   {
     "source":    "tests/.../FooTests.cs",
+    "before":    {"MemberX": "MemberY"},                 // emit X just before Y
     "outdir":    "tests/.../",
     "namespace": "Foo.Bar",
     "members":   {"MemberName": "partname", ...},        // EVERY member
@@ -27,6 +28,14 @@ SYNTHETIC BLOCKS are the real lines the member map does not model -- usings,
 namespace and class declarations, closing braces. They must be declared, not
 absorbed, or content silently emigrates: on HostSession.cs a 72-line properties
 block would have joined the following part unnoticed.
+
+ORDER. Parts emit their members in the ORIGINAL file's order, which is right
+almost always -- it keeps the diff readable and the move obviously pure. The
+exception is a member the original had filed in the wrong place: preserving
+that order inside the new file reproduces the misfiling under a filename that
+now contradicts it. "before" moves one member's block to sit immediately ahead
+of another's, within the same part. Both must exist and share a part, or the
+spec is refused.
 
 GAP DIRECTION. A blank gap between members absorbs BACKWARD onto the member
 above. A gap holding a COMMENT does not: `//` banners usually document the
@@ -58,6 +67,7 @@ class Spec:
         self.parts = self.raw["parts"]
         self.forward_gaps = {k: tuple(v) for k, v in
                              self.raw.get("forward_gaps", {}).items()}
+        self.before = self.raw.get("before", {})
         with open(self.source) as fh:
             self.lines = fh.read().split("\n")
         self.n = len(self.lines)
@@ -76,6 +86,21 @@ class Spec:
         want = set(self.plan)
         if have != want:
             msg = ["FATAL: the spec does not describe this file."]
+            # THE OVERWHELMINGLY LIKELY CAUSE, because writeparts.py writes the
+            # primary part OVER the source: the split has already been run once,
+            # so `source` now holds one part instead of the whole file. Say so,
+            # rather than printing sixty "in spec, not in file" lines and
+            # leaving the reader to work it out. (It cost a cycle once.)
+            outputs = {os.path.join(self.outdir, cfg["file"])
+                       for cfg in self.parts.values()}
+            if os.path.abspath(self.source) in {os.path.abspath(o) for o in outputs}:
+                msg.append("")
+                msg.append("  NOTE: this spec's source is ALSO one of its part "
+                           "files, so writeparts.py has probably already run and "
+                           "overwritten it.")
+                msg.append(f"  Restore the original first:  git checkout "
+                           f"{os.path.relpath(self.source)}")
+                msg.append("")
             for x in sorted(have - want):
                 msg.append(f"  in file, not in spec: {x}")
             for x in sorted(want - have):
@@ -92,6 +117,7 @@ class Spec:
 
     def _tile(self):
         self.owner = {}
+        self.member_blocks = {}
         self.why = {}
         self.dup = []
         self.blocks = {p: [] for p in self.parts}
@@ -125,9 +151,30 @@ class Spec:
                 j += 1
             claim(a, end, part, f"{cls}.{name}")
             self.blocks[part].append((a, end))
+            self.member_blocks[name] = (a, end)
         for v in self.blocks.values():
             v.sort()
+        self._apply_before()
         self.unassigned = [i for i in range(1, self.n + 1) if i not in self.owner]
+
+    def _apply_before(self):
+        """Move a member's block to sit immediately ahead of another's."""
+        for mover, anchor in self.before.items():
+            for who in (mover, anchor):
+                if who not in self.plan:
+                    raise SystemExit(f'FATAL: "before" names {who!r}, which is '
+                                     f'not a member of this file')
+            if self.plan[mover] != self.plan[anchor]:
+                raise SystemExit(
+                    f'FATAL: "before" moves {mover!r} ahead of {anchor!r}, but '
+                    f'they are in different parts ({self.plan[mover]} and '
+                    f'{self.plan[anchor]}). Reassign the member instead.')
+            part = self.plan[mover]
+            blocks = self.blocks[part]
+            mb = self.member_blocks[mover]
+            ab = self.member_blocks[anchor]
+            blocks.remove(mb)
+            blocks.insert(blocks.index(ab), mb)
 
     def _is_forward_gap_line(self, i):
         return any(a <= i <= b for a, b in self.forward_gaps.values())

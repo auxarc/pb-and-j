@@ -220,6 +220,48 @@ def main():
     check("writes every declared part", rc == 0 and
           os.path.exists(os.path.join(tmp, "SampleTests.Second.cs")), out[:300])
 
+    print("order (\"before\": a member the original filed in the wrong place)")
+    with open(src, "w") as fh:       # writeparts overwrote it above
+        fh.write(SAMPLE)
+    ordered = dict(spec_for(tmp, {**GOOD_MEMBERS, "Second_Works": "primary"},
+                            GOOD_SYNTH, GOOD_PARTS, FWD))
+    ordered["before"] = {"Second_Works": "First_Works"}
+    rc, out = run("writeparts.py", write_spec(tmp, ordered, "ord.json"))
+    body = open(os.path.join(tmp, "SampleTests.cs")).read()
+    check("emits the moved member ahead of its anchor, not in original order",
+          rc == 0 and body.index("Second_Works") < body.index("First_Works"),
+          out[:300])
+
+    with open(src, "w") as fh:
+        fh.write(SAMPLE)
+    bad_order = dict(ordered)
+    bad_order["before"] = {"Second_Works": "NoSuchMember"}
+    rc, out = run("partition.py", write_spec(tmp, bad_order, "ord2.json"))
+    check("refuses a \"before\" naming a member the file does not have",
+          rc != 0 and "not a member of this file" in out, out[:300])
+
+    with open(src, "w") as fh:
+        fh.write(SAMPLE)
+    cross = dict(spec_for(tmp, GOOD_MEMBERS, GOOD_SYNTH, GOOD_PARTS, FWD))
+    cross["before"] = {"Second_Works": "First_Works"}   # different parts
+    rc, out = run("partition.py", write_spec(tmp, cross, "ord3.json"))
+    check("refuses a \"before\" across two different parts, rather than "
+          "silently dropping the move", rc != 0 and
+          "different parts" in out, out[:300])
+
+    # restore, then re-run the plain split so the checks below see the tree a
+    # completed split leaves behind
+    with open(src, "w") as fh:
+        fh.write(SAMPLE)
+    run("writeparts.py", good)
+
+    print("re-running writeparts (it overwrites its own source)")
+    rc, out = run("partition.py", good)
+    check("after a split has been written, the guard names the CAUSE rather "
+          "than listing every member as missing",
+          rc != 0 and "already run and overwritten it" in out and
+          "git checkout" in out, out[:400])
+
     print("total content")
     orig_copy = os.path.join(tmp, "original.cs")
     shutil.copy(os.path.join(HERE, "selftest.py"), orig_copy)  # placeholder
