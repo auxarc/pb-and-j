@@ -42,6 +42,9 @@ namespace Demo
 {
     public class SampleTests
     {
+        private readonly FakeThing thing = new FakeThing();
+        private Session session = null!;
+
         private static string Helper(
             string a,
             string b)
@@ -101,7 +104,25 @@ def main():
     names = [m[1] for m in mm]
     check("finds a member whose signature WRAPS over three lines "
           "(size-report missed 65 of these)", "Helper" in names, str(names))
-    check("finds all three members", len(mm) == 3, str(names))
+    check("finds all five members", len(mm) == 5, str(names))
+    byname = {m[1]: m for m in mm}
+    check("a field with a CONSTRUCTOR-CALL initialiser is a field, not a "
+          "method named after its type -- this read as `method FakeThing` and "
+          "swallowed the real method below it",
+          "thing" in byname and "FakeThing" not in byname, str(names))
+    check("...and it spans its own single line, so the member below survives",
+          byname.get("thing", (0, 0, 0, 0))[3] ==
+          byname.get("thing", (0, 0, 0, 0))[2], str(byname.get("thing")))
+    check("a field with NO parentheses at all does not consume what follows "
+          "(`private Session session = null!;` once ran on hunting a '(')",
+          "session" in byname and byname["session"][3] == byname["session"][2],
+          str(byname.get("session")))
+    check("a field is named for its DECLARATOR, not a word from its "
+          "initialiser (this once came out as `null`)",
+          "null" not in byname and "FakeThing" not in byname, str(names))
+    check("the method below the fields is still found whole",
+          "Helper" in byname and byname["Helper"][3] > byname["Helper"][2],
+          str(byname.get("Helper")))
     first = [m for m in mm if m[1] == "First_Works"][0]
     check("pulls a member's start back over its [Fact]",
           SAMPLE.split("\n")[first[2] - 1].strip() == "[Fact]")
@@ -112,15 +133,25 @@ def main():
         "second": {"file": "SampleTests.Second.cs", "class": "SampleTests",
                    "partial": True, "usings": ["Xunit"], "header": "second"},
     }
-    GOOD_MEMBERS = {"Helper": "primary", "First_Works": "primary",
+    GOOD_MEMBERS = {"thing": "primary", "session": "primary",
+                    "Helper": "primary", "First_Works": "primary",
                     "Second_Works": "second"}
     NLINES = len(SAMPLE.split("\n"))
+    # Derived, never hand-counted: adding two fields to SAMPLE once shifted
+    # every one of these and three cases failed for a reason unrelated to what
+    # they test.
+    SAMPLE_LINES = SAMPLE.split("\n")
+    BANNER = next(i for i, l in enumerate(SAMPLE_LINES, 1) if "--- a banner" in l)
+    OPEN_BRACE = next(i for i, l in enumerate(SAMPLE_LINES, 1)
+                      if l.strip() == "{" and i > 4)
     GOOD_SYNTH = [
-        {"lines": [1, 5], "part": "primary", "why": "usings + namespace"},
-        {"lines": [6, 6], "part": "primary", "why": "class open brace"},
+        {"lines": [1, OPEN_BRACE - 1], "part": "primary",
+         "why": "usings + namespace + class declaration"},
+        {"lines": [OPEN_BRACE, OPEN_BRACE], "part": "primary",
+         "why": "class open brace"},
         {"lines": [NLINES - 2, NLINES], "part": "primary", "why": "closers"},
     ]
-    FWD = {"Second_Works": [20, 22]}
+    FWD = {"Second_Works": [BANNER - 1, BANNER + 1]}
 
     print("stale-plan guard (a stray cp left a plan for a DIFFERENT file "
           "mid-split; two of three tools ran on happily)")
@@ -173,7 +204,7 @@ def main():
           out[:300])
     check("by the expected mechanism: blank-line absorption stops dead at "
           "content, so the banner lands UNASSIGNED rather than being swallowed",
-          "UNASSIGNED line 20" in out and "INVARIANT BROKEN" not in out,
+          f"UNASSIGNED line {BANNER}" in out and "INVARIANT BROKEN" not in out,
           out[:300])
     rc, out = run("partition.py", good)
     check("accepts it once the spec names the direction",
