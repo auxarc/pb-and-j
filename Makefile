@@ -83,7 +83,13 @@ NONWIRE_ROOT  := $(addprefix src/PBAndJ.Core/, \
 NONWIRE_FILES := $(NONWIRE_ROOT) $(addprefix src/PBAndJ.Core/Net/, \
                  AssetBuffer.cs AssetPoolDigest.cs ClientSession.cs  \
                  ConnectForm.cs ConnectSettings.cs ConnectText.cs  \
-                 DestructionPlayback.cs HostSession.cs KeyframePlayback.cs  \
+                 DestructionPlayback.cs HostSession.cs  \
+                 HostSession.CombatEntry.cs HostSession.Dispatch.cs  \
+                 HostSession.Handshake.cs HostSession.Load.cs  \
+                 HostSession.Lobby.cs HostSession.Roster.cs  \
+                 HostSession.Scenario.cs HostSession.Tick.cs  \
+                 HostSession.Turn.cs HostSession.TurnComplete.cs  \
+                 KeyframePlayback.cs  \
                  LoadBarrier.cs LobbyBarrier.cs LobbySaveWrites.cs  \
                  LobbySaves.cs LobbyView.cs MeleeTrajectoryPlayback.cs  \
                  NetLog.cs PartIntegrityPlayback.cs PartStateDigest.cs  \
