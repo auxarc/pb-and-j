@@ -46,7 +46,7 @@ Two things worth not re-deriving:
   `combat.Simulating = true` inside the same block that reaches the write at `:117`. If that writer
   ever fires on a client, the `ActionRecordingSystem` row's "No" falls with it.
 - **A client never advances `simulationTime`** — `src/PBAndJ.Mod/Net/ActuatorGlue.cs:358` and
-  `CombatGameBridge.cs:223`. So the conditional row is expected not to fire, consistent with the
+  `CombatGameBridge.Snapshot.cs:84`. So the conditional row is expected not to fire, consistent with the
   stale `49.12` measured once on a real client. Expected, not proven: it is observed per run rather
   than asserted.
 
@@ -55,7 +55,7 @@ Two things worth not re-deriving:
 Vanilla writes `timeRequested` (`CombatReplayHelper.cs:961-970`) — the same absolute clock it hands
 to `CheckAssetTrackActivation` and `ApplyTimeToActiveAssetTracks`. Our cursor is on that clock too:
 capture sets `windowStart = CombatReplayHelper.turnStartTime` and
-`windowEnd = combat.simulationTime.f` (`CombatGameBridge.cs:507-510`), and `KeyframePlayer` seeds
+`windowEnd = combat.simulationTime.f` (`CombatGameBridge.Keyframes.cs:100-103`), and `KeyframePlayer` seeds
 `cursor` from `WindowStart` and passes it straight to `track.ApplyTime(cursor)`.
 
 ⚠️ The deleted `TimeSimProbeGlue` mirrored a 0-based `elapsed`. It was internally consistent — its

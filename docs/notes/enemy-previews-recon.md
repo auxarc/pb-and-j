@@ -38,7 +38,7 @@ was ever disposed on either machine (`disposed=0`).
 ### 1. ✅ CONFIRMED — nothing carries enemy actions over the wire
 
 `OrderPayload` travels client → host only. The host's `CaptureLocalOrders`
-(`CombatGameBridge.cs:74`) skips `action.AIAction` outright, and there is no message type for a plan
+(`CombatGameBridge.Turn.cs:55`) skips `action.AIAction` outright, and there is no message type for a plan
 the client does not own. This was always certain — it is our own code — and the client's flat zero is
 what it looks like from the other end.
 
@@ -87,7 +87,7 @@ needs a probe on the save's own action list, not on the ECS.
 
 ### 5. ❌ REFUTED AS THE MECHANISM — ~~`ClearLocalOrders` disposes the host's plan~~
 
-~~`CombatGameBridge.ClearLocalOrders` (`:879`) disposes every action except `AIAction`-tagged ones,
+~~`CombatGameBridge.ClearLocalOrders` (`CombatGameBridge.Turn.cs:110`) disposes every action except `AIAction`-tagged ones,
 so the first correction throws away the untagged enemy plan the save delivered.~~
 
 `disposed=0` on the client, every turn. It cannot dispose actions that were never there. The rule
