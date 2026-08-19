@@ -100,6 +100,32 @@ namespace Demo
 '''
 
 
+OV_SAMPLE = '''using Xunit;
+
+namespace Demo
+{
+    public class OvTests
+    {
+        private static string Show(int i)
+        {
+            return "i";
+        }
+
+        private static string Show(string s)
+        {
+            return s;
+        }
+
+        [Fact]
+        public void First_Works()
+        {
+            Assert.Equal("i", Show(1));
+        }
+    }
+}
+'''
+
+
 def spec_for(tmp, members, synthetic, parts, forward_gaps=None):
     return {
         "root": tmp,
@@ -304,6 +330,107 @@ def main():
           out[:300])
     check("...and on no other part, so nothing is concatenated",
           "///" not in sec, sec[:200])
+
+    print("overloads (a bare NAME cannot address two members that share one -- "
+          "every file left on the split queue has at least one)")
+    ov_src = os.path.join(tmp, "OvTests.cs")
+    with open(ov_src, "w") as fh:
+        fh.write(OV_SAMPLE)
+    OV_PARTS = {
+        "primary": {"file": "OvTests.cs", "class": "OvTests", "partial": True,
+                    "usings": ["Xunit"], "header": "primary"},
+        "second": {"file": "OvTests.Second.cs", "class": "OvTests",
+                   "partial": True, "usings": ["Xunit"], "header": "second"},
+    }
+    OV_SYNTH = [{"lines": [1, 6], "part": "primary", "why": "wrapper"},
+                {"lines": [22, -1], "part": "primary", "why": "closing braces"}]
+    def ov_spec(members, name):
+        return write_spec(tmp, {
+            "root": tmp, "source": "OvTests.cs", "outdir": ".",
+            "namespace": "Demo", "members": members, "synthetic": OV_SYNTH,
+            "forward_gaps": {}, "parts": OV_PARTS}, name)
+
+    rc, out = run("partition.py", ov_spec(
+        {"Show": "primary", "First_Works": "primary"}, "ov_bare.json"))
+    check("refuses a plan addressing an overloaded name by its bare name",
+          rc != 0 and "does not describe this file" in out, out[:400])
+
+    rc, out = run("partition.py", ov_spec(
+        {"OvTests.Show@7": "primary", "OvTests.Show@12": "second",
+         "First_Works": "primary"}, "ov_ok.json"))
+    check("accepts the two overloads addressed separately, and tiles them",
+          rc == 0 and "partition OK" in out, out[:400])
+
+    rc, out = run("writeparts.py", ov_spec(
+        {"OvTests.Show@7": "primary", "OvTests.Show@12": "second",
+         "First_Works": "primary"}, "ov_ok2.json"))
+    second = open(os.path.join(tmp, "OvTests.Second.cs")).read()
+    check("...and sends each overload to the part it was assigned, not both to one",
+          rc == 0 and "string s" in second and "int i" not in second, out[:400])
+
+    print("class modifiers (hardcoding \"public\" turned `public static class "
+          "NetLog` into a different type)")
+    st_src = os.path.join(tmp, "StTests.cs")
+    with open(st_src, "w") as fh:
+        fh.write(OV_SAMPLE.replace("public class OvTests",
+                                   "public static class OvTests")
+                          .replace("OvTests.cs", "StTests.cs"))
+    def st_spec(mods, name):
+        parts = {"primary": {"file": "StTests.cs", "class": "OvTests",
+                             "partial": True, "usings": ["Xunit"],
+                             "header": "primary"}}
+        if mods is not None:
+            parts["primary"]["modifiers"] = mods
+        return write_spec(tmp, {
+            "root": tmp, "source": "StTests.cs", "outdir": ".",
+            "namespace": "Demo",
+            "members": {"OvTests.Show@7": "primary", "OvTests.Show@12": "primary",
+                        "First_Works": "primary"},
+            "synthetic": OV_SYNTH, "forward_gaps": {}, "parts": parts}, name)
+
+    rc, out = run("partition.py", st_spec(None, "st_bad.json"))
+    check("REFUSES a part that would drop `static` from the class declaration",
+          rc != 0 and "but the source declares it" in out, out[:400])
+
+    rc, out = run("writeparts.py", st_spec("public static", "st_ok.json"))
+    body = open(os.path.join(tmp, "StTests.cs")).read()
+    check("writes the class with the modifiers the source actually had",
+          rc == 0 and "public static partial class OvTests" in body, out[:400])
+
+    print("doc xml (the compiler emits <member> in SOURCE order, so a split "
+          "reorders the whole file and a line diff is pure noise)")
+    def xml(path, entries):
+        with open(os.path.join(tmp, path), "w") as fh:
+            fh.write("<doc><members>\n")
+            for name, body in entries:
+                fh.write(f'<member name="{name}">\n  <summary>{body}</summary>\n'
+                         f'</member>\n')
+            fh.write("</members></doc>\n")
+        return os.path.join(tmp, path)
+
+    base = [(f"M:N.M{i}", f"body {i}") for i in range(30)]
+    a = xml("doc-a.xml", base)
+    rc, out = run("docxml.py", a, xml("doc-b.xml", list(reversed(base))))
+    check("is silent on a pure REORDER, which every split produces",
+          rc == 0 and "identical by member" in out, out[:300])
+
+    rc, out = run("docxml.py", a, xml("doc-c.xml", base[1:]))
+    check("reports a member whose /// went missing", rc != 0 and "LOST" in out,
+          out[:300])
+
+    rc, out = run("docxml.py", a, xml("doc-d.xml",
+                                      [(base[0][0], "reworded")] + base[1:]))
+    check("reports a member whose /// changed wording",
+          rc != 0 and "CHANGED" in out, out[:300])
+
+    rc, out = run("docxml.py", a, xml("doc-e.xml", base[:5]))
+    check("REFUSES a doc XML it barely parsed, rather than comparing nothing",
+          rc != 0 and "REFUSING" in out, out[:300])
+
+    rc, out = run("docxml.py", a, xml("doc-f.xml",
+                                      base + [(base[0][0], "a second summary")]))
+    check("reports the SPLICED entry two /// on one type would produce",
+          rc != 0 and "SPLICED" in out, out[:300])
 
     with open(src, "w") as fh:
         fh.write(SAMPLE)

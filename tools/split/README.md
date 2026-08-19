@@ -38,6 +38,10 @@ the incident; read them before trusting a tool.
 7. **Run the oracles**, and prove each one BITES before believing it:
    - `listtests.sh` — the test-name SET, for a test-file split;
    - `ilcanon.py` — the decompile, for "the compiled code is unchanged";
+   - `docxml.py` — the emitted doc XML, for "every `///` survived and still
+     says the same thing". Compare it BY MEMBER: the compiler emits entries in
+     source order, so a split reorders the whole file and `diff` shows ~150
+     lines of noise that look exactly like damage;
    - `totalcontent.py` — every non-blank line, the only oracle that reads
      comments.
 8. **Review the prose.** Every `//` header is an unchecked claim. Five splits
@@ -70,13 +74,26 @@ decides which side a **comment** between two members belongs to — the one
 question no oracle can answer for you, because every one of them is blind to
 comments.
 
+Three keys exist because leaving them out changed the code:
+
+- **`"modifiers"`** on a part, default `"public"`. Hardcoding it turned
+  `public static class NetLog` into `public class NetLog`. splitspec checks
+  each part against the original declaration and refuses a mismatch.
+- **`"emit": "class_doc"`** on a synthetic block keeps the class-level `///`
+  instead of regenerating it away, on exactly one part. Two parts carrying it
+  makes the compiler *concatenate* the summaries — which is what happened to
+  the eleven-part SelfTest split.
+- **member keys**, when a bare name is ambiguous: `Class.Name`, or
+  `Class.Name@line` for true overloads in one class. Every file left on the
+  split queue has at least one repeated name.
+
 ## Selftest
 
 ```
 make split-selftest
 ```
 
-36 cases: what each tool must REFUSE, and the sound input it must still
+52 cases: what each tool must REFUSE, and the sound input it must still
 accept. Each names a defect that actually bit, or the control proving the
 refusal is not simply always-on. The suite has been mutation-checked —
 breaking any one guard makes it fail — because a bite test that cannot fail is
@@ -85,6 +102,10 @@ this project's most repeated mistake.
 ## What these tools cannot tell you
 
 - **Grouping.** Step 5 is a substitute, not a proof.
+- **Which overload.** `ownership.py` counts by NAME, so two overloads of one
+  name share a single tally. splitspec can address them separately; the
+  ownership check cannot tell them apart, and a helper with overloads needs
+  its call sites read by hand.
 - **Static initialiser order.** `ilcanon.py` sorts single-line members, so a
   reordered `.cctor` — the one thing splitting a partial class can really
   change — is invisible. Verify it by reading, every time.
