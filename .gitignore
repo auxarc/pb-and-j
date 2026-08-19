@@ -31,3 +31,7 @@ logs/
 
 # Playtest run logs (tools/playtest-m12b.sh)
 .playtest/
+
+# Python bytecode from tools/split (its modules import each other).
+__pycache__/
+*.pyc
