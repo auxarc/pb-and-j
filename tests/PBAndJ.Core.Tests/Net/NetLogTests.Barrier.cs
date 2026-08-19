@@ -7,8 +7,9 @@ namespace PBAndJ.Core.Tests.Net
     // The barrier: who is ready, who is stale, and what makes it commit.
     //
     // One part of NetLogTests, a single class split across 9 files.
-    // Helpers used by more than one part live in NetLogTests.cs; a helper lives
-    // here only because this part is effectively its sole user.
+    // This class has no helpers and no fields -- every member is a test -- so
+    // unlike the other split test classes there is no shared fixture in
+    // NetLogTests.cs to look for.
     public partial class NetLogTests
     {
         // --- barrier ---

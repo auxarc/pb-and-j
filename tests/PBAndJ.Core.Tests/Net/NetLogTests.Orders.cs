@@ -4,19 +4,23 @@ using Xunit;
 
 namespace PBAndJ.Core.Tests.Net
 {
-    // Under the author's `// --- orders and commit ---` banner, which is 667 lines
-    // long and covers rather more than its name: this part is the front of it --
-    // orders applied and their results, un-ready, the combat edges, the send queue's
-    // complaints, and the two snapshot losses.
-    // The rest of that banner's span is .Playback.cs and .Commit.cs.
+    // The front of the author's `// --- orders and commit ---` span, which ran 667
+    // lines and covered rather more than its name: orders applied and their
+    // results, un-ready, the combat edges, the queues complaining in both
+    // directions -- the send queue outbound and the mailbox inbound -- and the two
+    // snapshot losses. The commit half of that span is in .Commit.cs and the
+    // playback half in .Playback.cs.
+    //
+    // The banner itself is NOT reproduced here. It named a span this file is only
+    // a third of, so carrying it would have labelled sixteen order-and-queue tests
+    // as "orders and commit" while every commit test sits in another file.
     //
     // One part of NetLogTests, a single class split across 9 files.
-    // Helpers used by more than one part live in NetLogTests.cs; a helper lives
-    // here only because this part is effectively its sole user.
+    // This class has no helpers and no fields -- every member is a test -- so
+    // unlike the other split test classes there is no shared fixture in
+    // NetLogTests.cs to look for.
     public partial class NetLogTests
     {
-        // --- orders and commit ---
-
         [Fact]
         public void OrdersApplied_ComposesTheLine()
         {
@@ -118,6 +122,13 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(
                 "[pb-and-j] dropping a frame for #0: the transport is stopped",
                 NetLog.SendAfterStop(0));
+        }
+
+        [Fact]
+        public void MailboxOverflowed_ComposesTheLine()
+        {
+            Assert.Equal("[pb-and-j] mailbox overflowed — dropped 1 event", NetLog.MailboxOverflowed(1));
+            Assert.Equal("[pb-and-j] mailbox overflowed — dropped 5 events", NetLog.MailboxOverflowed(5));
         }
 
         [Fact]

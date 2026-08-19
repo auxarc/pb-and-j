@@ -6,13 +6,15 @@ namespace PBAndJ.Core.Tests.Net
 {
     // Everything playback logs: keyframes, poses, and the M14 asset tracks --
     // trails, lights, reactions and melees -- including every count that gets
-    // clamped, dropped or refused on the way.
+    // clamped, dropped or refused on the way, and the visibility corrections that
+    // travel with them.
     // The middle of the `// --- orders and commit ---` banner's span, and the
     // reason that banner had to be divided at all.
     //
     // One part of NetLogTests, a single class split across 9 files.
-    // Helpers used by more than one part live in NetLogTests.cs; a helper lives
-    // here only because this part is effectively its sole user.
+    // This class has no helpers and no fields -- every member is a test -- so
+    // unlike the other split test classes there is no shared fixture in
+    // NetLogTests.cs to look for.
     public partial class NetLogTests
     {
         [Fact]

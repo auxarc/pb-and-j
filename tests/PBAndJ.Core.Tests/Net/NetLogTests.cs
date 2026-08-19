@@ -15,9 +15,9 @@ namespace PBAndJ.Core.Tests.Net
         //
         //   .Handshake.cs  a socket connecting through to assigned units
         //   .Barrier.cs    ready, stale, resync, commit
-        //   .Orders.cs     orders and their results, un-ready, the send queue
+        //   .Orders.cs     the front of the orders-and-commit span
         //   .Playback.cs   keyframes, poses, asset tracks
-        //   .Commit.cs     reconnect, rejections, commit, digests
+        //   .Commit.cs     the back of it: reconnect, rejections, commit, digests
         //   .Status.cs     what `pbj.status` prints
         //   .Lobby.cs      the lobby (M11a)
         //   .Shipping.cs   shipping the fight (M12b)
@@ -26,13 +26,17 @@ namespace PBAndJ.Core.Tests.Net
         // be divided: `// --- orders and commit ---` runs 667 lines, over the
         // 500-line gate, and is cut at its own seams into .Orders/.Playback/.Commit.
         //
-        // Three tests were filed away from their subject in the original and are
-        // moved here rather than carried across a file boundary: the two
-        // HostListeningOpenly tests sat under the orders banner and belong beside
-        // HostListening below; HandshakeTimedOut went to .Handshake.cs; and
-        // Lines_AreCultureIndependent had drifted to the end of the lobby section,
-        // leaving the author's `// --- culture ---` banner heading nothing at all.
-        // It is a claim about every line NetLog composes, so it lives here with the
+        // Four tests were filed away from their subject in the original. The two
+        // HostListeningOpenly tests sat under the orders banner and are now beside
+        // HostListening below; HandshakeTimedOut went to .Handshake.cs;
+        // MailboxOverflowed went to .Orders.cs, beside the send queue it is the
+        // inbound counterpart of; and Lines_AreCultureIndependent had drifted
+        // twenty-five tests past its own `// --- culture ---` banner, to the end of
+        // the lobby section, leaving that banner heading nothing at all.
+        //
+        // The culture test samples two lines rather than all of them --
+        // HostListening and TurnCommitted, under de-DE -- but those two now live in
+        // different parts, so no section file owns it and it belongs here with the
         // banner that names it.
         // --- session lifecycle ---
 
@@ -52,6 +56,21 @@ namespace PBAndJ.Core.Tests.Net
         {
             var ex = Assert.Throws<ArgumentException>(() => NetLog.HostListening(address!, 1, 1, 1));
             Assert.Equal("bindAddress", ex.ParamName);
+        }
+
+        [Fact]
+        public void HostListeningOpenly_WarnsAboutTheExposure()
+        {
+            var line = NetLog.HostListeningOpenly("0.0.0.0", 27600);
+            Assert.Contains("OPEN LISTENER on 0.0.0.0:27600", line);
+            Assert.Contains("in the clear", line);
+            Assert.Contains("pbj.net-stop", line);
+        }
+
+        [Fact]
+        public void HostListeningOpenly_WithNoBindAddress_Throws()
+        {
+            Assert.Throws<ArgumentException>(() => NetLog.HostListeningOpenly(" ", 1));
         }
 
         [Fact]
@@ -112,21 +131,6 @@ namespace PBAndJ.Core.Tests.Net
         {
             var ex = Assert.Throws<ArgumentException>(() => NetLog.TransportFailed(""));
             Assert.Equal("detail", ex.ParamName);
-        }
-
-        [Fact]
-        public void HostListeningOpenly_WarnsAboutTheExposure()
-        {
-            var line = NetLog.HostListeningOpenly("0.0.0.0", 27600);
-            Assert.Contains("OPEN LISTENER on 0.0.0.0:27600", line);
-            Assert.Contains("in the clear", line);
-            Assert.Contains("pbj.net-stop", line);
-        }
-
-        [Fact]
-        public void HostListeningOpenly_WithNoBindAddress_Throws()
-        {
-            Assert.Throws<ArgumentException>(() => NetLog.HostListeningOpenly(" ", 1));
         }
 
         // --- culture ---

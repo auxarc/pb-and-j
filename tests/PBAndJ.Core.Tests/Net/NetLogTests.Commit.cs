@@ -6,11 +6,13 @@ namespace PBAndJ.Core.Tests.Net
 {
     // The back of the `// --- orders and commit ---` banner: reconnecting and
     // timing out, combat as the host announces it, the two ways an order is
-    // rejected, and the commit / completion / digest lines the banner is named for.
+    // rejected, and the commit / completion / digest lines the banner is named
+    // for. That is all twenty of them.
     //
     // One part of NetLogTests, a single class split across 9 files.
-    // Helpers used by more than one part live in NetLogTests.cs; a helper lives
-    // here only because this part is effectively its sole user.
+    // This class has no helpers and no fields -- every member is a test -- so
+    // unlike the other split test classes there is no shared fixture in
+    // NetLogTests.cs to look for.
     public partial class NetLogTests
     {
         [Fact]
@@ -154,13 +156,6 @@ namespace PBAndJ.Core.Tests.Net
         public void DigestDiverged_WithMissingValues_UsesPlaceholders()
         {
             Assert.Equal("[pb-and-j] turn 3 DIVERGED | host ? | local ?", NetLog.DigestDiverged(3, null, null));
-        }
-
-        [Fact]
-        public void MailboxOverflowed_ComposesTheLine()
-        {
-            Assert.Equal("[pb-and-j] mailbox overflowed — dropped 1 event", NetLog.MailboxOverflowed(1));
-            Assert.Equal("[pb-and-j] mailbox overflowed — dropped 5 events", NetLog.MailboxOverflowed(5));
         }
     }
 }

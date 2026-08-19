@@ -4,14 +4,16 @@ using Xunit;
 
 namespace PBAndJ.Core.Tests.Net
 {
-    // The handshake, from a socket connecting to a peer being admitted or turned
-    // away, and the assigned-units line that closes it.
-    // HandshakeTimedOut is here too. It was filed under the orders banner in the
-    // original; the split moved it to the subject it names.
+    // The handshake and the roster it settles: a socket connecting, a peer
+    // admitted, rejected or timed out, the welcome, the session summary, the
+    // per-peer assignment and the assigned-units line, and a peer leaving.
+    // HandshakeTimedOut was filed under the orders banner in the original; the
+    // split moved it to the subject it names.
     //
     // One part of NetLogTests, a single class split across 9 files.
-    // Helpers used by more than one part live in NetLogTests.cs; a helper lives
-    // here only because this part is effectively its sole user.
+    // This class has no helpers and no fields -- every member is a test -- so
+    // unlike the other split test classes there is no shared fixture in
+    // NetLogTests.cs to look for.
     public partial class NetLogTests
     {
         // --- handshake ---
