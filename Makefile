@@ -242,7 +242,8 @@ check-file-sizes:
 size-report-selftest:
 	@python3 tools/size-report.py --selftest
 
-# The split kit's own selftest: 27 negative cases, one per defect that bit.
+# The split kit's own selftest: 36 cases -- what each tool must refuse, and
+# what it must still accept.
 # Not wired into `dist` for the same reason as check-file-sizes -- a local gate
 # sits in front of `deploy`, and `deploy` gates the playtest rig.
 split-selftest:
