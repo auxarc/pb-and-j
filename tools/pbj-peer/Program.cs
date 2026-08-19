@@ -327,27 +327,6 @@ namespace PBAndJ.Peer
         }
 
         /// <summary>
-        /// Dumps the corrected local world unit by unit.
-        /// </summary>
-        /// <remarks>
-        /// This is the M5 gate's output: run against a real game, press Execute
-        /// there, and every line here is host-authoritative state that survived
-        /// capture, the codec, the socket and the hard-set. The digest at the
-        /// bottom is the client's own, recomputed — if it matches the one the
-        /// host logged, the whole path is proven including the Mono-vs-.NET float
-        /// question.
-        /// </remarks>
-        /// <summary>
-        /// Dumps the last turn's received motion, track by track.
-        /// </summary>
-        /// <remarks>
-        /// The M6 counterpart to <c>snapshot</c>. Against a real game the numbers
-        /// here should match the <c>keyframes sent</c> line the host logged, and
-        /// each track's final key should agree with the same unit's line in
-        /// <c>snapshot</c> — that agreement is the whole invariant capture is
-        /// built to uphold.
-        /// </remarks>
-        /// <summary>
         /// Reports the combat save this peer holds — M9's gate against a real
         /// game.
         /// </summary>
@@ -383,6 +362,16 @@ namespace PBAndJ.Peer
                 : $"[pbj-peer] NOT loadable: {rejection}");
         }
 
+        /// <summary>
+        /// Dumps the last turn's received motion, track by track.
+        /// </summary>
+        /// <remarks>
+        /// The M6 counterpart to <c>snapshot</c>. Against a real game the numbers
+        /// here should match the <c>keyframes sent</c> line the host logged, and
+        /// each track's final key should agree with the same unit's line in
+        /// <c>snapshot</c> — that agreement is the whole invariant capture is
+        /// built to uphold.
+        /// </remarks>
         private static void PrintKeyframes(ScriptedGameBridge bridge)
         {
             var played = bridge.Played;
@@ -422,6 +411,17 @@ namespace PBAndJ.Peer
             }
         }
 
+        /// <summary>
+        /// Dumps the corrected local world unit by unit.
+        /// </summary>
+        /// <remarks>
+        /// This is the M5 gate's output: run against a real game, press Execute
+        /// there, and every line here is host-authoritative state that survived
+        /// capture, the codec, the socket and the hard-set. The digest at the
+        /// bottom is the client's own, recomputed — if it matches the one the
+        /// host logged, the whole path is proven including the Mono-vs-.NET float
+        /// question.
+        /// </remarks>
         private static void PrintSnapshot(ScriptedGameBridge bridge)
         {
             if (bridge.Units.Count == 0)

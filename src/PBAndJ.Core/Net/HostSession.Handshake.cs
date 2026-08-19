@@ -104,16 +104,6 @@ namespace PBAndJ.Core.Net
         }
 
         /// <summary>
-        /// Reclaims a departed peer's units under a new connection.
-        /// </summary>
-        /// <remarks>
-        /// The player is continuous; the peer id is not. Everything downstream —
-        /// the barrier, assignments, submissions, keepalive clocks — is keyed on
-        /// peer id, so rebinding one entry is far cheaper than making the id space
-        /// reusable, and it keeps the invariant that a peer id always addresses
-        /// exactly one socket.
-        /// </remarks>
-        /// <summary>
         /// Refuses a peer this host cannot actually play with. True if it did.
         /// </summary>
         /// <remarks>
@@ -156,6 +146,16 @@ namespace PBAndJ.Core.Net
             return true;
         }
 
+        /// <summary>
+        /// Reclaims a departed peer's units under a new connection.
+        /// </summary>
+        /// <remarks>
+        /// The player is continuous; the peer id is not. Everything downstream —
+        /// the barrier, assignments, submissions, keepalive clocks — is keyed on
+        /// peer id, so rebinding one entry is far cheaper than making the id space
+        /// reusable, and it keeps the invariant that a peer id always addresses
+        /// exactly one socket.
+        /// </remarks>
         private void HandleRejoin(int peerId, RejoinMessage rejoin, List<PbjEffect> effects)
         {
             if (registry.TryGet(peerId, out _))

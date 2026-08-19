@@ -227,14 +227,6 @@ namespace PBAndJ.Core.Net
     }
 
     /// <summary>
-    /// The local game entered combat, observed as an edge on
-    /// <see cref="IPbjGameBridge.InCombat"/> during the pump.
-    /// </summary>
-    /// <remarks>
-    /// Only the host acts on this. A client's local combat state is not
-    /// authoritative — it learns combat state from the host's messages.
-    /// </remarks>
-    /// <summary>
     /// The local player asked for the host's combat save — <c>pbj.scenario-pull</c>.
     /// </summary>
     /// <remarks>
@@ -249,6 +241,14 @@ namespace PBAndJ.Core.Net
         public override PbjInboundEventKind Kind => PbjInboundEventKind.LocalScenarioPull;
     }
 
+    /// <summary>
+    /// The local game entered combat, observed as an edge on
+    /// <see cref="IPbjGameBridge.InCombat"/> during the pump.
+    /// </summary>
+    /// <remarks>
+    /// Only the host acts on this. A client's local combat state is not
+    /// authoritative — it learns combat state from the host's messages.
+    /// </remarks>
     public sealed class CombatEnteredEvent : PbjInboundEvent
     {
         public override PbjInboundEventKind Kind => PbjInboundEventKind.CombatEntered;

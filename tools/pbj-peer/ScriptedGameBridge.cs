@@ -5,15 +5,6 @@ using PBAndJ.Core.Net;
 
 namespace PBAndJ.Peer
 {
-    /// <summary>
-    /// An <see cref="IPbjGameBridge"/> backed by plain lists instead of an ECS.
-    /// </summary>
-    /// <remarks>
-    /// Because it satisfies the same interface the game's bridge does, the
-    /// harness drives the identical <see cref="PbjRuntime"/> and session code
-    /// that runs inside Phantom Brigade — the protocol is exercised for real,
-    /// just without a game attached.
-    /// </remarks>
     /// <summary>A unit in the harness's stand-in world.</summary>
     [ExcludeFromCodeCoverage]
     internal sealed class ScriptedUnit
@@ -72,6 +63,15 @@ namespace PBAndJ.Peer
         public bool HasFrameIntegrity { get; set; } = true;
     }
 
+    /// <summary>
+    /// An <see cref="IPbjGameBridge"/> backed by plain lists instead of an ECS.
+    /// </summary>
+    /// <remarks>
+    /// Because it satisfies the same interface the game's bridge does, the
+    /// harness drives the identical <see cref="PbjRuntime"/> and session code
+    /// that runs inside Phantom Brigade — the protocol is exercised for real,
+    /// just without a game attached.
+    /// </remarks>
     [ExcludeFromCodeCoverage]
     internal sealed class ScriptedGameBridge : IPbjGameBridge
     {

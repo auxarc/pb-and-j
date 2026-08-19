@@ -555,29 +555,6 @@ namespace PBAndJ.Mod.Net
         }
 
         /// <summary>
-        /// Puts one unit's arrival time where the host's is, presence included.
-        /// </summary>
-        /// <remarks>
-        /// Written outside the visibility early-return above, because the value
-        /// moves in cases where the flag does not: a unit revealed and then
-        /// revealed again by a later wave keeps <c>isHidden == false</c>
-        /// throughout while its arrival time is rewritten.
-        /// <para>
-        /// The removal arm is not an edge case and will fire on the first
-        /// snapshot of every fight, for every player unit. A client manufactures
-        /// the component for itself on load — <c>DataManagerSave.cs:3047</c> adds
-        /// one to everything deployed, taking the <c>-1</c> the save writer
-        /// stamps for an absent component — while the host's own player squad
-        /// never has it. Correcting that is the point rather than a side effect:
-        /// <c>ScenarioUtility.cs:3652</c> branches on presence alone.
-        /// </para>
-        /// <para>
-        /// Guarded on both sides so the steady state costs a comparison rather
-        /// than a component write, which matters because this runs for every
-        /// unit of every snapshot.
-        /// </para>
-        /// </remarks>
-        /// <summary>
         /// Takes the landing animation away from a unit on a client, which can
         /// never finish playing it.
         /// </summary>
@@ -627,6 +604,29 @@ namespace PBAndJ.Mod.Net
             }
         }
 
+        /// <summary>
+        /// Puts one unit's arrival time where the host's is, presence included.
+        /// </summary>
+        /// <remarks>
+        /// Written outside the visibility early-return above, because the value
+        /// moves in cases where the flag does not: a unit revealed and then
+        /// revealed again by a later wave keeps <c>isHidden == false</c>
+        /// throughout while its arrival time is rewritten.
+        /// <para>
+        /// The removal arm is not an edge case and will fire on the first
+        /// snapshot of every fight, for every player unit. A client manufactures
+        /// the component for itself on load — <c>DataManagerSave.cs:3047</c> adds
+        /// one to everything deployed, taking the <c>-1</c> the save writer
+        /// stamps for an absent component — while the host's own player squad
+        /// never has it. Correcting that is the point rather than a side effect:
+        /// <c>ScenarioUtility.cs:3652</c> branches on presence alone.
+        /// </para>
+        /// <para>
+        /// Guarded on both sides so the steady state costs a comparison rather
+        /// than a component write, which matters because this runs for every
+        /// unit of every snapshot.
+        /// </para>
+        /// </remarks>
         private static void ApplyArrivalTime(CombatEntity unit, UnitSnapshot state)
         {
             if (!state.HasArrivalTime)
@@ -1760,11 +1760,8 @@ namespace PBAndJ.Mod.Net
             LoadGlue.Begin(saveKey, selectionVersion, saveDigest);
 
         /// <summary>
-        /// Where this save lives, from the game's own path resolution. The
+        /// Where a save lives, from the game's own path resolution. The
         /// directory name is always ours — never the one on the wire.
-        /// </summary>
-        /// <summary>
-        /// Where a save lives, from the game's own path resolution.
         /// </summary>
         /// <remarks>
         /// <b>The one statement in the mod that turns a wire-supplied name into a

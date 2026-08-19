@@ -237,9 +237,6 @@ namespace PBAndJ.Core.Net
         public const double ReconnectGraceSeconds = 120.0;
 
         /// <summary>
-        /// Validates a peer's handshake header. Returns null when acceptable.
-        /// </summary>
-        /// <summary>
         /// Shortest gap between synthesized ticks. Throttles the timeout machinery
         /// so it does not allocate an effect list every frame.
         /// </summary>
@@ -363,6 +360,9 @@ namespace PBAndJ.Core.Net
                 && !string.Equals(mine, theirs, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// Validates a peer's handshake header. Returns null when acceptable.
+        /// </summary>
         public static RejectReason? Check(int magic, int protocolVersion)
         {
             if (magic != Magic)

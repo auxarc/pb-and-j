@@ -15,14 +15,6 @@ namespace PBAndJ.Core.Net
     public sealed partial class HostSession
     {
         /// <summary>
-        /// Pings quiet peers and drops silent ones.
-        /// </summary>
-        /// <remarks>
-        /// Runs in every state, execution included: <c>Heartbeat.Update</c> keeps
-        /// pumping while the simulation runs, and a peer that dies mid-execution
-        /// must still be reaped rather than discovered at the next barrier.
-        /// </remarks>
-        /// <summary>
         /// Drops sockets that connected and then said nothing.
         /// </summary>
         /// <remarks>
@@ -57,6 +49,14 @@ namespace PBAndJ.Core.Net
             }
         }
 
+        /// <summary>
+        /// Pings quiet peers and drops silent ones.
+        /// </summary>
+        /// <remarks>
+        /// Runs in every state, execution included: <c>Heartbeat.Update</c> keeps
+        /// pumping while the simulation runs, and a peer that dies mid-execution
+        /// must still be reaped rather than discovered at the next barrier.
+        /// </remarks>
         private void HandleTick(TickEvent tick, List<PbjEffect> effects)
         {
             nowSeconds = tick.NowSeconds;
@@ -100,21 +100,6 @@ namespace PBAndJ.Core.Net
         }
 
         /// <summary>
-        /// Gives everyone in a running load a deadline, and gives up on whoever
-        /// blows it.
-        /// </summary>
-        /// <remarks>
-        /// Deadlines are minted here rather than when the load fires, because a
-        /// load fires from a message handler where the clock may not have been
-        /// stamped yet — and a deadline of zero plus the timeout, judged against
-        /// process uptime, expires the whole session on the first tick. Same
-        /// seed-don't-judge shape the keepalive uses two methods down.
-        /// <para>
-        /// The host is included, and it is the one participant a timeout cannot
-        /// simply drop: the others are already in a campaign it is not in.
-        /// </para>
-        /// </remarks>
-        /// <summary>
         /// Starts the fight without anyone who never said they got in. M12b.
         /// </summary>
         /// <remarks>
@@ -152,6 +137,21 @@ namespace PBAndJ.Core.Net
             CompleteCombatEntryIfDone(effects);
         }
 
+        /// <summary>
+        /// Gives everyone in a running load a deadline, and gives up on whoever
+        /// blows it.
+        /// </summary>
+        /// <remarks>
+        /// Deadlines are minted here rather than when the load fires, because a
+        /// load fires from a message handler where the clock may not have been
+        /// stamped yet — and a deadline of zero plus the timeout, judged against
+        /// process uptime, expires the whole session on the first tick. Same
+        /// seed-don't-judge shape the keepalive uses two methods down.
+        /// <para>
+        /// The host is included, and it is the one participant a timeout cannot
+        /// simply drop: the others are already in a campaign it is not in.
+        /// </para>
+        /// </remarks>
         private void ExpireLoads(List<PbjEffect> effects)
         {
             if (!load.InFlight)
