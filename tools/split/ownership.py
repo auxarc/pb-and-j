@@ -115,6 +115,28 @@ def is_declaration(line, at):
     before = line[:at]
     if not before.strip():
         return False
+    # A COMMA MEANS AN ARGUMENT LIST, NOT A TYPE. This guard was wrong twice.
+    # After the empty-prefix fix it still read the continuation line of a
+    # wrapped call --
+    #
+    #         peerCount, Plural(peerCount));
+    #
+    # -- as a declaration, because identifiers, commas and whitespace all sit
+    # in the prefix class. That is the commonest shape in this codebase, where
+    # every message is a wrapped string.Format, and it hid 13 of Plural's 19
+    # call sites in one part alone.
+    #
+    # Commas INSIDE a generic argument list are part of the type, so
+    # `Dictionary<string, int> Lookup(` is still a declaration: the angle
+    # groups come out first, innermost first, before the comma test.
+    flat = before
+    while True:
+        collapsed = re.sub(r'<[^<>]*>', '', flat)
+        if collapsed == flat:
+            break
+        flat = collapsed
+    if ',' in flat:
+        return False
     return bool(DECL_PREFIX.match(before))
 
 

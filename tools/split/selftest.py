@@ -399,6 +399,29 @@ def main():
           "and so once looked exactly like a declaration",
           "2 call sites" in out, out[:400])
 
+    # THE SAME GUARD, WRONG A SECOND WAY. Identifiers, commas and whitespace
+    # are all in the prefix class, so the continuation line of a wrapped call
+    # read as a declaration too -- the commonest shape in NetLog.cs, where
+    # every message is a multi-line string.Format. 13 of 19 sites in one part.
+    cont = os.path.join(tmp, "cont.cs")
+    with open(cont, "w") as fh:
+        fh.write("class E\n{\n"
+                 "    private static string Target(int i)\n    {\n"
+                 "        return \"x\";\n    }\n\n"
+                 "    private static Dictionary<string, int> Lookup(int i)\n"
+                 "    {\n        return null;\n    }\n\n"
+                 "    private void Caller()\n    {\n"
+                 "        Format(\n"
+                 "            count, Target(count));\n"
+                 "        Format(\n"
+                 "            a, b, Target(b), c);\n    }\n}\n")
+    rc, out = run("ownership.py", "Target,Lookup", cont)
+    check("counts a call on the continuation line of a wrapped argument list",
+          "Target: 2 call sites" in out, out[:400])
+    check("...while a declaration whose TYPE contains a comma "
+          "(Dictionary<string, int>) is still a declaration",
+          "Lookup: 0 call sites" in out or "Lookup: 0 " in out, out[:400])
+
     verbatim = os.path.join(tmp, "verbatim.cs")
     with open(verbatim, "w") as fh:
         fh.write('class C { string s = @"Target(1)"; }\n')
