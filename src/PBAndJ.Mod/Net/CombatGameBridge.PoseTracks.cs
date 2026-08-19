@@ -41,7 +41,8 @@ namespace PBAndJ.Mod.Net
         /// game's playback loop indexes the joint array to the <i>receiving</i>
         /// machine's bone count with no length guard whatsoever.
         /// <para>
-        /// No closing key is appended, unlike the transform track above. The
+        /// No closing key is appended, unlike the transform track in
+        /// <c>CombatGameBridge.Keyframes.cs</c>. The
         /// recorder's own <c>OnExecutionEnd</c> has already added a pose at the
         /// window's end by the time this runs — it fires from
         /// <c>CombatUILinkSimulationEnd</c>, which sits ahead of the system this
@@ -136,7 +137,8 @@ namespace PBAndJ.Mod.Net
         /// above are, and for the identical reason: <c>units</c> MAY not be
         /// cleared between turns, so this list may hold the whole combat's
         /// pings. The slice is written to be correct either way rather than to
-        /// branch on the setting, per note 2 on <c>CaptureKeyframes</c>.
+        /// branch on the setting, per note 2 in the banner above
+        /// <c>CaptureKeyframes</c>, in <c>CombatGameBridge.Keyframes.cs</c>.
         /// <para>
         /// The cap drops the <i>oldest</i>. Only the newest ping at or before
         /// the cursor can ever animate, so trimming the front is invisible while

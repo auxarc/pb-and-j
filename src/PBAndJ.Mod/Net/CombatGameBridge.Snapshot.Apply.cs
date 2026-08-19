@@ -162,7 +162,7 @@ namespace PBAndJ.Mod.Net
             var visible = !state.IsHidden;
             // Fully qualified rather than pulled in with a using: the
             // PhantomBrigade.Combat namespace carries a lot of short names and
-            // this file already reaches into three others.
+            // the class already reaches into several others.
             PhantomBrigade.Combat.CIHelperWorldMarkers.OnUnitVisibilityChanged(unit.id.id, visible);
             CIHelperOverlays.OnUnitVisibilityChanged(unit.id.id, visible);
             CIHelperOverlays.OnUnitEligibilityChange(persistent);

@@ -22,7 +22,8 @@ namespace PBAndJ.Mod.Net
     // type entry in PBAndJ.Mod.xml.
     internal sealed partial class CombatGameBridge
     {
-        // Host-only bridge: a host never plays back, it simulates.
+        // A host never calls this: it simulates the turn rather than playing a
+        // recording of one. Client only, per IPbjGameBridge.PlayKeyframes.
         public void PlayKeyframes(int turn, KeyframeCapture capture)
         {
             // Kept before playing, so a client can replay what it was told to
