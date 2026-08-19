@@ -12,7 +12,7 @@ namespace PBAndJ.Core.Tests.Net
     // 11 of their call sites are in this file, and the single stray in each is one test
     // in .LobbyReady.cs.
     //
-    // One part of HostSessionTests, a single class split across seventeen files.
+    // One part of HostSessionTests, a single class split across nineteen files.
     // Helpers used by more than one part live in HostSessionTests.cs; a helper
     // lives here only because this part is effectively its sole user.
     public partial class HostSessionTests
@@ -332,6 +332,9 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(RejectReason.InvalidName, reject.Reason);
         }
 
+        // The one Constructor_ test not in .Construction.cs, and it was in the
+        // reconnect section of the original: the session secret is what mints the
+        // resume tokens the rest of this file is about.
         [Theory]
         [InlineData(null)]
         [InlineData("  ")]

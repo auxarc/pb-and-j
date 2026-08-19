@@ -9,7 +9,7 @@ namespace PBAndJ.Core.Tests.Net
     // The overworld base mirror (M12a): the host's base position going out to everyone.
     // One section of the original, moved whole. No helper of its own.
     //
-    // One part of HostSessionTests, a single class split across seventeen files.
+    // One part of HostSessionTests, a single class split across nineteen files.
     // Helpers used by more than one part live in HostSessionTests.cs; a helper
     // lives here only because this part is effectively its sole user.
     public partial class HostSessionTests

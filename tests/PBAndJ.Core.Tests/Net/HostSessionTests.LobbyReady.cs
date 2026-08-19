@@ -23,7 +23,7 @@ namespace PBAndJ.Core.Tests.Net
     // fixture in the primary. LobbyHost is worth a note: it was declared under the
     // lobby (M11a) banner and not one of that section's four tests used it.
     //
-    // One part of HostSessionTests, a single class split across seventeen files.
+    // One part of HostSessionTests, a single class split across nineteen files.
     // Helpers used by more than one part live in HostSessionTests.cs; a helper
     // lives here only because this part is effectively its sole user.
     public partial class HostSessionTests

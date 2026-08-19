@@ -11,7 +11,7 @@ namespace PBAndJ.Core.Tests.Net
     //
     // Burst, Shot, Lance, MotionWithAssets and AssetsOf are used only here.
     //
-    // One part of HostSessionTests, a single class split across seventeen files.
+    // One part of HostSessionTests, a single class split across nineteen files.
     // Helpers used by more than one part live in HostSessionTests.cs; a helper
     // lives here only because this part is effectively its sole user.
     public partial class HostSessionTests
@@ -103,7 +103,8 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("3 tracks in 1 part"));
         }
 
-        // Per-track dropping, the deliberate opposite of the pose rule above.
+        // Per-track dropping, the deliberate opposite of the pose rule in
+        // HostSessionTests.Motion.cs, which demotes the whole turn.
         // One impact missing from a turn's worth of impacts is invisible — and
         // is a shape the host's own pool exhaustion produces anyway — whereas
         // demoting every effect for one bad key trades an invisible loss for a
@@ -229,6 +230,9 @@ namespace PBAndJ.Core.Tests.Net
         // because the temptation with a new message type is to give it a quiet
         // ignore-arm, which would make it the one client-bound message a peer may
         // forge freely.
+        // These two are about M6 keyframe and M8 pose messages, not M14 effects --
+        // the ReplayAssets test above is the M14 member of the same trio. All three
+        // were filed under this section in the original and moved with it.
         [Fact]
         public void Keyframes_FromAPeer_AreAProtocolViolationLikeAnyClientBoundMessage()
         {

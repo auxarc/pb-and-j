@@ -9,7 +9,7 @@ namespace PBAndJ.Core.Tests.Net
     // Transport failure and teardown. One section of the original, including the nested
     // UnsupportedEvent class, whose single use is a test in this file.
     //
-    // One part of HostSessionTests, a single class split across seventeen files.
+    // One part of HostSessionTests, a single class split across nineteen files.
     // Helpers used by more than one part live in HostSessionTests.cs; a helper
     // lives here only because this part is effectively its sole user.
     public partial class HostSessionTests

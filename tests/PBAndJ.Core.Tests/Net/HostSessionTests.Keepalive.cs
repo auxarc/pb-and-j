@@ -8,7 +8,7 @@ namespace PBAndJ.Core.Tests.Net
 {
     // Pings, timeouts and what counts as a peer being alive. One section of the original.
     //
-    // One part of HostSessionTests, a single class split across seventeen files.
+    // One part of HostSessionTests, a single class split across nineteen files.
     // Helpers used by more than one part live in HostSessionTests.cs; a helper
     // lives here only because this part is effectively its sole user.
     public partial class HostSessionTests

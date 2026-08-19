@@ -8,7 +8,9 @@ namespace PBAndJ.Core.Tests.Net
 {
     public partial class HostSessionTests
     {
-        // The shared fixture. Every helper below is called from MORE THAN ONE part;
+        // The shared fixture. Every helper below is called from MORE THAN ONE part,
+        // except the nested LobbySelectEventPair, which has to sit beside Select,
+        // the factory that returns it;
         // a helper whose sole user is one part (>=90% of its call sites) lives with
         // that part instead. The other eighteen files are:
         //

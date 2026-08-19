@@ -10,7 +10,7 @@ namespace PBAndJ.Core.Tests.Net
     // One section of the original. Disconnect is its own file next door -- an earlier
     // draft merged the two under this name, which covered only half of what it held.
     //
-    // One part of HostSessionTests, a single class split across seventeen files.
+    // One part of HostSessionTests, a single class split across nineteen files.
     // Helpers used by more than one part live in HostSessionTests.cs; a helper
     // lives here only because this part is effectively its sole user.
     public partial class HostSessionTests

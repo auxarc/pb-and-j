@@ -10,10 +10,11 @@ namespace PBAndJ.Core.Tests.Net
     //
     // Snap and Executing were declared under this banner but are not this section's:
     // Snap is called 11 times from .Effects.cs and 10 from .Motion.cs against 2 here,
-    // and Executing is spread over four parts with 11 here at most. Both are shared
+    // and Executing is called 3 times here against 11 each from .Effects.cs and
+    // .Motion.cs, and once from .Combat.cs. Both are shared
     // fixture in the primary now.
     //
-    // One part of HostSessionTests, a single class split across seventeen files.
+    // One part of HostSessionTests, a single class split across nineteen files.
     // Helpers used by more than one part live in HostSessionTests.cs; a helper
     // lives here only because this part is effectively its sole user.
     public partial class HostSessionTests

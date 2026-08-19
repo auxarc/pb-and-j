@@ -9,7 +9,7 @@ namespace PBAndJ.Core.Tests.Net
     // The synchronised load (M11d): everyone agreeing, then loading in unison, and every
     // way that can fail. One section of the original. Loading() is used only here.
     //
-    // One part of HostSessionTests, a single class split across seventeen files.
+    // One part of HostSessionTests, a single class split across nineteen files.
     // Helpers used by more than one part live in HostSessionTests.cs; a helper
     // lives here only because this part is effectively its sole user.
     public partial class HostSessionTests

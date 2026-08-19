@@ -9,7 +9,7 @@ namespace PBAndJ.Core.Tests.Net
     // Build compatibility and the handshake deadline (M7). One section of the original.
     // Guarded, Hello and RejectedBy are used only here -- 11, 9 and 4 times, nowhere else.
     //
-    // One part of HostSessionTests, a single class split across seventeen files.
+    // One part of HostSessionTests, a single class split across nineteen files.
     // Helpers used by more than one part live in HostSessionTests.cs; a helper
     // lives here only because this part is effectively its sole user.
     public partial class HostSessionTests
@@ -141,6 +141,8 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        // Not an M7 test. It sat at the tail of the M7 section in the original and
+        // moved with it; the subject is the snapshot events of .Snapshots.cs.
         public void SnapshotApplied_IsIgnoredOnTheHost()
         {
             Assert.Empty(WithPeer().Handle(new SnapshotAppliedEvent(3, 1, "a", "a")));

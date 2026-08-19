@@ -9,7 +9,7 @@ namespace PBAndJ.Core.Tests.Net
     // A peer going away: what the others are told, and what the barrier does about it.
     // One section of the original, moved whole.
     //
-    // One part of HostSessionTests, a single class split across seventeen files.
+    // One part of HostSessionTests, a single class split across nineteen files.
     // Helpers used by more than one part live in HostSessionTests.cs; a helper
     // lives here only because this part is effectively its sole user.
     public partial class HostSessionTests
