@@ -704,25 +704,6 @@ namespace PBAndJ.Core.Net
         }
 
         /// <summary>
-        /// Agrees to load the selected save.
-        /// </summary>
-        /// <remarks>
-        /// Gated on <em>data</em> — a selection we have actually been told about
-        /// — and deliberately NOT on <see cref="ClientSessionState.Lobby"/>.
-        /// <see cref="HandleWelcome"/> sets the state from this client's OWN
-        /// <c>bridge.InCombat</c>, so a player who joins while their local game
-        /// happens to be mid-combat is welcomed straight into
-        /// <see cref="ClientSessionState.Planning"/>. A state guard would then
-        /// refuse them the lobby forever, holding a perfectly good
-        /// <c>LobbyState</c>, and no harness test would ever catch it because
-        /// the scripted bridge is never in combat.
-        /// <para>
-        /// The host re-checks its own state regardless, so this being permissive
-        /// costs nothing: a ready sent at the wrong moment is logged and dropped
-        /// there rather than counted.
-        /// </para>
-        /// </remarks>
-        /// <summary>
         /// The host says everyone agreed. Start loading.
         /// </summary>
         /// <remarks>
@@ -755,6 +736,25 @@ namespace PBAndJ.Core.Net
                 new LobbyLoadedMessage(finished.SelectionVersion, finished.Outcome)));
         }
 
+        /// <summary>
+        /// Agrees to load the selected save.
+        /// </summary>
+        /// <remarks>
+        /// Gated on <em>data</em> — a selection we have actually been told about
+        /// — and deliberately NOT on <see cref="ClientSessionState.Lobby"/>.
+        /// <see cref="HandleWelcome"/> sets the state from this client's OWN
+        /// <c>bridge.InCombat</c>, so a player who joins while their local game
+        /// happens to be mid-combat is welcomed straight into
+        /// <see cref="ClientSessionState.Planning"/>. A state guard would then
+        /// refuse them the lobby forever, holding a perfectly good
+        /// <c>LobbyState</c>, and no harness test would ever catch it because
+        /// the scripted bridge is never in combat.
+        /// <para>
+        /// The host re-checks its own state regardless, so this being permissive
+        /// costs nothing: a ready sent at the wrong moment is logged and dropped
+        /// there rather than counted.
+        /// </para>
+        /// </remarks>
         private void HandleLocalLobbyReady(List<PbjEffect> effects)
         {
             if (LobbySelectionVersion < 0)
@@ -969,35 +969,6 @@ namespace PBAndJ.Core.Net
         }
 
         /// <summary>
-        /// Decides whether the host's save is worth ~124 KB of wire.
-        /// </summary>
-        /// <remarks>
-        /// Two conditions, both deliberately conservative, with
-        /// <c>pbj.scenario-pull</c> as the override for everything they exclude:
-        /// <list type="bullet">
-        /// <item><b>Not while the host is fighting.</b> A client in the host's
-        /// combat should not pull a save mid-fight: at best wasted bandwidth, at
-        /// worst an invitation to load it and lose the session.</item>
-        /// <item><b>Only if we do not already hold it.</b> The client reads its
-        /// own save through the same bridge call the host reads its own with, so
-        /// this is a local digest comparison and no bytes move. This is what makes
-        /// a reconnect free: a rejoining peer holds the save by definition.</item>
-        /// </list>
-        /// <para>
-        /// ⚠️ <b>The first condition reads <see cref="HostIsFighting"/> and not
-        /// <see cref="State"/>, and that is the whole point.</b> <see cref="State"/>
-        /// is seeded at Welcome from <em>this machine's own</em>
-        /// <c>bridge.InCombat</c>, so a player who joins while their own
-        /// singleplayer game happens to be mid-combat lands in
-        /// <see cref="ClientSessionState.Planning"/> against a host that is merely
-        /// in its lobby — and would silently decline every offer for the rest of
-        /// the session, never holding the save and so never able to ready. No test
-        /// here could catch it: the scripted bridge is never in combat. Gate on
-        /// what the host said, never on what we inferred about ourselves — the same
-        /// rule M11a set for lobby-ready.
-        /// </para>
-        /// </remarks>
-        /// <summary>
         /// The fight the host is in, offered so we can join it. M12b.
         /// </summary>
         /// <remarks>
@@ -1050,6 +1021,35 @@ namespace PBAndJ.Core.Net
                 HostConnectionId, new CombatEnteredMessage(pendingCombatTurn, finished.Outcome)));
         }
 
+        /// <summary>
+        /// Decides whether the host's save is worth ~124 KB of wire.
+        /// </summary>
+        /// <remarks>
+        /// Two conditions, both deliberately conservative, with
+        /// <c>pbj.scenario-pull</c> as the override for everything they exclude:
+        /// <list type="bullet">
+        /// <item><b>Not while the host is fighting.</b> A client in the host's
+        /// combat should not pull a save mid-fight: at best wasted bandwidth, at
+        /// worst an invitation to load it and lose the session.</item>
+        /// <item><b>Only if we do not already hold it.</b> The client reads its
+        /// own save through the same bridge call the host reads its own with, so
+        /// this is a local digest comparison and no bytes move. This is what makes
+        /// a reconnect free: a rejoining peer holds the save by definition.</item>
+        /// </list>
+        /// <para>
+        /// ⚠️ <b>The first condition reads <see cref="HostIsFighting"/> and not
+        /// <see cref="State"/>, and that is the whole point.</b> <see cref="State"/>
+        /// is seeded at Welcome from <em>this machine's own</em>
+        /// <c>bridge.InCombat</c>, so a player who joins while their own
+        /// singleplayer game happens to be mid-combat lands in
+        /// <see cref="ClientSessionState.Planning"/> against a host that is merely
+        /// in its lobby — and would silently decline every offer for the rest of
+        /// the session, never holding the save and so never able to ready. No test
+        /// here could catch it: the scripted bridge is never in combat. Gate on
+        /// what the host said, never on what we inferred about ourselves — the same
+        /// rule M11a set for lobby-ready.
+        /// </para>
+        /// </remarks>
         private void HandleScenarioOffer(ScenarioOfferMessage offer, List<PbjEffect> effects)
         {
             if (HostIsFighting)
@@ -1082,6 +1082,11 @@ namespace PBAndJ.Core.Net
             effects.Add(new LogEffect(NetLog.ScenarioRequested(null)));
         }
 
+        /// <summary>The fight we were last offered, so arriving bytes can be matched to it.</summary>
+        private string? pendingCombatSave;
+        private string? pendingCombatDigest;
+        private int pendingCombatTurn = -1;
+
         /// <summary>
         /// Checks a received save and puts it on disk.
         /// </summary>
@@ -1098,11 +1103,6 @@ namespace PBAndJ.Core.Net
         /// recoverable annoyance into a lost game.
         /// </para>
         /// </remarks>
-        /// <summary>The fight we were last offered, so arriving bytes can be matched to it.</summary>
-        private string? pendingCombatSave;
-        private string? pendingCombatDigest;
-        private int pendingCombatTurn = -1;
-
         private void HandleScenario(ScenarioMessage scenario, List<PbjEffect> effects)
         {
             var payload = new ScenarioPayload(scenario.SaveName, scenario.Files);

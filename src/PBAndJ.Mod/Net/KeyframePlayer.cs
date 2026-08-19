@@ -220,22 +220,6 @@ namespace PBAndJ.Mod.Net
         private static Color ToColor(Vec4 v) => new Color(v.X, v.Y, v.Z, v.W);
 
         /// <summary>
-        /// Writes one unit's skeleton for the current cursor position.
-        /// </summary>
-        /// <remarks>
-        /// Local space throughout, so it is independent of the root transform
-        /// written just above — and the palm sync, which is world space, comes
-        /// after both for that reason.
-        /// <para>
-        /// The bone count is re-checked every frame rather than trusted from
-        /// install time. <c>UnitVisualManagerSimple.RefreshRecordedBones</c>
-        /// clears and rebuilds its list when a view is re-created, and a remap
-        /// built against the old one would write the wrong bones or index past
-        /// the end of the new one. Mechs never rebuild — theirs is guarded by an
-        /// initialised flag — but this driver poses whatever has bones.
-        /// </para>
-        /// </remarks>
-        /// <summary>
         /// Digests the skeleton this machine is drawing right now. M18.
         /// </summary>
         /// <remarks>

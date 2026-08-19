@@ -224,6 +224,50 @@ namespace PBAndJ.Mod.Net
             }
         }
 
+        /// <summary>
+        /// Ramps this unit's destroyed parts to where the cursor says they are.
+        /// M15.
+        /// </summary>
+        /// <remarks>
+        /// A transcription of <c>CombatReplayHelper.ApplyTimeToUnit:1288-1303</c>
+        /// with one deliberate addition and one deliberate omission.
+        /// <para>
+        /// <b>The addition is the burst</b>, fired on the frame the cursor
+        /// crosses a part's destruction time. Vanilla's replay never fires it
+        /// and cannot — <c>ReplayUnit.keyframesDestructions</c> is written and
+        /// read nowhere — so transcribing vanilla faithfully would under-deliver
+        /// here. 🔑 <b>Vanilla's replay is scrub parity; a client's playback is
+        /// its live view</b>, and on a host the burst comes from
+        /// <c>CombatPartWreckingSystem.Execute:105</c> as the part is wrecked.
+        /// <c>UnitVisualUtility.OnSocketDestruction</c> is public and static, so
+        /// this is the game's own call rather than a reimplementation of it.
+        /// </para>
+        /// <para>
+        /// <b>The omission is <c>ReplaceDestructionProgress</c>.</b> Vanilla uses
+        /// that component purely as its change guard; the guard lives in
+        /// <see cref="DestructionState.ShouldDrive"/> instead, so writing it too
+        /// would be a second copy of one fact — and the one thing a client must
+        /// not do here is start writing part state.
+        /// </para>
+        /// <para>
+        /// ⚠️ Integrity is zeroed on a part's <i>first</i> drive and the order
+        /// matters: <c>OnSocketDestructionChange</c> ends by re-applying the
+        /// socket's <b>stored</b> integrity, defaulting to <c>1f</c>
+        /// (<c>UnitVisualManager.cs:1755</c>). Drive the dissolve without zeroing
+        /// first and it renders over a part that still reads pristine — which on
+        /// a tank, whose sockets may ship <c>destructionShaderEffect</c> false
+        /// (<c>UnitVisualManagerSimple.cs:596</c>), can be the difference between
+        /// a visible change and none at all.
+        /// </para>
+        /// <para>
+        /// ⚠️ <b>Double-drive tripwire.</b> <c>EquipmentDestructionAnimationSystem</c>
+        /// is inert on a client only because nothing replaces
+        /// <c>combat.simulationTime</c> and no part carries a
+        /// <c>DestructionTime</c> component there. Anything that later sets part
+        /// <c>DestructionTime</c> client-side wakes that system and it will fight
+        /// this drive.
+        /// </para>
+        /// </remarks>
         private static void ApplyDestruction(Target target)
         {
             // M15 §3.1, ahead of the parts and outside their early return. A

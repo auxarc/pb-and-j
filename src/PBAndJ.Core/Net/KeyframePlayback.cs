@@ -3,22 +3,6 @@ using System;
 namespace PBAndJ.Core.Net
 {
     /// <summary>
-    /// Reads a <see cref="UnitTrack"/> at an arbitrary time — the whole of
-    /// keyframe playback that is arithmetic rather than engine calls.
-    /// </summary>
-    /// <remarks>
-    /// Deliberately pure and here rather than in the glue: it is the one part of
-    /// M6 that can be wrong in a way no in-game eyeball would catch, so it lives
-    /// under the coverage gate and is shared verbatim by the game and the
-    /// harness.
-    /// <para>
-    /// The semantics mirror the game's own scrubber (<c>ApplyTimeToUnit</c>):
-    /// linear on position, normalised-lerp on rotation, and a skipped
-    /// zero-length segment. Matching it matters because the host's replay UI is
-    /// the reference for what the turn "looked like".
-    /// </para>
-    /// </remarks>
-    /// <summary>
     /// Two pose keys and the blend between them.
     /// </summary>
     /// <remarks>
@@ -57,6 +41,22 @@ namespace PBAndJ.Core.Net
         public bool SyncRightEquipment => To.SyncRightEquipment;
     }
 
+    /// <summary>
+    /// Reads a <see cref="UnitTrack"/> at an arbitrary time — the whole of
+    /// keyframe playback that is arithmetic rather than engine calls.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately pure and here rather than in the glue: it is the one part of
+    /// M6 that can be wrong in a way no in-game eyeball would catch, so it lives
+    /// under the coverage gate and is shared verbatim by the game and the
+    /// harness.
+    /// <para>
+    /// The semantics mirror the game's own scrubber (<c>ApplyTimeToUnit</c>):
+    /// linear on position, normalised-lerp on rotation, and a skipped
+    /// zero-length segment. Matching it matters because the host's replay UI is
+    /// the reference for what the turn "looked like".
+    /// </para>
+    /// </remarks>
     public static class KeyframePlayback
     {
         private static readonly Vec3 Origin = new Vec3(0f, 0f, 0f);

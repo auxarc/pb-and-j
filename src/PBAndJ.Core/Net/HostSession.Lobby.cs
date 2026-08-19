@@ -17,15 +17,6 @@ namespace PBAndJ.Core.Net
         // --- lobby (M11a) ---
 
         /// <summary>
-        /// The host picked the save the session will play.
-        /// </summary>
-        /// <remarks>
-        /// Always advances the selection version, even when the same save is
-        /// re-picked, so every ready clears. One path, no equality branch, and
-        /// clearing is the safe direction — the cost is a re-click, the
-        /// alternative is loading a save somebody never confirmed.
-        /// </remarks>
-        /// <summary>
         /// Tells everyone where the base is. M12a — the host drives it, so this
         /// is the one direction the position ever travels.
         /// </summary>
@@ -46,6 +37,15 @@ namespace PBAndJ.Core.Net
             effects.Add(new BroadcastEffect(new BasePositionMessage(basePosition.X, basePosition.Z)));
         }
 
+        /// <summary>
+        /// The host picked the save the session will play.
+        /// </summary>
+        /// <remarks>
+        /// Always advances the selection version, even when the same save is
+        /// re-picked, so every ready clears. One path, no equality branch, and
+        /// clearing is the safe direction — the cost is a re-click, the
+        /// alternative is loading a save somebody never confirmed.
+        /// </remarks>
         private void HandleLocalLobbySelect(LocalLobbySelectEvent select, List<PbjEffect> effects)
         {
             if (State != HostSessionState.Lobby)

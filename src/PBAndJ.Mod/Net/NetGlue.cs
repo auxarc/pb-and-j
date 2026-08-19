@@ -276,23 +276,6 @@ namespace PBAndJ.Mod.Net
         }
 
         /// <summary>
-        /// Replays the last executed turn's captured motion on this machine.
-        /// </summary>
-        /// <remarks>
-        /// The M6 gate. Deliberately round-trips the tracks through the codec
-        /// before playing them, so one command exercises the whole pipeline a
-        /// client depends on — capture, re-key, turn slicing, encode, decode,
-        /// sample, render — with a single game instance. Playing the in-memory
-        /// capture directly would prove only that capture works.
-        /// <para>
-        /// Safe on a host because it writes view transforms only. Authoritative
-        /// ECS state is untouched, and the next execution's TransformLinkSystem
-        /// pass restores every view regardless. Expect units to slide rather than
-        /// walk: poses are out of scope, and sliding is exactly what a client
-        /// sees today.
-        /// </para>
-        /// </remarks>
-        /// <summary>
         /// Keeps what a client was just told to play, so it can play it again.
         /// </summary>
         /// <remarks>
@@ -315,6 +298,23 @@ namespace PBAndJ.Mod.Net
             lastCaptureTurn = turn;
         }
 
+        /// <summary>
+        /// Replays the last executed turn's captured motion on this machine.
+        /// </summary>
+        /// <remarks>
+        /// The M6 gate. Deliberately round-trips the tracks through the codec
+        /// before playing them, so one command exercises the whole pipeline a
+        /// client depends on — capture, re-key, turn slicing, encode, decode,
+        /// sample, render — with a single game instance. Playing the in-memory
+        /// capture directly would prove only that capture works.
+        /// <para>
+        /// Safe on a host because it writes view transforms only. Authoritative
+        /// ECS state is untouched, and the next execution's TransformLinkSystem
+        /// pass restores every view regardless. Expect units to slide rather than
+        /// walk: poses are out of scope, and sliding is exactly what a client
+        /// sees today.
+        /// </para>
+        /// </remarks>
         public static string ReplayLast()
         {
             if (lastCapture == null || lastCapture.Tracks.Count == 0)
