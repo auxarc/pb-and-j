@@ -70,6 +70,36 @@ namespace Demo
 '''
 
 
+DOC_SAMPLE = '''using Xunit;
+
+namespace Demo
+{
+    /// <summary>
+    /// The type's own doc, which the compiler concatenates across parts.
+    /// </summary>
+    public class DocTests
+    {
+        private static string Helper()
+        {
+            return "x";
+        }
+
+        [Fact]
+        public void First_Works()
+        {
+            Assert.Equal("x", Helper());
+        }
+
+        [Fact]
+        public void Second_Works()
+        {
+            Assert.Equal("x", Helper());
+        }
+    }
+}
+'''
+
+
 def spec_for(tmp, members, synthetic, parts, forward_gaps=None):
     return {
         "root": tmp,
@@ -232,6 +262,49 @@ def main():
           rc == 0 and body.index("Second_Works") < body.index("First_Works"),
           out[:300])
 
+    print("class doc (the compiler CONCATENATES /// across parts -- seen on "
+          "the SelfTest split, where it spliced eleven summaries into one)")
+    doc_src = os.path.join(tmp, "DocTests.cs")
+    with open(doc_src, "w") as fh:
+        fh.write(DOC_SAMPLE)
+    DOC_MEMBERS = {"Helper": "primary", "First_Works": "primary",
+                   "Second_Works": "second"}
+    DOC_PARTS = {
+        "primary": {"file": "DocTests.cs", "class": "DocTests", "partial": True,
+                    "usings": ["Xunit"], "header": "primary"},
+        "second": {"file": "DocTests.Second.cs", "class": "DocTests",
+                   "partial": True, "usings": ["Xunit"], "header": "second"},
+    }
+    def doc_spec(entries, name):
+        return write_spec(tmp, {
+            "root": tmp, "source": "DocTests.cs", "outdir": ".",
+            "namespace": "Demo", "members": DOC_MEMBERS,
+            "synthetic": entries, "forward_gaps": {}, "parts": DOC_PARTS}, name)
+
+    HEAD = [{"lines": [1, 4], "part": "primary", "why": "usings + namespace"},
+            {"lines": [8, 9], "part": "primary", "why": "class decl"},
+            {"lines": [26, -1], "part": "primary", "why": "closing braces"}]
+    ONE = HEAD + [{"lines": [5, 7], "part": "primary", "emit": "class_doc",
+                   "why": "the type's own doc"}]
+    TWO = HEAD + [{"lines": [5, 7], "part": "primary", "emit": "class_doc",
+                   "why": "the type's own doc"},
+                  {"lines": [5, 7], "part": "second", "emit": "class_doc",
+                   "why": "and again, which is the defect"}]
+
+    rc, out = run("writeparts.py", doc_spec(TWO, "doc2.json"))
+    check("REFUSES a spec where two parts carry the class /// doc",
+          rc != 0 and "concatenates" in out, out[:300])
+
+    rc, out = run("writeparts.py", doc_spec(ONE, "doc1.json"))
+    prim = open(os.path.join(tmp, "DocTests.cs")).read()
+    sec = open(os.path.join(tmp, "DocTests.Second.cs")).read()
+    check("writes the /// doc above the class on the one part named",
+          rc == 0 and "/// <summary>" in prim
+          and prim.index("/// <summary>") < prim.index("public partial class"),
+          out[:300])
+    check("...and on no other part, so nothing is concatenated",
+          "///" not in sec, sec[:200])
+
     with open(src, "w") as fh:
         fh.write(SAMPLE)
     bad_order = dict(ordered)
@@ -308,6 +381,23 @@ def main():
         fh.write('class B { void C() { Target(1); Target(2); } }\n')
     rc, out = run("ownership.py", "Target", real)
     check("counts a real call", "2 call sites" in out, out[:300])
+
+    # THE SHAPE THE CASE ABOVE CANNOT REACH. Both calls there share a line with
+    # `void C() {`, so something disqualifying always precedes the name. A
+    # helper invoked as a STATEMENT has nothing before it but indentation --
+    # and indentation matched the declaration prefix, so every such call was
+    # subtracted as its own declaration. On ScenarioTransferTests.cs that hid
+    # 11 of 15 sites and turned a 93% owner into an 80% shared helper.
+    stmt = os.path.join(tmp, "stmt.cs")
+    with open(stmt, "w") as fh:
+        fh.write("class D\n{\n"
+                 "    private void Target(int i)\n    {\n    }\n\n"
+                 "    private void Caller()\n    {\n"
+                 "        Target(1);\n        Target(2);\n    }\n}\n")
+    rc, out = run("ownership.py", "Target", stmt)
+    check("counts a bare-statement call, which has only indentation before it "
+          "and so once looked exactly like a declaration",
+          "2 call sites" in out, out[:400])
 
     verbatim = os.path.join(tmp, "verbatim.cs")
     with open(verbatim, "w") as fh:

@@ -29,6 +29,14 @@ namespace and class declarations, closing braces. They must be declared, not
 absorbed, or content silently emigrates: on HostSession.cs a 72-line properties
 block would have joined the following part unnoticed.
 
+A synthetic block is DELETED by default, because the wrapper is regenerated.
+The exception is `"emit": "class_doc"`, which keeps the block and writes it
+verbatim immediately above one part's class declaration. That exists because a
+class-level /// doc is not wrapper: the compiler CONCATENATES the /// of every
+part into a single type entry, so leaving it on all of them glues N summaries
+together and dropping it loses the type's XML outright. Both were seen on the
+SelfTest split. Exactly one part may carry it, and that is asserted.
+
 ORDER. Parts emit their members in the ORIGINAL file's order, which is right
 almost always -- it keeps the diff readable and the move obviously pure. The
 exception is a member the original had filed in the wrong place: preserving
@@ -114,6 +122,35 @@ class Spec:
         if unknown:
             raise SystemExit(f"FATAL: members assigned to undeclared parts: "
                              f"{sorted(unknown)}")
+        self._check_class_doc()
+
+    def _check_class_doc(self):
+        """At most one part may carry the class-level /// doc.
+
+        The compiler concatenates the /// of every part of a partial class into
+        ONE type entry, so two parts carrying it produce a spliced summary that
+        reads as prose and is not. Caught on the SelfTest split by diffing the
+        emitted XML; asserted here so it cannot recur silently.
+
+        HONEST SCOPE: two class_doc entries almost always overlap on the same
+        lines, and the tiling would refuse them anyway as a duplicated line.
+        What this adds is the MESSAGE -- it runs before _tile, so the reader
+        sees "the compiler concatenates these" instead of "line 5 is claimed
+        twice", which does not point at the defect at all.
+        """
+        docs = [syn for syn in self.raw.get("synthetic", [])
+                if syn.get("emit") == "class_doc"]
+        for syn in docs:
+            if syn["part"] not in self.parts:
+                raise SystemExit(f"FATAL: class_doc assigned to undeclared "
+                                 f"part {syn['part']!r}")
+        if len(docs) > 1:
+            where = ", ".join(sorted(d["part"] for d in docs))
+            raise SystemExit(
+                f"FATAL: {len(docs)} parts carry emit=class_doc ({where}). The "
+                f"compiler concatenates the /// of every part into one type "
+                f"entry, so this splices summaries together. Keep it on one.")
+        self.class_doc = docs[0] if docs else None
 
     def _tile(self):
         self.owner = {}

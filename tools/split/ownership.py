@@ -100,8 +100,22 @@ def is_declaration(line, at):
     Only if everything before the name is type and modifier words. A '.', '(',
     '=' or '{' before it means the line is doing something else and merely
     mentions the name -- which is how the count once reached minus one.
+
+    AND THE PREFIX MUST NOT BE EMPTY. Whitespace is in the class above, so bare
+    indentation matched it and every helper invoked as a STATEMENT --
+
+        Handshake(host);
+
+    -- was subtracted as its own declaration. On ScenarioTransferTests.cs that
+    hid 11 of Handshake's 15 call sites and reported a confident 4, which is
+    the difference between "belongs in this part" (93%) and "shared fixture"
+    (80%). A declaration always carries a return type or a modifier; a bare
+    call carries nothing. Found by a grep disagreeing with the tool.
     """
-    return bool(DECL_PREFIX.match(line[:at]))
+    before = line[:at]
+    if not before.strip():
+        return False
+    return bool(DECL_PREFIX.match(before))
 
 
 def call_sites(helpers, files):
