@@ -73,5 +73,27 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal("abc", apply.ExpectedDigest);
             Assert.Equal("unit_b", Assert.Single(apply.Units).Name);
         }
+
+        [Fact]
+        public void SnapshotApplied_WithAMatchingDigest_ReportsTheCorrectionVerified()
+        {
+            var effects = Welcomed().Handle(new SnapshotAppliedEvent(3, 2, "abc", "abc"));
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("corrected") && l.Line.Contains("OK"));
+        }
+
+        [Fact]
+        public void SnapshotApplied_WithAMismatchedDigest_ReportsItLoudly()
+        {
+            var effects = Welcomed().Handle(new SnapshotAppliedEvent(3, 2, "abc", "def"));
+            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("STILL DIVERGED"));
+        }
+
+        [Fact]
+        public void SnapshotApplied_ChangesNoState()
+        {
+            var client = Welcomed();
+            client.Handle(new SnapshotAppliedEvent(3, 2, "abc", "abc"));
+            Assert.Equal(ClientSessionState.Planning, client.State);
+        }
     }
 }

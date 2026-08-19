@@ -333,27 +333,5 @@ namespace PBAndJ.Core.Tests.Net
             var effects = Welcomed().Handle(new TransportFailedEvent("socket died"));
             Assert.Single(All<StopKeyframesEffect>(effects));
         }
-
-        [Fact]
-        public void SnapshotApplied_WithAMatchingDigest_ReportsTheCorrectionVerified()
-        {
-            var effects = Welcomed().Handle(new SnapshotAppliedEvent(3, 2, "abc", "abc"));
-            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("corrected") && l.Line.Contains("OK"));
-        }
-
-        [Fact]
-        public void SnapshotApplied_WithAMismatchedDigest_ReportsItLoudly()
-        {
-            var effects = Welcomed().Handle(new SnapshotAppliedEvent(3, 2, "abc", "def"));
-            Assert.Contains(All<LogEffect>(effects), l => l.Line.Contains("STILL DIVERGED"));
-        }
-
-        [Fact]
-        public void SnapshotApplied_ChangesNoState()
-        {
-            var client = Welcomed();
-            client.Handle(new SnapshotAppliedEvent(3, 2, "abc", "abc"));
-            Assert.Equal(ClientSessionState.Planning, client.State);
-        }
     }
 }
