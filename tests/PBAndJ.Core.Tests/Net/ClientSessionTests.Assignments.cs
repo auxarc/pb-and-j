@@ -7,17 +7,15 @@ using Xunit;
 namespace PBAndJ.Core.Tests.Net
 {
     // Assignments: which units a client stores as its own.
-    // It opens with the author's empty `// --- roster ---` banner, which heads
-    // nothing -- the roster is the host's concern and is tested in
-    // HostSessionTests.Roster.cs.
+    // An empty `// --- roster ---` banner used to head this section, and was
+    // removed with the split: a client has no roster tests, because the roster
+    // is the host's concern and is tested in HostSessionTests.Roster.cs.
     //
     // One part of ClientSessionTests, a single class split across 12 files.
     // Helpers used by more than one part live in ClientSessionTests.cs; a helper lives
     // here only because this part is effectively its sole user.
     public partial class ClientSessionTests
     {
-        // --- roster ---
-
         // --- assignments ---
 
         [Fact]

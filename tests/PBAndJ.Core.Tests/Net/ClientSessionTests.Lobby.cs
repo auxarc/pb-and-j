@@ -281,8 +281,6 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(ClientSessionState.Faulted, client.State);
         }
 
-        // --- lobby counts, derived for the screen (M11c) ---
-
         // --- the synchronised load (M11d) ---
 
         [Fact]
@@ -340,6 +338,8 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(1, sent.SelectionVersion);
             Assert.Equal(outcome, sent.Outcome);
         }
+
+        // --- lobby counts, derived for the screen (M11c) ---
 
         [Fact]
         public void LobbyCounts_BeforeAnyStateArrives_AreZeroAndUnsatisfied()
