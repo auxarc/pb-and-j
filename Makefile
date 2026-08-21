@@ -377,7 +377,9 @@ DRIVE_FILES := src/PBAndJ.Mod/Net/DriveGlue.cs src/PBAndJ.Mod/Net/DriveProbeGlue
 # Files that merely CALL into the drive channel behind #if PBJ_DRIVE. Their own
 # types ship and must not be grepped for.
 DRIVE_CALLSITE_FILES := src/PBAndJ.Mod/ModEntry.cs src/PBAndJ.Mod/Net/ActuatorGlue.cs \
-                        src/PBAndJ.Mod/Net/NetGlue.cs src/PBAndJ.Mod/Net/VfxProbeGlue.cs
+                        src/PBAndJ.Mod/Net/NetGlue.PumpPatch.cs \
+                        src/PBAndJ.Mod/Net/NetGlue.QuitPatch.cs \
+                        src/PBAndJ.Mod/Net/VfxProbeGlue.cs
 
 # Derived from DRIVE_FILES rather than written out, because a hardcoded name
 # fails in two directions at once: a RENAMED type makes the grep pass
