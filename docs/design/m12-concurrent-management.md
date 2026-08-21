@@ -143,10 +143,16 @@ Two things follow specifically for M12a:
   which is the whole argument for detection.
 
 **The patch-surface assertion is owed now, and its number is not stable yet.** M12a took the mod to
-36 patch classes over 32 distinct target methods; deleting the throwaway `OverworldProbeGlue` — due
-since M12a landed, see [The rig](#the-rig-for-whoever-picks-this-up) — drops that to 32 over 30,
-because two of its three targets are also `PassengerGlue`'s. So record the expected count *after*
-the probe goes, not before, and expect M12b's combat-entry work to move it again.
+36 patch classes over 32 distinct target methods. That figure was written expecting the throwaway
+`OverworldProbeGlue` to go with M12a, which would have dropped it to 32 over 30 — two of its three
+targets are also `PassengerGlue`'s.
+
+⚠️ **The probe did NOT go, and this paragraph used to say its deletion was "due".** It was swept on
+2026-08-21 against its own written exit condition and **kept**; see
+[The rig](#the-rig-for-whoever-picks-this-up) below and the probe-sweep section of
+`docs/notes/overworld-recon.md`, which is the file that decides this. So do not predicate the count
+on the probe's removal. Count the patch set when the assertion is actually written, and expect
+M12b's combat-entry work to have moved it again.
 
 ---
 
@@ -669,8 +675,19 @@ instance, so start the Steam host first. Both instances share one `Mods` directo
 `make deploy` serves both; deploy with both closed. A second concurrent `SteamAPI.Init()` on the same
 appid is verified to work.
 
-The throwaway probe (`pbj.ow-probe`, `-sample`, `-mirror`, `-watch`) is still registered and should be
-deleted when M12a lands — every finding is already in `overworld-recon.md`.
+The overworld probe (`pbj.ow-probe`, `-sample`, `-mirror`, `-watch`) is still registered, and it
+**stays**.
+
+⚠️ **This paragraph used to say it should be deleted when M12a lands, because "every finding is
+already in `overworld-recon.md`". Both halves were wrong.** M12a landed long ago, and the findings
+were not all there — that sentence predates `ProbeNightfall`. The probe was swept on 2026-08-21
+against its own exit condition ("delete it once every finding is in `docs/notes/overworld-recon.md`")
+and kept, for two reasons recorded in that file's probe-sweep section: the nightfall chain is still
+not transcribed into it, and the probe is the instrument for the measurements it lists as unrun.
+
+**`docs/notes/overworld-recon.md` decides when this probe can go, not this document.** Read the
+verdict there rather than acting on anything said here — deleting the file on the strength of a
+design doc would take a live instrument with it.
 
 ## Still unanswered
 

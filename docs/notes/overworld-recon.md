@@ -462,7 +462,11 @@ this file. **The condition is NOT met.** Two independent reasons, both checked b
 than recalled:
 
 1. **`ProbeNightfall`'s findings are not in this file at all.** `grep -i 'nightfall\|shadow'` over
-   this file returns nothing, and `grep -ril nightfall docs/ src/` hits only
+   this file returned nothing **when this section was written — and it no longer does, because this
+   section itself is now the match.** ⚠️ Do not re-run that grep and read hits as the condition
+   being discharged: the test is whether the CHAIN AND ITS NUMBERS are written down here, not
+   whether the word appears. As of 2026-08-21 every hit is this paragraph and the ones below it.
+   `grep -ril nightfall docs/ src/` hits only
    `OverworldProbeGlue.cs` and `SkyPatches.cs`. The findings are not *lost* — `SkyPatches.cs`'s
    own doc comment carries the whole write-up, including the two-machine reading of 2026-08-15
    (`TOD_Sky.cycleHour` 18.800 on the host against 20.906 on the client, ambient 1.06 against
@@ -478,12 +482,14 @@ than recalled:
    host-initiated combat entry, via the `pbj.ow-watch` `EnterCombat` patch). Deleting the file
    deletes the instrument for work that is deferred, not dropped.
 
-⚠️ **A stale claim to distrust, and it is load-bearing prose.**
-`docs/design/m12-concurrent-management.md` says, twice, that the probe is due for deletion and that
-"every finding is already in `overworld-recon.md`" (:146 and the "rig" section at :672). Reason 1
-above is a counter-example: that sentence was written before `ProbeNightfall` existed. **Not
-corrected here** — that design doc is owned by another lane this round. Whoever next edits it
-should fix the claim rather than act on it.
+✅ **A stale claim that has since been FIXED** (2026-08-21, after this section was written).
+`docs/design/m12-concurrent-management.md` used to say, twice, that the probe was due for deletion
+and that "every finding is already in `overworld-recon.md`" — in its patch-surface paragraph and in
+its "rig" section. Reason 1 above is the counter-example: that sentence predates `ProbeNightfall`.
+Both sites now say the probe stays and point here for the verdict, so the landmine is gone. It is
+recorded rather than deleted because the claim was load-bearing prose that survived two milestones,
+and because it is the shape to expect again: **a deletion condition written in advance, read later
+as a deletion instruction.**
 
 ⇒ **Verdict: KEEP.** Re-sweep when the nightfall transcription lands *and* the rig has run
 measurements 2, 5 and 6 — not on either alone.
