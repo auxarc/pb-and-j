@@ -41,32 +41,37 @@ namespace PBAndJ.Mod
             Net.DriveProbeGlue.RegisterConsoleCommand();
             Net.DriveGlue.Start();
 #endif
-            // THROWAWAY (M12 recon) — goes when docs/notes/overworld-recon.md is written.
+            // THROWAWAY (M12 recon). Its own header sets the bar higher than
+            // this line used to: "delete it once EVERY finding is in
+            // docs/notes/overworld-recon.md". That file is written but not
+            // complete — the nightfall/flat-lighting chain ProbeNightfall reads
+            // appears nowhere in docs/, and the notes' own "⏳ Still unrun"
+            // section leaves measurements 2, 5 and 6 to the two-instance rig,
+            // for which this file is the instrument. Swept 2026-08-21: KEPT.
             Net.OverworldProbeGlue.RegisterConsoleCommands();
             // THROWAWAY (M12 review follow-up) — answers the two questions gating
             // M12d. Goes once both answers are in the design doc.
             Net.ManagementProbeGlue.RegisterConsoleCommands();
-            // THROWAWAY (M8 recon) — four of its five questions are answered in
-            // docs/notes/replay-handoff-recon.md. It stays only until the fifth,
-            // a client's Time.timeScale during playback, is read off a running
-            // client; then it goes the way of the other probes.
+            // Was THROWAWAY (M8 recon), and its stated condition is now MET: all
+            // six questions, the fifth included, are answered in
+            // docs/notes/replay-handoff-recon.md — a client's Time.timeScale was
+            // read across 577 playback frames and never left zero. What keeps
+            // the file alive is something the header never mentions: it also
+            // registers pbj.pose-digest, M18's live instrument over
+            // KeyframePlayer.DigestPose and Core's PoseDigest. Swept 2026-08-21:
+            // KEPT for that, not for the recon. Move pbj.pose-digest to a
+            // non-throwaway glue file and the shell can go.
             Net.ReplayProbeGlue.RegisterConsoleCommands();
-            // THROWAWAY (M13) — it answered why a client drew "no data" over a
-            // unit the host drew normally, and that answer is now in
-            // docs/notes/replay-handoff-recon.md. It stays only for the question
-            // that pass left open: a revealed unit's ArrivalTime reads -1 on a
-            // client against the host's real value. Goes with that one.
-            Net.OverlayProbeGlue.RegisterConsoleCommands();
-            // THROWAWAY (M8 leftovers) — when a unit was visible during a turn,
-            // and where that answer comes from. Four rounds of reading the
-            // decompile produced four accounts of this mechanism and three were
-            // wrong; the arguments are all about facts one line of output
-            // settles. Goes once the answers are in the recon file.
-            Net.VisibilityProbeGlue.RegisterConsoleCommands();
-            // THROWAWAY (M8 item 3 recon) — §8 of the recon file says the VFX
-            // volume "has never been measured", and designing a wire around an
-            // unmeasured volume is how M6 nearly shipped a frame the receiver
-            // would have rejected. Goes once the number is in the recon file.
+            // ⚠️ NOT throwaway any more, whatever this line used to say. The
+            // volume number it was written for IS in docs/notes/replay-handoff-
+            // recon.md now ("VFX VOLUME MEASURED AT LAST"), so on the old
+            // wording it would already be due for deletion — and deleting it
+            // would take the `presimulated` counter inside pbj.vfx-probe, which
+            // is BLOCKED on a reading from a running game and decides whether
+            // advanced particle blocks are a feature or are cut. The rest
+            // (fx-instances, fx-pools, fx-tsim, fx-mirror, fx-hold) is on the
+            // standing keep list. Swept 2026-08-21: KEPT WHOLE, do not sweep
+            // again until that reading exists.
             Net.VfxProbeGlue.RegisterConsoleCommands();
             Net.BeamInjectGlue.RegisterConsoleCommands();
             Net.StageCProbeGlue.RegisterConsoleCommands();

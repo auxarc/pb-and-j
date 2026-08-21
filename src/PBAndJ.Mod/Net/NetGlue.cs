@@ -919,9 +919,9 @@ namespace PBAndJ.Mod.Net
             BeamInjectGlue.Tick();
             StageCProbeGlue.Tick();
 
-            // THROWAWAY (M8 recon) — samples Time.timeScale across exactly the
-            // playback window, which is the one M8 question a running game has
-            // never answered. Goes with ReplayProbeGlue.
+            // Was THROWAWAY (M8 recon). ⚠️ ANSWERED: 577 client frames, zero on
+            // every one — docs/notes/replay-handoff-recon.md. Now a standing
+            // FinalIK watch; goes when pbj.pose-digest leaves ReplayProbeGlue.
             ReplayProbeGlue.SampleDuringPlayback();
 
             // Also outside the session guard: the connect screen exists in order
