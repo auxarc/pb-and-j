@@ -451,3 +451,39 @@ case one replayed turn — and it makes (a) optional rather than load-bearing.
 - **`pgrep -f PhantomBrigade.exe` reports the shell that runs it**, because the pattern matches its
   own command line. It said the game was running when nothing was. Bracket the pattern
   (`"[P]hantomBrigade.exe"`), as `tools/second-instance.sh` now does.
+
+---
+
+## Probe sweep, 2026-08-21 — `OverworldProbeGlue` is KEPT, and here is exactly what it is owed
+
+The five older throwaway probes were swept against their own written exit conditions. This one's,
+from its file header, is **"Delete it once every finding is in `docs/notes/overworld-recon.md`"** —
+this file. **The condition is NOT met.** Two independent reasons, both checked by reading rather
+than recalled:
+
+1. **`ProbeNightfall`'s findings are not in this file at all.** `grep -i 'nightfall\|shadow'` over
+   this file returns nothing, and `grep -ril nightfall docs/ src/` hits only
+   `OverworldProbeGlue.cs` and `SkyPatches.cs`. The findings are not *lost* — `SkyPatches.cs`'s
+   own doc comment carries the whole write-up, including the two-machine reading of 2026-08-15
+   (`TOD_Sky.cycleHour` 18.800 on the host against 20.906 on the client, ambient 1.06 against
+   1.72, with `overworld.timeOfDay` and `combat.timeOfDay` agreeing on both machines) and the
+   two-systems-write-the-same-field mechanism. They are simply not **here**, which is what the
+   exit condition asks for. ⇒ **Owed: transcribe the nightfall chain into this file**, from
+   `SkyPatches.cs` and from `OverworldProbeGlue`'s header, by someone who can vouch for the
+   numbers.
+2. **This file's own "⏳ Still unrun" section leaves three measurements to the two-instance rig,
+   and this probe is their instrument.** Measurement 2 (divergence between two machines, via
+   `pbj.ow-probe` / `pbj.ow-sample` on both), measurement 5 (what a loadout *change* writes — the
+   part `ManagementProbeGlue` does not cover), and measurement 6 (concurrent edits and
+   host-initiated combat entry, via the `pbj.ow-watch` `EnterCombat` patch). Deleting the file
+   deletes the instrument for work that is deferred, not dropped.
+
+⚠️ **A stale claim to distrust, and it is load-bearing prose.**
+`docs/design/m12-concurrent-management.md` says, twice, that the probe is due for deletion and that
+"every finding is already in `overworld-recon.md`" (:146 and the "rig" section at :672). Reason 1
+above is a counter-example: that sentence was written before `ProbeNightfall` existed. **Not
+corrected here** — that design doc is owned by another lane this round. Whoever next edits it
+should fix the claim rather than act on it.
+
+⇒ **Verdict: KEEP.** Re-sweep when the nightfall transcription lands *and* the rig has run
+measurements 2, 5 and 6 — not on either alone.

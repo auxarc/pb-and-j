@@ -877,3 +877,77 @@ What it means for the milestone:
   `generic_elimination` carries `hidden: true` units and is the right choice for visibility work.
 - A `timeout … | tail` pipeline reports **tail's** exit code, so a failed playtest looked like a
   clean exit 0.
+
+---
+
+## Probe sweep, 2026-08-21 — two probes retired against this file, one kept
+
+Three of the five older throwaway probes name **this** file as the place their answers had to land.
+Each condition was checked by reading the sections below, not by recalling them.
+
+### ✅ RETIRED — `OverlayProbeGlue` / `pbj.overlay-probe`, deleted
+
+Its condition was stated twice and both are met:
+
+- header: *"THROWAWAY (M13). Why a client draws 'no data' over a unit the host draws normally."* —
+  answered in full under **"🐛 The fix caused a second bug, and finding it killed a plausible
+  theory first"**: `widgetUnknown` is **on by default in the prefab** and `OnTimeChange` is what
+  clears it, which a frozen client runs during setup and effectively never again; the
+  `predictionTime` theory the probe was built to test is recorded there as refuted by measurement;
+  the fix (`CIHelperOverlays.OnTimeChange()` after `OnUnitEligibilityChange`) is recorded with its
+  confirming re-probe. The `REVEALED`/`CONTROL` table in that section is this probe's own output.
+- its registration site in `ModEntry.cs`: *"It stays only for the question that pass left open: a
+  revealed unit's `ArrivalTime` reads -1 on a client against the host's real value. Goes with that
+  one."* — that question is **"1. `ArrivalTime` does not travel — ✅ DONE"**, built as
+  `HasArrivalTime`/`ArrivalTime` on `UnitSnapshot` and verified matching across two machines
+  (10.07, then 10.14).
+
+### ✅ RETIRED — `VisibilityProbeGlue` / `pbj.vis-probe`, deleted
+
+Its header states no notes file, so its four enumerated questions were checked one by one against
+this file. All four are answered here, each from a running game:
+
+1. *Does a revealed unit on a **client** carry `LandingData`?* — **yes**, and both decompile
+   arguments that it must be false were wrong. "🐛 THE LANDING COUNTDOWN", with the host/client
+   table and the `CombatLandingSystem` mechanism.
+2. *Can `keyframeReveal` and `keyframeHidden` both be set in one window?* — **yes**: "⚠️ The game
+   models TWO transitions per window, not one", `:1118-1126`, two independent slots with a
+   hide-priority `else if`.
+3. *Are those stamps inside the current window or left over?* — "⚠️ Both stamps must be windowed at
+   capture", plus the measured "⚠️ `experimentalMode` was FALSE on a real game", which is what
+   decides whether tracks accumulate at all.
+4. *No recorder entry at all, or an entry whose first key is at reveal time?* — **both classes
+   exist**, settled under the "⚠️ CORRECTION" heading by this probe's own
+   `entry=NONE recorderUnits=8` reading.
+
+⚠️ Two mentions of `pbj.vis-probe` above and one in
+`src/PBAndJ.Mod/Net/CombatGameBridge.Snapshot.Apply.cs` are left standing on purpose: they are
+past-tense records of what the probe *reported*, and the readings outlive the command.
+
+### ⛔ KEPT — `ReplayProbeGlue`, and its stated condition IS met
+
+This is the awkward one, and the reason is worth writing down rather than re-deriving. All six of
+its sections are answered here — `ProbeTime`'s question, the last one open, was closed by
+**"Measured on a real CLIENT, 2026-08-14"**: 577 playback frames, `timeScale` 0 on every one,
+FinalIK hazard dormant. By its own header (*"Delete it once the answers are written into that
+file"*) it should go.
+
+**It cannot go yet, for a reason its header never mentions.** The file has since acquired
+`pbj.pose-digest` — **M18's** live instrument, wrapping `KeyframePlayer.DigestPose` over Core's
+`PoseDigest`, and the only console entry point either has. Deleting the probe would delete a
+milestone's instrument and strand Core code behind it.
+
+⇒ **Owed, and it is small:** move `PoseDigestNow` / `pbj.pose-digest` into a non-throwaway glue
+file. After that the rest of `ReplayProbeGlue` — the six sections and the `SampleDuringPlayback`
+pump wired at `NetGlue.cs` — can be deleted outright, because everything they ever found is above.
+The pump is today a standing regression watch on the FinalIK hazard, not an open measurement.
+
+### Not swept
+
+`VfxProbeGlue` is **whole-file keep-listed** and was not touched: `FxInstances`, `FxPools`,
+`FxTimeSim`/`FxTimeSimSet`, `FxMirror`, `FxHold` (drive-only, and what `pbj.pose-digest` tells you
+to call before reading a digest) and `pbj.vfx-probe` are all on the keep list, and `pbj.vfx-probe`
+additionally carries the `presimulated` counter that is **blocked on a rig reading** and must
+survive. The beam injector and `pbj.stagec-probe`/`pbj.stagec-inject` are separate files
+(`BeamInjectGlue.cs`, `StageCProbeGlue.cs`), so nothing in the keep list was at risk here.
+`OverworldProbeGlue` is kept — see the sweep note at the end of `overworld-recon.md`.
