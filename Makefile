@@ -249,7 +249,7 @@ check-file-sizes:
 size-report-selftest:
 	@python3 tools/size-report.py --selftest
 
-# The split kit's own selftest: 68 cases -- what each tool must refuse, and
+# The split kit's own selftest: 74 cases -- what each tool must refuse, and
 # what it must still accept.
 # Not wired into `dist` for the same reason as check-file-sizes -- a local gate
 # sits in front of `deploy`, and `deploy` gates the playtest rig.

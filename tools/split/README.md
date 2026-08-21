@@ -93,7 +93,14 @@ decides which side a **comment** between two members belongs to — the one
 question no oracle can answer for you, because every one of them is blind to
 comments.
 
-Four keys exist because leaving them out changed the code:
+Five keys exist because leaving them out changed the code:
+
+- **`"kind"`** on a part, default `"class"`. `class` was hardcoded in the
+  generator, and both guards below searched only for `class <name>` — so a
+  `public readonly struct` matched neither, both skipped, and the part came
+  out `public partial class`. **A value type silently became a reference
+  type.** Proven by running the kit over a one-struct file, not inferred.
+  A part whose kind disagrees with the source is now refused by name.
 
 - **`"bases"`** on a part: the class's base and interface list, verbatim.
   A partial class may name its bases on ONE declaration, and the wrapper
@@ -119,7 +126,7 @@ Four keys exist because leaving them out changed the code:
 make split-selftest
 ```
 
-68 cases: what each tool must REFUSE, and the sound input it must still
+74 cases: what each tool must REFUSE, and the sound input it must still
 accept. Each names a defect that actually bit, or the control proving the
 refusal is not simply always-on. The suite has been mutation-checked —
 breaking any one guard makes it fail — because a bite test that cannot fail is
@@ -136,3 +143,25 @@ this project's most repeated mistake.
   reordered `.cctor` — the one thing splitting a partial class can really
   change — is invisible. Verify it by reading, every time.
 - **Whether a comment is still true** where it landed.
+
+## Not yet supported: a file that is SEVERAL TYPES
+
+Everything above assumes one type split into partial parts. `DestructionPlayback.cs`
+— next on the source queue — is **five top-level types in one file**
+(`DestructionDrive` and `UnitWreckDrive` structs, `DestructionUpdate`,
+`DestructionRamp` static, `DestructionState` 508 lines), and the natural split
+is one type per file, not partials.
+
+The `"kind"` key above makes the struct half of that possible. The remaining
+blocker is **`emit: "class_doc"`, which is capped at one block per SPEC**. That
+cap exists because two parts carrying the *same* class's `///` makes the
+compiler concatenate them — a real defect, seen on the SelfTest split. Five
+different types each carrying their own `///` is not that case at all, so the
+cap wants to be **per class, not per spec**. Fix that guard before attempting
+a multi-type split; do not work around it by dropping a type's doc.
+
+The alternative that needs no kit change: leave all five types in
+`DestructionPlayback.cs` and split only `DestructionState` into partials,
+carrying the other four as one `class_doc` block. That is what was done for
+`ClientSession.cs`'s enum, and it works — but it leaves the file named for a
+subject rather than a type, so decide which shape is wanted first.

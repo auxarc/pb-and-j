@@ -178,8 +178,10 @@ class Spec:
         for cfg in self.parts.values():
             name = cfg["class"]
             pat = re.compile(r'^\s*(?:(?:public|internal|private|protected|'
-                             r'static|sealed|abstract|partial|unsafe|file)\s+)*'
-                             r'class\s+' + re.escape(name) + r'\b\s*(:.*)?$')
+                             r'static|sealed|abstract|partial|unsafe|file|'
+                             r'readonly|ref)\s+)*'
+                             r'(?:class|struct|interface|record)\s+'
+                             + re.escape(name) + r'\b\s*(:.*)?$')
             want = None
             found = False
             for line in self.lines:
@@ -216,27 +218,48 @@ class Spec:
                     f"{name} : {got}, but the source declares {name} : {want}.")
 
     def _check_modifiers(self):
-        """Each part must redeclare the class with the ORIGINAL's modifiers.
+        """Each part must redeclare the type with the ORIGINAL's modifiers
+        AND ITS ORIGINAL KIND.
 
         writeparts once hardcoded "public", so a `public static class` came out
         as `public class` -- a semantically different type. The decompile oracle
         would eventually catch it (a static class is abstract+sealed), but only
         after a rebuild, and only if someone read the diff. This refuses first,
         and names the modifiers it expected.
+
+        THE KIND HALF WAS MISSING ENTIRELY, and it is worse. Both this guard
+        and _check_bases searched for `class <name>`, so a `struct` matched
+        NEITHER -- `want is None` and both skipped -- and writeparts emitted
+        `public partial class Thing` for a `public readonly struct Thing`. A
+        value type silently became a reference type, with nothing refusing.
+        Proven by running the kit over a one-struct file, not inferred.
+        `DestructionPlayback.cs` is next on the split queue and declares two.
         """
         for cfg in self.parts.values():
             name = cfg["class"]
             pat = re.compile(r'^\s*((?:(?:public|internal|private|protected|'
-                             r'static|sealed|abstract|partial|unsafe|file)\s+)*)'
-                             r'class\s+' + re.escape(name) + r'\b')
+                             r'static|sealed|abstract|partial|unsafe|file|'
+                             r'readonly|ref)\s+)*)'
+                             r'(class|struct|interface|record)\s+'
+                             + re.escape(name) + r'\b')
             want = None
+            want_kind = None
             for line in self.lines:
                 m = pat.match(line)
                 if m:
                     want = [w for w in m.group(1).split() if w != "partial"]
+                    want_kind = m.group(2)
                     break
             if want is None:
-                continue          # a part may declare a class the source lacks
+                continue          # a part may declare a type the source lacks
+            got_kind = cfg.get("kind", "class")
+            if got_kind != want_kind:
+                raise SystemExit(
+                    f"FATAL: part {cfg['file']!r} would declare {name} as a "
+                    f"{got_kind}, but the source declares it a {want_kind}. "
+                    f"Set \"kind\": {want_kind!r} on the part -- a struct "
+                    f"emitted as a class is a value type turned into a "
+                    f"reference type, and no other oracle here says so.")
             got = cfg.get("modifiers", "public").split()
             if got != want:
                 raise SystemExit(
@@ -502,8 +525,14 @@ def member_map(path):
     while i <= n:
         line = src[i - 1]
         stripped = line.strip()
-        m = re.match(r'^(?:public|internal)\s+(?:partial\s+)?(?:sealed\s+)?'
-                     r'(?:static\s+)?class\s+(\w+)', stripped)
+        # EVERY TYPE KIND, not just `class`. A `public readonly struct` matched
+        # nothing here, so its members were attributed to class None -- which is
+        # how DestructionPlayback.cs, next on the split queue, reports seven
+        # members under no type at all.
+        m = re.match(r'^(?:public|internal)\s+'
+                     r'(?:(?:partial|sealed|static|readonly|abstract|unsafe|ref)'
+                     r'\s+)*'
+                     r'(?:class|struct|interface|record)\s+(\w+)', stripped)
         if m and depth == 1:
             cls = m.group(1)
             depth += line.count('{') - line.count('}')

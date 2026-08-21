@@ -65,8 +65,12 @@ def render(spec, part):
     # checks the value against the source's own declaration.
     bases = cfg.get("bases")
     suffix = f" : {bases}" if bases else ""
-    out.append(f"    {cfg.get('modifiers', 'public')} {kw}class "
-               f"{cfg['class']}{suffix}")
+    # AND NOT ALWAYS A CLASS. `class` was hardcoded here too, so a
+    # `public readonly struct` came out `public partial class` -- a value type
+    # rendered as a reference type, which no oracle in this kit reports.
+    # splitspec refuses a kind that disagrees with the source.
+    out.append(f"    {cfg.get('modifiers', 'public')} {kw}"
+               f"{cfg.get('kind', 'class')} {cfg['class']}{suffix}")
     out.append("    {")
     body = []
     for a, b in spec.blocks[part]:

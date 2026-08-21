@@ -182,6 +182,34 @@ namespace Demo
 '''
 
 
+# Two types, the second a STRUCT declared after a class, and the class written
+# `sealed partial` -- the order the kit's own output uses. Both shapes defeated
+# the type matcher, and DestructionPlayback.cs (next on the split queue) has
+# five types of three kinds.
+KIND_SAMPLE = '''using System;
+
+namespace Demo
+{
+    public sealed partial class Holder
+    {
+        public int Kept { get; }
+
+        public bool Big => Kept > 10;
+    }
+
+    public readonly struct Thing
+    {
+        public Thing(int a)
+        {
+            A = a;
+        }
+
+        public int A { get; }
+    }
+}
+'''
+
+
 def spec_for(tmp, members, synthetic, parts, forward_gaps=None):
     return {
         "root": tmp,
@@ -598,6 +626,86 @@ def main():
         "parts": nb_parts}, "nb_bad.json"))
     check("...and REFUSES a \"bases\" invented for a class that has none",
           rc != 0 and "no base list" in out, out[:400])
+
+    print("type kinds (a struct rendered as a class is a value type turned "
+          "into a reference type, and no oracle here reports it)")
+    kind_src = os.path.join(tmp, "Kinds.cs")
+    with open(kind_src, "w") as fh:
+        fh.write(KIND_SAMPLE)
+    km = member_map(kind_src)
+    kowner = {(c, n) for c, n, _, _ in km}
+    check("attributes a STRUCT's members to the struct, not to the class "
+          "declared above it -- Keyframes.cs reported JointPose's three "
+          "members as UnitTrack's, which is what the Class.Name key is for",
+          ("Thing", "A") in kowner and ("Holder", "A") not in kowner,
+          str(sorted(kowner, key=str)))
+    check("...and reads `sealed partial class`, whose modifiers are in the "
+          "order this kit's OWN output writes them; the matcher wanted "
+          "`partial sealed` and attributed every member to None",
+          ("Holder", "Kept") in kowner and (None, "Kept") not in kowner,
+          str(sorted(kowner, key=str)))
+
+    # ONE type per source for the spec-level cases: the stale-plan guard
+    # (correctly) demands that a plan name every member the map finds, and a
+    # two-type file would need both types' members in one plan.
+    ONE_TYPE = '''using System;
+
+namespace Demo
+{
+    public sealed partial class Holder
+    {
+        public int Kept { get; }
+
+        public bool Big => Kept > 10;
+    }
+}
+'''
+    kind_members = {"Kept": "primary", "Big": "primary"}
+    KIND_SYNTH = [{"lines": [1, 6], "part": "primary", "why": "wrapper"},
+                  {"lines": [10, -1], "part": "primary", "why": "closers"}]
+
+    def one_type(text, fname, parts, name):
+        with open(os.path.join(tmp, fname), "w") as fh:
+            fh.write(text)
+        return write_spec(tmp, {
+            "root": tmp, "source": fname, "outdir": ".", "namespace": "Demo",
+            "members": kind_members, "synthetic": KIND_SYNTH,
+            "forward_gaps": {}, "parts": parts}, name)
+
+    def kparts(fname, **extra):
+        p = {"primary": {"file": fname, "class": "Holder", "partial": True,
+                         "modifiers": "public sealed", "usings": ["System"],
+                         "header": "h"}}
+        p["primary"].update(extra)
+        return p
+
+    rc, out = run("partition.py", one_type(
+        ONE_TYPE, "K1.cs", kparts("K1.cs", kind="struct"), "kind_bad.json"))
+    check("REFUSES a part that would emit a class as a struct",
+          rc != 0 and "but the source declares it a class" in out, out[:400])
+
+    rc, out = run("partition.py", one_type(
+        ONE_TYPE, "K2.cs", kparts("K2.cs"), "kind_ok.json"))
+    check("accepts a class part with no \"kind\" key, so the guard is not "
+          "simply always-on", rc == 0 and "partition OK" in out, out[:400])
+
+    STRUCT_TYPE = ONE_TYPE.replace("public sealed partial class Holder",
+                                   "public readonly struct Holder")
+    rc, out = run("partition.py", one_type(
+        STRUCT_TYPE, "K3.cs", kparts("K3.cs", modifiers="public readonly"),
+        "st_bad.json"))
+    check("REFUSES a part that would emit a STRUCT as a class -- the default, "
+          "and so the one that was silently happening",
+          rc != 0 and "but the source declares it a struct" in out, out[:400])
+
+    rc, out = run("writeparts.py", one_type(
+        STRUCT_TYPE, "K4.cs",
+        kparts("K4.cs", modifiers="public readonly", kind="struct"),
+        "st_ok.json"))
+    st2_body = open(os.path.join(tmp, "K4.cs")).read()
+    check("writes `public readonly partial struct`, the kind the source had",
+          rc == 0 and "public readonly partial struct Holder" in st2_body,
+          out[:400] + st2_body[:200])
 
     print("doc xml (the compiler emits <member> in SOURCE order, so a split "
           "reorders the whole file and a line diff is pure noise)")
