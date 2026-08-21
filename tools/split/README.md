@@ -65,7 +65,14 @@ the incident; read them before trusting a tool.
    Nothing is retyped. It refuses to run on an unproven partition.
 7. **Run the oracles**, and prove each one BITES before believing it:
    - `listtests.sh` — the test-name SET, for a test-file split;
-   - `ilcanon.py` — the decompile, for "the compiled code is unchanged";
+   - `ilcanon.py` — the decompile, for "the compiled code is unchanged".
+     Decompile BOTH dlls **in place**, from `bin/Release/net472`: ilspycmd
+     resolves neighbouring assemblies and the pdb out of that directory, so a
+     dll copied to a scratchpad decompiles differently — different variable
+     names, extra casts, `//IL_` notes — and the diff fills with changes to
+     files you never touched. It also refuses under MIN_RECORDS rather than
+     report a clean empty comparison, which is what caught its own failure to
+     descend into an attributed type;
    - `docxml.py` — the emitted doc XML, for "every `///` survived and still
      says the same thing". Compare it BY MEMBER: the compiler emits entries in
      source order, so a split reorders the whole file and `diff` shows ~150

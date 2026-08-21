@@ -42,6 +42,11 @@ def canon(path):
         text = fh.read()
     text = re.sub(r'^\[assembly: AssemblyInformationalVersion.*\n', '', text,
                   flags=re.M)
+    # ilspycmd prints an update nag ON STDOUT, so it lands inside the captured
+    # decompile. It is not code, it names a version, and it would appear or
+    # vanish on its own schedule -- a diff caused entirely by the tool.
+    text = re.sub(r'^You are not using the latest version of the tool.*\n'
+                  r'(?:Latest version is .*\n)?', '', text, flags=re.M)
     lines = text.split("\n")
 
     def block_end(i):
@@ -74,9 +79,23 @@ def canon(path):
                 walk(k + 1, e - 1, prefix + ns.group(1).strip() + ".")
                 i = e + 1
                 continue
-            m = TYPE.match(line)
-            if m and "{" in "".join(lines[i:i + 3]):
-                k = i
+            # A TYPE MAY CARRY ATTRIBUTES, AND THEY SIT ON THEIR OWN LINES.
+            # The type test read only the CURRENT line, so `i` landing on
+            # `[ExcludeFromCodeCoverage]` fell through to the member branch and
+            # swallowed the entire class as ONE record. Every glue type in
+            # PBAndJ.Mod carries that attribute, so this assembly canonicalised
+            # to 95 records instead of thousands -- and a whole-class record
+            # defeats the only thing this tool exists to do, which is absorb the
+            # member REORDERING a split causes. It was caught by the
+            # MIN_RECORDS guard rather than by producing a wrong answer, which
+            # is the guard doing its job; without it the diff would have shown
+            # every split class as CHANGED and looked exactly like damage.
+            d = i
+            while d <= hi and lines[d].strip().startswith("["):
+                d += 1
+            m = TYPE.match(lines[d]) if d <= hi else None
+            if m and "{" in "".join(lines[d:d + 3]):
+                k = d
                 while k <= hi and "{" not in lines[k]:
                     k += 1
                 e = block_end(k)
