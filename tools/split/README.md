@@ -135,7 +135,7 @@ Five keys exist because leaving them out changed the code:
 make split-selftest
 ```
 
-76 cases: what each tool must REFUSE, and the sound input it must still
+79 cases: what each tool must REFUSE, and the sound input it must still
 accept. Each names a defect that actually bit, or the control proving the
 refusal is not simply always-on. The suite has been mutation-checked —
 breaking any one guard makes it fail — because a bite test that cannot fail is
@@ -153,24 +153,30 @@ this project's most repeated mistake.
   change — is invisible. Verify it by reading, every time.
 - **Whether a comment is still true** where it landed.
 
-## Not yet supported: a file that is SEVERAL TYPES
+## A file that is SEVERAL TYPES
 
-Everything above assumes one type split into partial parts. `DestructionPlayback.cs`
-— next on the source queue — is **five top-level types in one file**
-(`DestructionDrive` and `UnitWreckDrive` structs, `DestructionUpdate`,
-`DestructionRamp` static, `DestructionState` 508 lines), and the natural split
-is one type per file, not partials.
+Most of this assumes one type split into partial parts. A file that is several
+top-level types wants one type per file instead, and that now works: give each
+type its own part with its own `"class"`, `"kind"` and `"modifiers"`, and its
+own `emit: "class_doc"` block.
 
-The `"kind"` key above makes the struct half of that possible. The remaining
-blocker is **`emit: "class_doc"`, which is capped at one block per SPEC**. That
-cap exists because two parts carrying the *same* class's `///` makes the
-compiler concatenate them — a real defect, seen on the SelfTest split. Five
-different types each carrying their own `///` is not that case at all, so the
-cap wants to be **per class, not per spec**. Fix that guard before attempting
-a multi-type split; do not work around it by dropping a type's doc.
+**The `class_doc` cap is PER CLASS, and it used to be per spec.** The defect it
+guards is the compiler concatenating the `///` of every part of one partial
+class — which cannot happen across two different types, so the old unit refused
+a sound spec. Getting this right is not cosmetic: what sits above a type is not
+only its doc but its ATTRIBUTES, and the wrapper generator emits none of its
+own. `NetGlue.cs` is `NetGlue` plus two Harmony patch classes, each carrying
+`[HarmonyPatch(...)]`; without a block per class that attribute is dropped and
+the patch silently never applies — which **every oracle here passes**. It
+compiles, each part decompiles the same, the type is still present, and only
+the running game knows.
 
-The alternative that needs no kit change: leave all five types in
-`DestructionPlayback.cs` and split only `DestructionState` into partials,
-carrying the other four as one `class_doc` block. That is what was done for
-`ClientSession.cs`'s enum, and it works — but it leaves the file named for a
-subject rather than a type, so decide which shape is wanted first.
+`DestructionPlayback.cs` (688) is five top-level types — `DestructionDrive` and
+`UnitWreckDrive` structs, `DestructionUpdate`, `DestructionRamp` static,
+`DestructionState` 508 lines — and is the next candidate for this shape.
+
+The alternative that needs no per-type parts: leave the extra types where they
+are and split only the largest into partials, carrying the others as one
+`class_doc` block above one part's declaration. That is what was done for
+`ClientSession.cs`'s enum. It works, but it leaves the file named for a subject
+rather than a type, so decide which shape is wanted first.

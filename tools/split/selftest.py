@@ -420,6 +420,60 @@ def main():
           rc == 0 and "// primary\n\n    /// <summary>" in prim,
           repr(prim[:200]))
 
+    # THE CAP WAS PER SPEC, AND THE UNIT WAS WRONG. The compiler concatenates
+    # within ONE type, never across two, so a file that is SEVERAL top-level
+    # types was refused for a defect that cannot happen to it. What sits above
+    # a type is not only its /// -- it is its ATTRIBUTES, and the wrapper
+    # generator emits none. On NetGlue.cs that is `[HarmonyPatch(...)]` on two
+    # Harmony classes: drop it and the patch silently never applies, which
+    # every oracle in this kit passes (it compiles, each part decompiles the
+    # same, the type is still there).
+    multi_src = os.path.join(tmp, "MultiTests.cs")
+    MULTI = ('using Xunit;\n\nnamespace Demo\n{\n'
+             '    /// <summary>The first type.</summary>\n'
+             '    public class Alpha\n    {\n'
+             '        public void A_Works() { }\n    }\n\n'
+             '    [Trait("kind", "beta")]\n'
+             '    public class Beta\n    {\n'
+             '        public void B_Works() { }\n    }\n}\n')
+    with open(multi_src, "w") as fh:
+        fh.write(MULTI)
+    MULTI_PARTS = {
+        "alpha": {"file": "MultiTests.cs", "class": "Alpha", "partial": True,
+                  "usings": ["Xunit"], "header": "alpha"},
+        "beta": {"file": "MultiTests.Beta.cs", "class": "Beta",
+                 "partial": True, "usings": ["Xunit"], "header": "beta"},
+    }
+    multi = write_spec(tmp, {
+        "root": tmp, "source": "MultiTests.cs", "outdir": ".",
+        "namespace": "Demo", "members": {"A_Works": "alpha",
+                                         "B_Works": "beta"},
+        "synthetic": [
+            {"lines": [1, 4], "part": "alpha", "why": "usings + namespace"},
+            {"lines": [5, 5], "part": "alpha", "emit": "class_doc",
+             "why": "Alpha's own doc"},
+            {"lines": [6, 7], "part": "alpha", "why": "class decl"},
+            {"lines": [9, 10], "part": "beta", "why": "gap"},
+            {"lines": [11, 11], "part": "beta", "emit": "class_doc",
+             "why": "Beta's ATTRIBUTE -- dropped without this"},
+            {"lines": [12, 13], "part": "beta", "why": "class decl"},
+            {"lines": [15, -1], "part": "alpha", "why": "closing braces"}],
+        "forward_gaps": {}, "parts": MULTI_PARTS}, "multi.json")
+    rc, out = run("writeparts.py", multi)
+    check("ACCEPTS one class_doc block per CLASS in a several-type file, "
+          "which the per-spec cap refused for a concatenation that cannot "
+          "happen across two types", rc == 0, out[:400])
+    if rc == 0:
+        beta = open(os.path.join(tmp, "MultiTests.Beta.cs")).read()
+        alpha = open(os.path.join(tmp, "MultiTests.cs")).read()
+        check("...and carries the second type's ATTRIBUTE onto its part, "
+              "which the wrapper generator would otherwise drop silently",
+              '[Trait("kind", "beta")]' in beta
+              and beta.index("[Trait") < beta.index("class Beta"), beta[:300])
+        check("...while each type keeps only its OWN block",
+              "/// <summary>The first type." in alpha
+              and "[Trait" not in alpha and "///" not in beta, alpha[:300])
+
     with open(doc_src, "w") as fh:       # writeparts overwrote it above
         fh.write(DOC_SAMPLE)
     nh = {"root": tmp, "source": "DocTests.cs", "outdir": ".",
