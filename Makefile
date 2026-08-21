@@ -82,6 +82,10 @@ NONWIRE_ROOT  := $(addprefix src/PBAndJ.Core/, \
 
 NONWIRE_FILES := $(NONWIRE_ROOT) $(addprefix src/PBAndJ.Core/Net/, \
                  AssetBuffer.cs AssetPoolDigest.cs ClientSession.cs  \
+                 ClientSession.CombatEntry.cs ClientSession.Dispatch.cs  \
+                 ClientSession.Link.cs ClientSession.Lobby.cs  \
+                 ClientSession.Playback.cs ClientSession.Scenario.cs  \
+                 ClientSession.Turn.cs  \
                  ConnectForm.cs ConnectSettings.cs ConnectText.cs  \
                  DestructionPlayback.cs HostSession.cs  \
                  HostSession.CombatEntry.cs HostSession.Dispatch.cs  \
@@ -245,7 +249,7 @@ check-file-sizes:
 size-report-selftest:
 	@python3 tools/size-report.py --selftest
 
-# The split kit's own selftest: 52 cases -- what each tool must refuse, and
+# The split kit's own selftest: 74 cases -- what each tool must refuse, and
 # what it must still accept.
 # Not wired into `dist` for the same reason as check-file-sizes -- a local gate
 # sits in front of `deploy`, and `deploy` gates the playtest rig.

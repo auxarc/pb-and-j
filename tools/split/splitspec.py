@@ -158,29 +158,108 @@ class Spec:
                              f"{sorted(unknown)}")
         self._check_class_doc()
         self._check_modifiers()
+        self._check_bases()
+
+    def _check_bases(self):
+        """Exactly one part carries the class's base and interface list.
+
+        A partial class may name its bases on ONE declaration; the others must
+        say nothing. writeparts.py emitted nothing on all of them, so splitting
+        `public sealed class ClientSession : IPbjSession` would have produced a
+        type that implements no interface -- the build catches that only where
+        something actually uses it as one, and says nothing about the rest.
+
+        Both directions are refused: a missing "bases" when the source has one
+        (the drop), and a "bases" that does not match the source's own text
+        (a retyped interface list, which is exactly what this kit exists to
+        avoid). Two parts claiming it is refused too -- that is a compile
+        error in C#, but a legible message beats CS0263.
+        """
+        for cfg in self.parts.values():
+            name = cfg["class"]
+            pat = re.compile(r'^\s*(?:(?:public|internal|private|protected|'
+                             r'static|sealed|abstract|partial|unsafe|file|'
+                             r'readonly|ref)\s+)*'
+                             r'(?:class|struct|interface|record)\s+'
+                             + re.escape(name) + r'\b\s*(:.*)?$')
+            want = None
+            found = False
+            for line in self.lines:
+                m = pat.match(line.rstrip())
+                if m:
+                    found = True
+                    want = m.group(1)[1:].strip() if m.group(1) else None
+                    break
+            if not found:
+                continue          # a part may declare a class the source lacks
+            claimants = [c for c in self.parts.values()
+                         if c["class"] == name and c.get("bases")]
+            if want is None:
+                if claimants:
+                    raise SystemExit(
+                        f"FATAL: part {claimants[0]['file']!r} sets \"bases\", "
+                        f"but the source declares {name} with no base list.")
+                continue
+            if not claimants:
+                raise SystemExit(
+                    f"FATAL: the source declares {name} as `class {name} : "
+                    f"{want}`, and no part carries it. Set \"bases\": "
+                    f"{want!r} on exactly one part, or the split drops the "
+                    f"interface list entirely.")
+            if len(claimants) > 1:
+                where = ", ".join(sorted(c["file"] for c in claimants))
+                raise SystemExit(
+                    f"FATAL: {len(claimants)} parts set \"bases\" for {name} "
+                    f"({where}). A partial class may name its bases once.")
+            got = claimants[0]["bases"].strip()
+            if got != want:
+                raise SystemExit(
+                    f"FATAL: part {claimants[0]['file']!r} would declare "
+                    f"{name} : {got}, but the source declares {name} : {want}.")
 
     def _check_modifiers(self):
-        """Each part must redeclare the class with the ORIGINAL's modifiers.
+        """Each part must redeclare the type with the ORIGINAL's modifiers
+        AND ITS ORIGINAL KIND.
 
         writeparts once hardcoded "public", so a `public static class` came out
         as `public class` -- a semantically different type. The decompile oracle
         would eventually catch it (a static class is abstract+sealed), but only
         after a rebuild, and only if someone read the diff. This refuses first,
         and names the modifiers it expected.
+
+        THE KIND HALF WAS MISSING ENTIRELY, and it is worse. Both this guard
+        and _check_bases searched for `class <name>`, so a `struct` matched
+        NEITHER -- `want is None` and both skipped -- and writeparts emitted
+        `public partial class Thing` for a `public readonly struct Thing`. A
+        value type silently became a reference type, with nothing refusing.
+        Proven by running the kit over a one-struct file, not inferred.
+        `DestructionPlayback.cs` is next on the split queue and declares two.
         """
         for cfg in self.parts.values():
             name = cfg["class"]
             pat = re.compile(r'^\s*((?:(?:public|internal|private|protected|'
-                             r'static|sealed|abstract|partial|unsafe|file)\s+)*)'
-                             r'class\s+' + re.escape(name) + r'\b')
+                             r'static|sealed|abstract|partial|unsafe|file|'
+                             r'readonly|ref)\s+)*)'
+                             r'(class|struct|interface|record)\s+'
+                             + re.escape(name) + r'\b')
             want = None
+            want_kind = None
             for line in self.lines:
                 m = pat.match(line)
                 if m:
                     want = [w for w in m.group(1).split() if w != "partial"]
+                    want_kind = m.group(2)
                     break
             if want is None:
-                continue          # a part may declare a class the source lacks
+                continue          # a part may declare a type the source lacks
+            got_kind = cfg.get("kind", "class")
+            if got_kind != want_kind:
+                raise SystemExit(
+                    f"FATAL: part {cfg['file']!r} would declare {name} as a "
+                    f"{got_kind}, but the source declares it a {want_kind}. "
+                    f"Set \"kind\": {want_kind!r} on the part -- a struct "
+                    f"emitted as a class is a value type turned into a "
+                    f"reference type, and no other oracle here says so.")
             got = cfg.get("modifiers", "public").split()
             if got != want:
                 raise SystemExit(
@@ -356,6 +435,71 @@ def member_map(path):
             j += 1
         return text, None, n
 
+    def declarator_of(text):
+        """The statement up to the first '=' AT PAREN DEPTH ZERO.
+
+        Splitting on the first '=' anywhere truncates `void Foo(int a = 1)`
+        into `void Foo(int a `, which then ends in an identifier and reads as
+        a FIELD. A default parameter value's '=' is inside the parens.
+        """
+        depth = 0
+        for k, c in enumerate(text):
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+            elif c == '=' and depth == 0:
+                return text[:k]
+        return text
+
+    def param_paren(decl):
+        """Index of the PARAMETER LIST's '(' -- the last one at depth zero.
+
+        "Does the declarator contain a '('" is not the question, and asking it
+        is the third generation of one bug. A VALUE TUPLE puts parens in a
+        declarator too:
+
+            public static (int Count, string Digest) Compute(...)
+            public List<(int PeerId, byte[] Frame)> Sent { get; } = ...
+
+        The old name regex took the FIRST identifier-then-paren, so the first
+        of those was recorded as a member named `static` spanning 60 lines
+        (swallowing the real `Compute`), ScriptedGameBridge.cs got TWO members
+        named `public`, and on Fakes.cs -- where no identifier precedes the
+        tuple paren at all -- member_map raised IndexError and died.
+        """
+        depth, last = 0, None
+        for k, c in enumerate(decl):
+            if c == '(':
+                if depth == 0:
+                    last = k
+                depth += 1
+            elif c == ')':
+                depth -= 1
+        return last
+
+    def name_before(decl, p):
+        """The identifier introducing the parameter list at index p."""
+        head = decl[:p].rstrip()
+        if head.endswith('>'):          # a generic parameter list: Foo<T>(
+            d = 0
+            for k in range(len(head) - 1, -1, -1):
+                if head[k] == '>':
+                    d += 1
+                elif head[k] == '<':
+                    d -= 1
+                    if d == 0:
+                        head = head[:k].rstrip()
+                        break
+        m = re.search(r'(\w+)$', head)
+        return m.group(1) if m else None
+
+    WHERE = re.compile(r'\bwhere\s+\w+\s*:.*$', re.S)
+    # `: base(message)` / `: this(a, b)` is a constructor INITIALISER, not the
+    # parameter list. Left in, the last depth-zero '(' is base's, and the
+    # constructor of PbjProtocolException came out named `base`.
+    CTOR_INIT = re.compile(r':\s*(?:base|this)\s*\(.*$', re.S)
+
     def brace_block(i):
         d, j, seen = 0, i, False
         while j <= n:
@@ -381,8 +525,14 @@ def member_map(path):
     while i <= n:
         line = src[i - 1]
         stripped = line.strip()
-        m = re.match(r'^(?:public|internal)\s+(?:partial\s+)?(?:sealed\s+)?'
-                     r'(?:static\s+)?class\s+(\w+)', stripped)
+        # EVERY TYPE KIND, not just `class`. A `public readonly struct` matched
+        # nothing here, so its members were attributed to class None -- which is
+        # how DestructionPlayback.cs, next on the split queue, reports seven
+        # members under no type at all.
+        m = re.match(r'^(?:public|internal)\s+'
+                     r'(?:(?:partial|sealed|static|readonly|abstract|unsafe|ref)'
+                     r'\s+)*'
+                     r'(?:class|struct|interface|record)\s+(\w+)', stripped)
         if m and depth == 1:
             cls = m.group(1)
             depth += line.count('{') - line.count('}')
@@ -393,14 +543,18 @@ def member_map(path):
             text, term, decl_end = statement(i)
             is_type = re.search(r'\b(class|struct|interface|enum|record)\s+\w',
                                 text) is not None
-            # A METHOD IS A '(' IN THE DECLARATOR -- before any '='. Testing
-            # for a '(' anywhere in the statement is the original bug wearing
-            # a new hat: `... FakeGameBridge bridge = new FakeGameBridge()`
-            # has one, in its INITIALISER, and reads as a method declaration.
-            is_method = (not is_type) and '(' in text.split('=')[0]
+            # A METHOD'S DECLARATOR ENDS IN ')'. Asking instead whether it
+            # CONTAINS a '(' has now been wrong twice: once in an initialiser
+            # (`... FakeGameBridge bridge = new FakeGameBridge()`) and once in
+            # a value tuple (`public List<(int PeerId, byte[] Frame)> Sent`).
+            # Where the parameter list ends is the shape that separates them.
+            declarator = CTOR_INIT.sub('', declarator_of(text))
+            tail = WHERE.sub('', declarator).rstrip()
+            pp = param_paren(declarator)
+            is_method = (not is_type) and tail.endswith(')') and pp is not None
 
             if is_method:
-                name = re.findall(r'(\w+)\s*(?:<[^<>]*>)?\s*\(', text)[0]
+                name = name_before(declarator, pp) or f"member_line_{i}"
                 end = (brace_block(decl_end) if term == '{'
                        else semicolon_after(decl_end) if term == '=>'
                        else decl_end)
@@ -414,12 +568,43 @@ def member_map(path):
                 # instead picks a word out of the initialiser: `FakeGameBridge`
                 # for `... FakeGameBridge bridge = new FakeGameBridge()`, and
                 # `null` for `private HostSession host = null!`.
-                declarator = text.split('=')[0]
                 ids = re.findall(r'\b(\w+)\b', declarator)
                 name = ids[-1] if ids else f"field_line_{i}"
-                end = (decl_end if term == ';'
-                       else semicolon_after(brace_block(decl_end))
-                       if term == '{' else semicolon_after(decl_end))
+                if term == ';':
+                    end = decl_end
+                elif term == '{':
+                    # A '{' after a declarator is one of TWO things, and they
+                    # end differently. `int[] X = { 1, 2 };` is an INITIALISER
+                    # and the statement runs to the ';' after the brace block.
+                    # `public int X { get { ... } }` is an ACCESSOR LIST and
+                    # the member ends AT the closing brace -- there is no ';'.
+                    # Reading to the next ';' regardless is how ClientSession.cs
+                    # lost `LobbyParticipantCount`: the accessor block of
+                    # LobbyReadyCount closes on its own line, so the hunt for a
+                    # ';' ran two lines on and ate the whole next member, which
+                    # then appeared in NO member map row at all. Nothing else in
+                    # the kit can see that -- partition.py is satisfied (the
+                    # line IS claimed), the decompile and doc XML are identical
+                    # (the member still exists), and only the GROUPING is wrong,
+                    # which is the one axis no oracle covers.
+                    # The discriminator is the '=': an initialiser has one in
+                    # the declarator, an accessor list does not.
+                    close = brace_block(decl_end)
+                    # WHAT FOLLOWS THE CLOSING BRACE decides, and it must be
+                    # read from AFTER that brace. `{ get; }` carries a ';' of
+                    # its own, so searching the closing line from its start
+                    # finds the accessor's semicolon and stops one line short
+                    # of a wrapped initialiser -- which leaves that line
+                    # assigned to no part at all.
+                    #   `int[] X = { 1, 2 };`      -> `};`, done at the brace
+                    #   `public T X { get; }`      -> nothing after, done
+                    #   `public T X { get; } = e;` -> `= e;`, done at the brace
+                    #   `public T X { get; } =`    -> run on to the ';'
+                    rest = src[close - 1].rsplit('}', 1)[-1]
+                    end = close if (';' in rest or '=' not in rest) \
+                        else semicolon_after(close + 1)
+                else:
+                    end = semicolon_after(decl_end)
             members.append([cls, name, i, end])
             for q in range(i, end + 1):
                 depth += src[q - 1].count('{') - src[q - 1].count('}')

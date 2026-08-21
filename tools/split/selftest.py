@@ -126,6 +126,90 @@ namespace Demo
 '''
 
 
+# Written the way REAL source is written, not the shortest thing that parses.
+# A control case that cannot reach the shape it guards is not a control: the
+# ownership suite's positive case put both calls on one line for years and was
+# structurally unable to fail for the defect it was meant to catch.
+SHAPE_SAMPLE = '''using System;
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public sealed class Shapes : Widget, IThing
+    {
+        private readonly List<int> items = new List<int>();
+
+        private static readonly string[] Names =
+        {
+            "a",
+            "b",
+        };
+
+        public int Count
+        {
+            get
+            {
+                var n = 0;
+                foreach (var i in items)
+                {
+                    n++;
+                }
+                return n;
+            }
+        }
+
+        public int Doubled => Count * 2;
+
+        public List<(int Turn, string Name)> Played { get; } =
+            new List<(int, string)>();
+
+        public static (int Count, string Digest) Compute(IEnumerable<string> keys)
+        {
+            return (0, "x");
+        }
+
+        public void Clamp(int lo = 0)
+        {
+            items.Add(lo);
+        }
+
+        public Shapes(string name)
+            : base(name)
+        {
+        }
+    }
+}
+'''
+
+
+# Two types, the second a STRUCT declared after a class, and the class written
+# `sealed partial` -- the order the kit's own output uses. Both shapes defeated
+# the type matcher, and DestructionPlayback.cs (next on the split queue) has
+# five types of three kinds.
+KIND_SAMPLE = '''using System;
+
+namespace Demo
+{
+    public sealed partial class Holder
+    {
+        public int Kept { get; }
+
+        public bool Big => Kept > 10;
+    }
+
+    public readonly struct Thing
+    {
+        public Thing(int a)
+        {
+            A = a;
+        }
+
+        public int A { get; }
+    }
+}
+'''
+
+
 def spec_for(tmp, members, synthetic, parts, forward_gaps=None):
     return {
         "root": tmp,
@@ -330,6 +414,24 @@ def main():
           out[:300])
     check("...and on no other part, so nothing is concatenated",
           "///" not in sec, sec[:200])
+    check("separates the part header from that /// with a blank line, so the "
+          "header does not read as commentary on it (on ClientSession.cs the "
+          "/// immediately below belongs to an ENUM, not to the class)",
+          rc == 0 and "// primary\n\n    /// <summary>" in prim,
+          repr(prim[:200]))
+
+    with open(doc_src, "w") as fh:       # writeparts overwrote it above
+        fh.write(DOC_SAMPLE)
+    nh = {"root": tmp, "source": "DocTests.cs", "outdir": ".",
+          "namespace": "Demo", "members": DOC_MEMBERS, "synthetic": ONE,
+          "forward_gaps": {}, "parts": {
+              "primary": {**DOC_PARTS["primary"], "header": ""},
+              "second": {**DOC_PARTS["second"], "header": ""}}}
+    rc, out = run("writeparts.py", write_spec(tmp, nh, "doc_nohdr.json"))
+    nh_sec = open(os.path.join(tmp, "DocTests.Second.cs")).read()
+    check("an ABSENT header emits nothing, rather than a bare `//` line the "
+          "original never had and totalcontent then reports as GAINED",
+          rc == 0 and "\n    //\n" not in nh_sec, repr(nh_sec[:200]))
 
     print("overloads (a bare NAME cannot address two members that share one -- "
           "every file left on the split queue has at least one)")
@@ -396,6 +498,214 @@ def main():
     body = open(os.path.join(tmp, "StTests.cs")).read()
     check("writes the class with the modifiers the source actually had",
           rc == 0 and "public static partial class OvTests" in body, out[:400])
+
+    print("declarator shapes (ClientSession.cs: an ACCESSOR LIST is not an "
+          "initialiser, and a VALUE TUPLE is not a parameter list)")
+    sh_src = os.path.join(tmp, "Shapes.cs")
+    with open(sh_src, "w") as fh:
+        fh.write(SHAPE_SAMPLE)
+    SH_LINES = SHAPE_SAMPLE.split("\n")
+    try:
+        shm = member_map(sh_src)
+    except Exception as exc:            # the pre-fix tool DIED on this shape
+        shm = []
+        check("does not crash on a member whose TYPE contains a tuple "
+              "(member_map raised on Fakes.cs, where no identifier precedes "
+              "the tuple's paren)", False, f"{type(exc).__name__}: {exc}")
+    shn = {m[1]: m for m in shm}
+    if shm:
+        check("does not crash on a member whose TYPE contains a tuple "
+              "(member_map raised on Fakes.cs, where no identifier precedes "
+              "the tuple's paren)", True)
+    check("a block-bodied property ENDS AT ITS CLOSING BRACE -- reading on to "
+          "the next ';' is how ClientSession.cs lost a whole member",
+          "Count" in shn
+          and SH_LINES[shn["Count"][3] - 1].strip() == "}",
+          str(shn.get("Count")) + " last line=" +
+          repr(SH_LINES[shn["Count"][3] - 1] if "Count" in shn else None))
+    check("...so the member BELOW it is still found, instead of being "
+          "swallowed and appearing in no row at all "
+          "(ClientSession.LobbyParticipantCount)",
+          "Doubled" in shn, str(sorted(shn)))
+    # MUST REACH THE BRACE BRANCH. `List<int> items = new List<int>();`
+    # terminates on a ';' and never enters it at all, so it was no control for
+    # this at all -- the same defect as the ownership suite's two-calls-on-one-
+    # line case. A collection initialiser is the shape that actually collides
+    # with an accessor list.
+    check("an INITIALISER brace still runs past its '}' to the ';' -- the "
+          "discriminator is the '=', and breaking it is the opposite defect",
+          "Names" in shn
+          and SH_LINES[shn["Names"][3] - 1].rstrip().endswith("};"),
+          str(shn.get("Names")))
+    check("a tuple-TYPED property is a property, named for its declarator",
+          "Played" in shn, str(sorted(shn)))
+    check("a tuple-RETURNING method is named for the method, not for the "
+          "modifier before the tuple (AssetPoolDigest.Compute read as `static` "
+          "and swallowed 60 lines)",
+          "Compute" in shn and "static" not in shn, str(sorted(shn)))
+    check("a constructor with a `: base(...)` initialiser is named for the "
+          "class, not for `base` (PbjProtocolException)",
+          "Shapes" in shn and "base" not in shn, str(sorted(shn)))
+    check("a DEFAULT PARAMETER VALUE's '=' does not truncate the declarator "
+          "into something ending in an identifier, which would read as a field",
+          "Clamp" in shn and shn["Clamp"][3] > shn["Clamp"][2],
+          str(shn.get("Clamp")))
+
+    print("base list (a partial class names its bases on ONE part, and the "
+          "wrapper generator emitted them on NONE)")
+    SH_MEMBERS = {m[1]: "primary" for m in shm}
+    first_start = min(m[2] for m in shm)
+    last_end = max(m[3] for m in shm)
+    SH_SYNTH = [{"lines": [1, first_start - 1], "part": "primary",
+                 "why": "usings + namespace + class declaration"},
+                {"lines": [last_end + 1, -1], "part": "primary",
+                 "why": "closing braces"}]
+
+    def sh_spec(parts, name):
+        return write_spec(tmp, {
+            "root": tmp, "source": "Shapes.cs", "outdir": ".",
+            "namespace": "Demo", "members": SH_MEMBERS, "synthetic": SH_SYNTH,
+            "forward_gaps": {}, "parts": parts}, name)
+
+    def sh_parts(**extra):
+        p = {"primary": {"file": "Shapes.cs", "class": "Shapes",
+                         "partial": True, "modifiers": "public sealed",
+                         "usings": ["System", "System.Collections.Generic"],
+                         "header": "primary"}}
+        p["primary"].update(extra)
+        return p
+
+    rc, out = run("partition.py", sh_spec(sh_parts(), "sh_nobase.json"))
+    check("REFUSES a spec with no part carrying the base list, rather than "
+          "writing parts that together implement nothing",
+          rc != 0 and "no part carries it" in out, out[:400])
+
+    rc, out = run("partition.py",
+                  sh_spec(sh_parts(bases="IThing"), "sh_wrongbase.json"))
+    check("REFUSES a base list that does not match the source's own text -- a "
+          "retyped interface list is exactly what this kit exists to prevent",
+          rc != 0 and "but the source declares" in out, out[:400])
+
+    two = sh_parts(bases="Widget, IThing")
+    two["second"] = {"file": "Shapes.Second.cs", "class": "Shapes",
+                     "partial": True, "modifiers": "public sealed",
+                     "usings": [], "header": "second", "bases": "Widget, IThing"}
+    rc, out = run("partition.py", sh_spec(two, "sh_twobase.json"))
+    check("REFUSES two parts claiming the base list (CS0263, but named)",
+          rc != 0 and "may name its bases once" in out, out[:400])
+
+    rc, out = run("writeparts.py",
+                  sh_spec(sh_parts(bases="Widget, IThing"), "sh_ok.json"))
+    sh_body = open(os.path.join(tmp, "Shapes.cs")).read()
+    check("writes the base list verbatim on the part that claims it",
+          rc == 0 and
+          "public sealed partial class Shapes : Widget, IThing" in sh_body,
+          out[:400] + sh_body[:300])
+
+    print("...and the must-ACCEPT control: a class with NO base list is not "
+          "required to declare one")
+    nb_src = os.path.join(tmp, "NoBase.cs")
+    with open(nb_src, "w") as fh:
+        fh.write(SHAPE_SAMPLE.replace("class Shapes : Widget, IThing",
+                                      "class Shapes"))
+    nb_parts = {"primary": {"file": "NoBase.cs", "class": "Shapes",
+                            "partial": True, "modifiers": "public sealed",
+                            "usings": ["System"], "header": "primary"}}
+    nb = write_spec(tmp, {
+        "root": tmp, "source": "NoBase.cs", "outdir": ".", "namespace": "Demo",
+        "members": SH_MEMBERS, "synthetic": SH_SYNTH, "forward_gaps": {},
+        "parts": nb_parts}, "nb_ok.json")
+    rc, out = run("partition.py", nb)
+    check("accepts a baseless class with no \"bases\" key, so the guard is "
+          "not simply always-on", rc == 0 and "partition OK" in out, out[:400])
+
+    nb_parts["primary"]["bases"] = "IThing"
+    rc, out = run("partition.py", write_spec(tmp, {
+        "root": tmp, "source": "NoBase.cs", "outdir": ".", "namespace": "Demo",
+        "members": SH_MEMBERS, "synthetic": SH_SYNTH, "forward_gaps": {},
+        "parts": nb_parts}, "nb_bad.json"))
+    check("...and REFUSES a \"bases\" invented for a class that has none",
+          rc != 0 and "no base list" in out, out[:400])
+
+    print("type kinds (a struct rendered as a class is a value type turned "
+          "into a reference type, and no oracle here reports it)")
+    kind_src = os.path.join(tmp, "Kinds.cs")
+    with open(kind_src, "w") as fh:
+        fh.write(KIND_SAMPLE)
+    km = member_map(kind_src)
+    kowner = {(c, n) for c, n, _, _ in km}
+    check("attributes a STRUCT's members to the struct, not to the class "
+          "declared above it -- Keyframes.cs reported JointPose's three "
+          "members as UnitTrack's, which is what the Class.Name key is for",
+          ("Thing", "A") in kowner and ("Holder", "A") not in kowner,
+          str(sorted(kowner, key=str)))
+    check("...and reads `sealed partial class`, whose modifiers are in the "
+          "order this kit's OWN output writes them; the matcher wanted "
+          "`partial sealed` and attributed every member to None",
+          ("Holder", "Kept") in kowner and (None, "Kept") not in kowner,
+          str(sorted(kowner, key=str)))
+
+    # ONE type per source for the spec-level cases: the stale-plan guard
+    # (correctly) demands that a plan name every member the map finds, and a
+    # two-type file would need both types' members in one plan.
+    ONE_TYPE = '''using System;
+
+namespace Demo
+{
+    public sealed partial class Holder
+    {
+        public int Kept { get; }
+
+        public bool Big => Kept > 10;
+    }
+}
+'''
+    kind_members = {"Kept": "primary", "Big": "primary"}
+    KIND_SYNTH = [{"lines": [1, 6], "part": "primary", "why": "wrapper"},
+                  {"lines": [10, -1], "part": "primary", "why": "closers"}]
+
+    def one_type(text, fname, parts, name):
+        with open(os.path.join(tmp, fname), "w") as fh:
+            fh.write(text)
+        return write_spec(tmp, {
+            "root": tmp, "source": fname, "outdir": ".", "namespace": "Demo",
+            "members": kind_members, "synthetic": KIND_SYNTH,
+            "forward_gaps": {}, "parts": parts}, name)
+
+    def kparts(fname, **extra):
+        p = {"primary": {"file": fname, "class": "Holder", "partial": True,
+                         "modifiers": "public sealed", "usings": ["System"],
+                         "header": "h"}}
+        p["primary"].update(extra)
+        return p
+
+    rc, out = run("partition.py", one_type(
+        ONE_TYPE, "K1.cs", kparts("K1.cs", kind="struct"), "kind_bad.json"))
+    check("REFUSES a part that would emit a class as a struct",
+          rc != 0 and "but the source declares it a class" in out, out[:400])
+
+    rc, out = run("partition.py", one_type(
+        ONE_TYPE, "K2.cs", kparts("K2.cs"), "kind_ok.json"))
+    check("accepts a class part with no \"kind\" key, so the guard is not "
+          "simply always-on", rc == 0 and "partition OK" in out, out[:400])
+
+    STRUCT_TYPE = ONE_TYPE.replace("public sealed partial class Holder",
+                                   "public readonly struct Holder")
+    rc, out = run("partition.py", one_type(
+        STRUCT_TYPE, "K3.cs", kparts("K3.cs", modifiers="public readonly"),
+        "st_bad.json"))
+    check("REFUSES a part that would emit a STRUCT as a class -- the default, "
+          "and so the one that was silently happening",
+          rc != 0 and "but the source declares it a struct" in out, out[:400])
+
+    rc, out = run("writeparts.py", one_type(
+        STRUCT_TYPE, "K4.cs",
+        kparts("K4.cs", modifiers="public readonly", kind="struct"),
+        "st_ok.json"))
+    st2_body = open(os.path.join(tmp, "K4.cs")).read()
+    check("writes `public readonly partial struct`, the kind the source had",
+          rc == 0 and "public readonly partial struct Holder" in st2_body,
+          out[:400] + st2_body[:200])
 
     print("doc xml (the compiler emits <member> in SOURCE order, so a split "
           "reorders the whole file and a line diff is pure noise)")

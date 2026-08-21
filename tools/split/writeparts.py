@@ -34,13 +34,23 @@ def render(spec, part):
     cfg = spec.parts[part]
     out = [f"using {u};" for u in cfg.get("usings", [])]
     out += ["", f"namespace {spec.namespace}", "{"]
-    for line in cfg.get("header", "").rstrip("\n").split("\n"):
-        out.append(("    // " + line).rstrip())
+    # An ABSENT header emits nothing. Splitting the empty string still yields
+    # one element, so the old loop wrote a bare `    //` -- a line the original
+    # never had, which totalcontent.py then reports as GAINED.
+    header = cfg.get("header", "").rstrip("\n")
+    if header:
+        for line in header.split("\n"):
+            out.append(("    // " + line).rstrip())
     # The class-level /// doc, kept verbatim from the original bytes on the
     # one part the spec names. Not retyped, and not regenerated: see
     # splitspec.py on why exactly one part may carry it.
     doc = getattr(spec, "class_doc", None)
     if doc and doc["part"] == part:
+        # A blank line between the two. Without it the part header butts
+        # straight against the /// below and reads as commentary on it --
+        # on ClientSession.cs that /// belongs to an enum, not to the class.
+        if header:
+            out.append("")
         a, b = doc["lines"]
         out += spec.lines[a - 1:b]
     kw = "partial " if cfg.get("partial") else ""
@@ -48,7 +58,19 @@ def render(spec, part):
     # `public static class NetLog` into `public partial class NetLog` -- a
     # different type, and one that no longer refuses instantiation. splitspec
     # checks this against the original declaration rather than trusting it.
-    out.append(f"    {cfg.get('modifiers', 'public')} {kw}class {cfg['class']}")
+    # THE BASE LIST BELONGS TO EXACTLY ONE PART. A partial class may name its
+    # bases and interfaces on one declaration only, and the wrapper generator
+    # emitted none at all -- so splitting `class ClientSession : IPbjSession`
+    # produced eleven parts that together implement nothing. splitspec.py
+    # checks the value against the source's own declaration.
+    bases = cfg.get("bases")
+    suffix = f" : {bases}" if bases else ""
+    # AND NOT ALWAYS A CLASS. `class` was hardcoded here too, so a
+    # `public readonly struct` came out `public partial class` -- a value type
+    # rendered as a reference type, which no oracle in this kit reports.
+    # splitspec refuses a kind that disagrees with the source.
+    out.append(f"    {cfg.get('modifiers', 'public')} {kw}"
+               f"{cfg.get('kind', 'class')} {cfg['class']}{suffix}")
     out.append("    {")
     body = []
     for a, b in spec.blocks[part]:
