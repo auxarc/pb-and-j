@@ -52,11 +52,27 @@ the incident; read them before trusting a tool.
    It is also **blind to fields and constants** — it counts an identifier
    followed by a call-paren — and it says so rather than printing a bare zero.
    Tally those by hand.
+
+   **A ZERO IS A CLAIM ABOUT THE SHAPE, NOT ABOUT THE CODE.** On NetGlue.cs it
+   reported `Connect: 0 call sites` when the file plainly calls it twice:
+   `return Connect(...)` has nothing but a keyword before the name, so it
+   matched the declaration prefix and was subtracted as its own declaration.
+   That is the *third* generation of one defect — bare statements (#45),
+   wrapped continuation lines (#46), now statement keywords — and every fix
+   only narrows the character class. The tool prints its own alternative
+   hypothesis next to a zero for exactly this reason. Grep it.
 6. **Cut.** `writeparts.py <spec>` slices bodies out of the original bytes.
    Nothing is retyped. It refuses to run on an unproven partition.
 7. **Run the oracles**, and prove each one BITES before believing it:
    - `listtests.sh` — the test-name SET, for a test-file split;
-   - `ilcanon.py` — the decompile, for "the compiled code is unchanged";
+   - `ilcanon.py` — the decompile, for "the compiled code is unchanged".
+     Decompile BOTH dlls **in place**, from `bin/Release/net472`: ilspycmd
+     resolves neighbouring assemblies and the pdb out of that directory, so a
+     dll copied to a scratchpad decompiles differently — different variable
+     names, extra casts, `//IL_` notes — and the diff fills with changes to
+     files you never touched. It also refuses under MIN_RECORDS rather than
+     report a clean empty comparison, which is what caught its own failure to
+     descend into an attributed type;
    - `docxml.py` — the emitted doc XML, for "every `///` survived and still
      says the same thing". Compare it BY MEMBER: the compiler emits entries in
      source order, so a split reorders the whole file and `diff` shows ~150
@@ -68,6 +84,9 @@ the incident; read them before trusting a tool.
    four to six false claims each time. An enumeration is a completeness claim;
    a count ages the moment the plan changes; a rationale must be READ, not
    recalled.
+9. **Record the decision.** `make record-split-grouping`, and commit the spec
+   to `specs/`. See "After the split" below — everything above compares a
+   before to an after, and once the split lands there is no before.
 
 ## The spec
 
@@ -126,7 +145,7 @@ Five keys exist because leaving them out changed the code:
 make split-selftest
 ```
 
-74 cases: what each tool must REFUSE, and the sound input it must still
+90 cases: what each tool must REFUSE, and the sound input it must still
 accept. Each names a defect that actually bit, or the control proving the
 refusal is not simply always-on. The suite has been mutation-checked —
 breaking any one guard makes it fail — because a bite test that cannot fail is
@@ -134,7 +153,9 @@ this project's most repeated mistake.
 
 ## What these tools cannot tell you
 
-- **Grouping.** Step 5 is a substitute, not a proof.
+- **Grouping**, at the moment of the split. Step 5 is a substitute, not a
+  proof. What `split-grouping.lock` adds is the *next* day: it cannot tell you
+  the placement was right, only that nobody has quietly changed it since.
 - **Which overload.** `ownership.py` counts by NAME, so two overloads of one
   name share a single tally. splitspec can address them separately; the
   ownership check cannot tell them apart, and a helper with overloads needs
@@ -144,24 +165,63 @@ this project's most repeated mistake.
   change — is invisible. Verify it by reading, every time.
 - **Whether a comment is still true** where it landed.
 
-## Not yet supported: a file that is SEVERAL TYPES
+## After the split
 
-Everything above assumes one type split into partial parts. `DestructionPlayback.cs`
-— next on the source queue — is **five top-level types in one file**
-(`DestructionDrive` and `UnitWreckDrive` structs, `DestructionUpdate`,
-`DestructionRamp` static, `DestructionState` 508 lines), and the natural split
-is one type per file, not partials.
+Every oracle in step 7 compares a before to an after. Once the split is
+committed there is no before any more, and **nothing notices a member drifting
+into the wrong part file.** What drifts is rarely an existing member moving; it
+is a NEW member landing in whichever part the author had open — a placement
+decision made by accident, when deciding placement on purpose is the whole
+value of the split.
 
-The `"kind"` key above makes the struct half of that possible. The remaining
-blocker is **`emit: "class_doc"`, which is capped at one block per SPEC**. That
-cap exists because two parts carrying the *same* class's `///` makes the
-compiler concatenate them — a real defect, seen on the SelfTest split. Five
-different types each carrying their own `///` is not that case at all, so the
-cap wants to be **per class, not per spec**. Fix that guard before attempting
-a multi-type split; do not work around it by dropping a type's doc.
+`split-grouping.lock` at the repo root records which part file every member of
+every split family lives in. `make check-split-grouping` runs from `dist` and
+refuses a build that departs from it; `make record-split-grouping` re-records
+once you have DECIDED the placement. It is the same shape as
+`wire-surface.lock`, for the same reason: a change that must be deliberate
+should have to be written down.
 
-The alternative that needs no kit change: leave all five types in
-`DestructionPlayback.cs` and split only `DestructionState` into partials,
-carrying the other four as one `class_doc` block. That is what was done for
-`ClientSession.cs`'s enum, and it works — but it leaves the file named for a
-subject rather than a type, so decide which shape is wanted first.
+A family is `Foo.cs` plus its `Foo.*.cs` siblings — the convention every split
+here has followed, since the primary part keeps the original name. Because that
+rule is how families are FOUND, the lock also records the family list: a split
+whose primary got renamed would otherwise stop being looked at entirely and take
+every one of its members with it, silently, since each member simply stops
+appearing on both sides at once.
+
+Overloads are counted, not numbered — three `NetGlue.Host` in one part is one
+row with count 3. Line numbers would churn the lock on every unrelated edit and
+train everyone to re-record without reading, which is how a lock stops being
+evidence. One name CAN legitimately live in two parts: `HostSession.Reject` and
+`KeyframePlayer.Dress` are both split across two files on purpose.
+
+And **commit the spec** to `specs/`. Fourteen of the first fifteen were written
+to `/tmp` and lost; the lock records *that* a member sits somewhere, the spec
+records *why*.
+
+## A file that is SEVERAL TYPES
+
+Most of this assumes one type split into partial parts. A file that is several
+top-level types wants one type per file instead, and that now works: give each
+type its own part with its own `"class"`, `"kind"` and `"modifiers"`, and its
+own `emit: "class_doc"` block.
+
+**The `class_doc` cap is PER CLASS, and it used to be per spec.** The defect it
+guards is the compiler concatenating the `///` of every part of one partial
+class — which cannot happen across two different types, so the old unit refused
+a sound spec. Getting this right is not cosmetic: what sits above a type is not
+only its doc but its ATTRIBUTES, and the wrapper generator emits none of its
+own. `NetGlue.cs` is `NetGlue` plus two Harmony patch classes, each carrying
+`[HarmonyPatch(...)]`; without a block per class that attribute is dropped and
+the patch silently never applies — which **every oracle here passes**. It
+compiles, each part decompiles the same, the type is still present, and only
+the running game knows.
+
+`DestructionPlayback.cs` (688) is five top-level types — `DestructionDrive` and
+`UnitWreckDrive` structs, `DestructionUpdate`, `DestructionRamp` static,
+`DestructionState` 508 lines — and is the next candidate for this shape.
+
+The alternative that needs no per-type parts: leave the extra types where they
+are and split only the largest into partials, carrying the others as one
+`class_doc` block above one part's declaration. That is what was done for
+`ClientSession.cs`'s enum. It works, but it leaves the file named for a subject
+rather than a type, so decide which shape is wanted first.

@@ -268,18 +268,31 @@ class Spec:
                     f"{' '.join(want)}. Set \"modifiers\" on the part.")
 
     def _check_class_doc(self):
-        """At most one part may carry the class-level /// doc.
+        """At most one part PER CLASS may carry the class-level /// doc.
 
         The compiler concatenates the /// of every part of a partial class into
-        ONE type entry, so two parts carrying it produce a spliced summary that
-        reads as prose and is not. Caught on the SelfTest split by diffing the
-        emitted XML; asserted here so it cannot recur silently.
+        ONE type entry, so two parts of the SAME class carrying it produce a
+        spliced summary that reads as prose and is not. Caught on the SelfTest
+        split by diffing the emitted XML; asserted here so it cannot recur
+        silently.
 
-        HONEST SCOPE: two class_doc entries almost always overlap on the same
-        lines, and the tiling would refuse them anyway as a duplicated line.
-        What this adds is the MESSAGE -- it runs before _tile, so the reader
-        sees "the compiler concatenates these" instead of "line 5 is claimed
-        twice", which does not point at the defect at all.
+        THE CAP WAS PER SPEC, AND THAT WAS THE WRONG UNIT. The defect it
+        guards is concatenation, and the compiler concatenates within one type
+        -- never across two. A file that is SEVERAL top-level types therefore
+        tripped a guard aimed at something that could not happen to it:
+        NetGlue.cs is NetGlue plus two Harmony patch classes, and each of those
+        carries `[HarmonyPatch(...)]` above its declaration. The wrapper
+        generator emits no attributes, so without a block per class the patch
+        attribute is simply DROPPED -- a patch that silently never applies,
+        which no oracle in this kit reports: it compiles, the decompile of each
+        part matches, and the type is still there. Keying by class is what the
+        invariant always meant.
+
+        HONEST SCOPE: two class_doc entries for one class almost always overlap
+        on the same lines, and the tiling would refuse them anyway as a
+        duplicated line. What this adds is the MESSAGE -- it runs before _tile,
+        so the reader sees "the compiler concatenates these" instead of "line 5
+        is claimed twice", which does not point at the defect at all.
         """
         docs = [syn for syn in self.raw.get("synthetic", [])
                 if syn.get("emit") == "class_doc"]
@@ -287,13 +300,20 @@ class Spec:
             if syn["part"] not in self.parts:
                 raise SystemExit(f"FATAL: class_doc assigned to undeclared "
                                  f"part {syn['part']!r}")
-        if len(docs) > 1:
-            where = ", ".join(sorted(d["part"] for d in docs))
-            raise SystemExit(
-                f"FATAL: {len(docs)} parts carry emit=class_doc ({where}). The "
-                f"compiler concatenates the /// of every part into one type "
-                f"entry, so this splices summaries together. Keep it on one.")
-        self.class_doc = docs[0] if docs else None
+        by_class = {}
+        for syn in docs:
+            by_class.setdefault(self.parts[syn["part"]]["class"], []).append(syn)
+        for name, group in sorted(by_class.items()):
+            if len(group) > 1:
+                where = ", ".join(sorted(d["part"] for d in group))
+                raise SystemExit(
+                    f"FATAL: {len(group)} parts of class {name} carry "
+                    f"emit=class_doc ({where}). The compiler concatenates the "
+                    f"/// of every part of one class into a single type entry, "
+                    f"so this splices summaries together. Keep it on one.")
+        self.class_docs = {syn["part"]: syn for syn in docs}
+        # Kept for the single-class specs that predate the per-class cap.
+        self.class_doc = docs[0] if len(docs) == 1 else None
 
     def _tile(self):
         self.owner = {}

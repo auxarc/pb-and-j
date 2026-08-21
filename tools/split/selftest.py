@@ -420,6 +420,60 @@ def main():
           rc == 0 and "// primary\n\n    /// <summary>" in prim,
           repr(prim[:200]))
 
+    # THE CAP WAS PER SPEC, AND THE UNIT WAS WRONG. The compiler concatenates
+    # within ONE type, never across two, so a file that is SEVERAL top-level
+    # types was refused for a defect that cannot happen to it. What sits above
+    # a type is not only its /// -- it is its ATTRIBUTES, and the wrapper
+    # generator emits none. On NetGlue.cs that is `[HarmonyPatch(...)]` on two
+    # Harmony classes: drop it and the patch silently never applies, which
+    # every oracle in this kit passes (it compiles, each part decompiles the
+    # same, the type is still there).
+    multi_src = os.path.join(tmp, "MultiTests.cs")
+    MULTI = ('using Xunit;\n\nnamespace Demo\n{\n'
+             '    /// <summary>The first type.</summary>\n'
+             '    public class Alpha\n    {\n'
+             '        public void A_Works() { }\n    }\n\n'
+             '    [Trait("kind", "beta")]\n'
+             '    public class Beta\n    {\n'
+             '        public void B_Works() { }\n    }\n}\n')
+    with open(multi_src, "w") as fh:
+        fh.write(MULTI)
+    MULTI_PARTS = {
+        "alpha": {"file": "MultiTests.cs", "class": "Alpha", "partial": True,
+                  "usings": ["Xunit"], "header": "alpha"},
+        "beta": {"file": "MultiTests.Beta.cs", "class": "Beta",
+                 "partial": True, "usings": ["Xunit"], "header": "beta"},
+    }
+    multi = write_spec(tmp, {
+        "root": tmp, "source": "MultiTests.cs", "outdir": ".",
+        "namespace": "Demo", "members": {"A_Works": "alpha",
+                                         "B_Works": "beta"},
+        "synthetic": [
+            {"lines": [1, 4], "part": "alpha", "why": "usings + namespace"},
+            {"lines": [5, 5], "part": "alpha", "emit": "class_doc",
+             "why": "Alpha's own doc"},
+            {"lines": [6, 7], "part": "alpha", "why": "class decl"},
+            {"lines": [9, 10], "part": "beta", "why": "gap"},
+            {"lines": [11, 11], "part": "beta", "emit": "class_doc",
+             "why": "Beta's ATTRIBUTE -- dropped without this"},
+            {"lines": [12, 13], "part": "beta", "why": "class decl"},
+            {"lines": [15, -1], "part": "alpha", "why": "closing braces"}],
+        "forward_gaps": {}, "parts": MULTI_PARTS}, "multi.json")
+    rc, out = run("writeparts.py", multi)
+    check("ACCEPTS one class_doc block per CLASS in a several-type file, "
+          "which the per-spec cap refused for a concatenation that cannot "
+          "happen across two types", rc == 0, out[:400])
+    if rc == 0:
+        beta = open(os.path.join(tmp, "MultiTests.Beta.cs")).read()
+        alpha = open(os.path.join(tmp, "MultiTests.cs")).read()
+        check("...and carries the second type's ATTRIBUTE onto its part, "
+              "which the wrapper generator would otherwise drop silently",
+              '[Trait("kind", "beta")]' in beta
+              and beta.index("[Trait") < beta.index("class Beta"), beta[:300])
+        check("...while each type keeps only its OWN block",
+              "/// <summary>The first type." in alpha
+              and "[Trait" not in alpha and "///" not in beta, alpha[:300])
+
     with open(doc_src, "w") as fh:       # writeparts overwrote it above
         fh.write(DOC_SAMPLE)
     nh = {"root": tmp, "source": "DocTests.cs", "outdir": ".",
@@ -859,6 +913,45 @@ namespace Demo
           "(Dictionary<string, int>) is still a declaration",
           "Lookup: 0 call sites" in out or "Lookup: 0 " in out, out[:400])
 
+    # THE SAME GUARD, WRONG A THIRD TIME -- and none of the four cases above
+    # could reach it, because not one of them puts a call after `return`. The
+    # prefix `        return ` is word characters and whitespace, so it matched
+    # the declaration class; the comma guard is no help because the comma sits
+    # INSIDE the parentheses, after the match. On NetGlue.cs both of Connect's
+    # call sites vanished and the tool printed a confident zero.
+    ret = os.path.join(tmp, "ret.cs")
+    with open(ret, "w") as fh:
+        fh.write("class F\n{\n"
+                 "    private static string Target(int a, int b)\n"
+                 "    {\n        return \"x\";\n    }\n\n"
+                 "    private static string Caller()\n    {\n"
+                 "        if (a) { }\n"
+                 "        return Target(1, 2);\n    }\n\n"
+                 "    private static string Other()\n    {\n"
+                 "        return Target(3, 4) + Target(5, 6);\n    }\n}\n")
+    rc, out = run("ownership.py", "Target", ret)
+    check("counts a call after `return`, which has only a keyword before it "
+          "and so once looked exactly like a declaration -- and counts BOTH "
+          "of two such calls on one line",
+          "Target: 3 call sites" in out, out[:400])
+
+    # THE CONTROL THE FIX COULD BREAK. A statement-word denylist that is too
+    # eager stops subtracting real declarations, which inflates a count instead
+    # of hiding one -- the same defect pointing the other way. `new` is a
+    # modifier as well as an operator, so it must NOT disqualify.
+    decl = os.path.join(tmp, "decl.cs")
+    with open(decl, "w") as fh:
+        fh.write("class G\n{\n"
+                 "    public new string Target(int a)\n"
+                 "    {\n        return \"x\";\n    }\n\n"
+                 "    private static Dictionary<string, int> Lookup(int i)\n"
+                 "    {\n        return null;\n    }\n}\n")
+    rc, out = run("ownership.py", "Target,Lookup", decl)
+    check("still SUBTRACTS a real declaration whose own body returns on the "
+          "same line, and one modified by `new`",
+          "Target: 0 call sites" in out and "Lookup: 0 call sites" in out,
+          out[:400])
+
     verbatim = os.path.join(tmp, "verbatim.cs")
     with open(verbatim, "w") as fh:
         fh.write('class C { string s = @"Target(1)"; }\n')
@@ -896,6 +989,137 @@ namespace Demo
     rc, out = run("ilcanon.py", tiny)
     check("REFUSES a decompile it barely parsed, rather than reporting a "
           "clean empty comparison", rc != 0 and "VACUOUS" in out, out[:300])
+
+    print("grouping (the one property no other oracle here can see, and the "
+          "only one still watching after the split lands)")
+    groot = os.path.join(tmp, "groot")
+    gdir = os.path.join(groot, "src", "Fam")
+    odir = os.path.join(groot, "src", "Other")
+    os.makedirs(gdir)
+    os.makedirs(odir)
+
+    def gwrite(d, name, cls, body):
+        with open(os.path.join(d, name), "w") as fh:
+            fh.write("namespace Demo\n{\n    public partial class " + cls +
+                     "\n    {\n" + body + "    }\n}\n")
+
+    def fam(two, three, primary="        public void Alpha() { }\n"):
+        gwrite(gdir, "Fam.cs", "Fam", primary)
+        gwrite(gdir, "Fam.Two.cs", "Fam", two)
+        gwrite(gdir, "Fam.Three.cs", "Fam", three)
+
+    BETA = "        public void Beta() { }\n"
+    EPS = "        public void Epsilon() { }\n"
+    GAMMA = "        public void Gamma() { }\n"
+    BETA_I = "        public void Beta(int i) { }\n"
+
+    fam(BETA + EPS, GAMMA)
+    gwrite(odir, "Other.cs", "Other", "        public void Zeta() { }\n")
+    gwrite(odir, "Other.Bits.cs", "Other", "        public void Eta() { }\n")
+    # A decoy: a dotted name with no primary beside it is not a split family.
+    with open(os.path.join(gdir, "Loner.Part.cs"), "w") as fh:
+        fh.write("namespace Demo { public class Loner { public void D() { } } }\n")
+
+    glock = os.path.join(tmp, "g.lock")
+
+    def record():
+        rc, out = run("grouping.py", "--root", groot)
+        with open(glock, "w") as fh:
+            fh.write(out)
+        return rc, out
+
+    rc, out = record()
+    check("records a ledger for every family, and leaves a dotted file with "
+          "no primary beside it alone", rc == 0 and "families: 2" in out
+          and "Loner" not in out, out[:400])
+
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("ACCEPTS a tree that has not moved -- the control proving the "
+          "refusals below are not simply always-on",
+          rc == 0 and "split grouping OK" in out, out[:300])
+
+    # THE CASE THAT MATTERS MOST: two overloads of one name, deliberately in
+    # DIFFERENT part files. Keying the comparison by (directory, member)
+    # collapsed such a pair, dropped a row on each side and would report a move
+    # that never happened. Real instances: HostSession.Reject across
+    # Handshake.cs and Turn.cs, KeyframePlayer.Dress across Assets.cs and
+    # Sleep.cs -- both split on purpose, because their callers differ.
+    fam(BETA + EPS, GAMMA + BETA_I)
+    record()
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("ACCEPTS one name whose overloads live in two different parts, "
+          "which a comparison keyed by name alone silently collapsed",
+          rc == 0 and "split grouping OK" in out, out[:400])
+
+    # AND THE HALF THAT ACTUALLY BITES. The case above passes either way: a
+    # name-keyed comparison collapses BOTH sides identically, so an unchanged
+    # tree still matches and the defect hides. Collapsing drops a row, and a
+    # dropped row is a change that goes UNREPORTED -- so the test has to MOVE
+    # one of the two overloads and insist it is seen.
+    fam(BETA + EPS, GAMMA, primary="        public void Alpha() { }\n" + BETA_I)
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("REFUSES a move of ONE overload while its twin stays put, which a "
+          "name-keyed comparison could not see at all",
+          rc != 0 and "MOVED" in out and "Fam.Beta" in out, out[:400])
+    fam(BETA + EPS, GAMMA + BETA_I)
+
+    fam(BETA + EPS, GAMMA + BETA_I + "        public void Delta() { }\n")
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("REFUSES a NEW member, which is the drift that actually happens -- "
+          "a member landing in whichever part file was open",
+          rc != 0 and "NEW MEMBER" in out and "Fam.Delta" in out, out[:400])
+
+    fam(EPS, GAMMA + BETA_I, primary="        public void Alpha() { }\n" + BETA)
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("REFUSES a member that MOVED between two parts",
+          rc != 0 and "MOVED" in out and "Fam.Beta" in out, out[:400])
+
+    # A FAMILY THAT VANISHES IS THE DANGEROUS DIRECTION. Families are found by
+    # a naming rule, so renaming the primary stops the whole family being
+    # looked at -- silently, because every member disappears from both sides at
+    # once. The lock records the family list for exactly this. Note the OTHER
+    # family must survive, or the run refuses as vacuous before reporting it.
+    fam(BETA + EPS, GAMMA + BETA_I)
+    os.rename(os.path.join(odir, "Other.cs"),
+              os.path.join(odir, "OtherCore.cs"))
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("REFUSES a family whose primary was renamed, so it would otherwise "
+          "stop being discovered and take every member with it",
+          rc != 0 and "FAMILY GONE" in out, out[:400])
+    os.rename(os.path.join(odir, "OtherCore.cs"),
+              os.path.join(odir, "Other.cs"))
+
+    rc, out = run("grouping.py", "--root", os.path.join(tmp, "nothing-here"))
+    check("REFUSES a tree with no families at all rather than recording an "
+          "empty ledger", rc != 0 and "VACUOUS" in out, out[:300])
+
+    empty = os.path.join(tmp, "eroot", "src", "E")
+    os.makedirs(empty)
+    gwrite(empty, "E.cs", "E", "        public void One() { }\n")
+    gwrite(empty, "E.Blank.cs", "E", "")
+    rc, out = run("grouping.py", "--root", os.path.join(tmp, "eroot"))
+    check("REFUSES a part file the member map reads NOTHING from, rather than "
+          "recording a member's absence as its correct place",
+          rc != 0 and "VACUOUS" in out, out[:300])
+
+    import grouping as _g
+    check("the family rule proves itself on a canary before any recording",
+          _g.prove_discovery() is None)
+    real_fam = _g.families
+    try:
+        # A rule that finds the right NUMBER of families but the wrong ones --
+        # a blind spot rather than a blackout, which is the shape that would
+        # actually survive review.
+        _g.families = lambda root_dir=".": {("src/N", "Wrong"): ["Wrong.cs"]}
+        broke = False
+        try:
+            _g.prove_discovery()
+        except SystemExit:
+            broke = True
+        check("and that canary CATCHES a family rule gone blind, which would "
+              "record an empty ledger and check nothing forever", broke)
+    finally:
+        _g.families = real_fam
 
     shutil.rmtree(tmp)
     print(f"\nsplit kit selftest: {len(PASS)} passed, {len(FAIL)} failed")

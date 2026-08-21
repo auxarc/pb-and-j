@@ -17,8 +17,10 @@ expected to lose; totalcontent.py is where that is declared and checked.
 
 A synthetic block marked `"emit": "class_doc"` is the one exception to "the
 wrapper is regenerated": it is copied verbatim from the original bytes above
-that part's class declaration, because a class-level /// doc belongs to the
-type, not to the wrapper. splitspec.py refuses more than one.
+that part's class declaration, because what sits above a type -- its /// doc
+and its ATTRIBUTES -- belongs to the type, not to the wrapper. splitspec.py
+refuses more than one PER CLASS; a file that is several top-level types gets
+one block each, which is how `[HarmonyPatch(...)]` survives a split.
 """
 import filecmp
 import os
@@ -44,8 +46,8 @@ def render(spec, part):
     # The class-level /// doc, kept verbatim from the original bytes on the
     # one part the spec names. Not retyped, and not regenerated: see
     # splitspec.py on why exactly one part may carry it.
-    doc = getattr(spec, "class_doc", None)
-    if doc and doc["part"] == part:
+    doc = getattr(spec, "class_docs", {}).get(part)
+    if doc:
         # A blank line between the two. Without it the part header butts
         # straight against the /// below and reads as commentary on it --
         # on ClientSession.cs that /// belongs to an enum, not to the class.

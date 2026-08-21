@@ -93,6 +93,20 @@ def prove_stripper():
 
 DECL_PREFIX = re.compile(r'^[\w<>,\[\]\?\*\s]*$')
 
+# Reserved words that START or CONTINUE a statement or expression and can never
+# be a modifier or a type name. Their presence before the name proves the line
+# is doing something, not declaring something.
+#
+# Deliberately NOT here: `new`, `class`, `struct`, `record`, `delegate`,
+# `operator`. Each of those really can precede a declared name -- `public new
+# string Target(` is a declaration -- and listing them would break the
+# subtraction in the other direction, inflating a count instead of hiding one.
+STATEMENT_WORDS = frozenset("""
+return throw yield await case goto else do while if switch lock using fixed
+foreach for try catch finally checked unchecked is as base null true false
+break continue default typeof sizeof stackalloc when and or not
+""".split())
+
 
 def is_declaration(line, at):
     """Is the call-shape hit at offset `at` on this line a DECLARATION?
@@ -136,6 +150,26 @@ def is_declaration(line, at):
             break
         flat = collapsed
     if ',' in flat:
+        return False
+    # A STATEMENT KEYWORD MEANS A STATEMENT. Wrong a THIRD time, same guard,
+    # same root cause: `return` is identifier-shaped, so
+    #
+    #         return Connect(address, port, resuming: false);
+    #
+    # -- had a prefix of nothing but word characters and whitespace, matched
+    # the class, and was subtracted as a declaration OF Connect. The comma
+    # guard above cannot reach it: the comma is INSIDE the parentheses, after
+    # the match, and never appears in the prefix at all. On NetGlue.cs this hid
+    # BOTH of Connect's call sites and the tool printed a confident zero --
+    # caught only because that zero prints its own alternative hypothesis and
+    # the grep was run.
+    #
+    # `return Foo(...)` is one of the commonest shapes in any codebase, so this
+    # deflated every helper the kit has ever been asked about. The character
+    # class is still the wrong instrument -- see the module docstring -- but a
+    # declaration's prefix carries only modifiers and type names, and none of
+    # these words can be either.
+    if STATEMENT_WORDS.intersection(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', before)):
         return False
     return bool(DECL_PREFIX.match(before))
 

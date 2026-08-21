@@ -1,0 +1,387 @@
+{
+ "source": "src/PBAndJ.Mod/Net/NetGlue.cs",
+ "outdir": "src/PBAndJ.Mod/Net",
+ "namespace": "PBAndJ.Mod.Net",
+ "members": {
+  "DefaultPort": "primary",
+  "MaxPeers": "primary",
+  "MailboxCapacity": "primary",
+  "runtime": "primary",
+  "bridge": "primary",
+  "hostTransport": "primary",
+  "clientTransport": "primary",
+  "mainThreadId": "primary",
+  "killed": "primary",
+  "resumeToken": "primary",
+  "resumeSessionId": "primary",
+  "resumePeerId": "primary",
+  "lastAddress": "primary",
+  "lastPort": "primary",
+  "sessionPassphrase": "primary",
+  "lastCapture": "primary",
+  "lastCaptureTurn": "primary",
+  "UnityLog": "primary",
+  "HasSession": "primary",
+  "IsHost": "primary",
+  "Pump": "primary",
+  "Shutdown": "primary",
+  "NetGlue.Host@65": "connect",
+  "NetGlue.Host@67": "connect",
+  "NetGlue.Host@69": "connect",
+  "GameBuild": "connect",
+  "NetGlue.Join@171": "connect",
+  "NetGlue.Join@173": "connect",
+  "NetGlue.Join@175": "connect",
+  "Rejoin": "connect",
+  "Connect": "connect",
+  "LastRejection": "connect",
+  "HostName": "connect",
+  "ModVersion": "connect",
+  "NewSessionId": "connect",
+  "NewSessionSecret": "connect",
+  "RememberPlayed": "replay",
+  "ReplayLast": "replay",
+  "Sendable": "replay",
+  "NetStatus": "session",
+  "NetStop": "session",
+  "Ready": "session",
+  "Unready": "session",
+  "ScenarioPull": "session",
+  "Saves": "lobby",
+  "SaveAs": "lobby",
+  "SaveConvert": "lobby",
+  "LobbySelect": "lobby",
+  "Campaign": "lobby",
+  "LobbyView": "lobby",
+  "PostLocalLobbyReady": "lobby",
+  "PostLocalLobbyUnready": "lobby",
+  "PostLocalLobbySelect": "lobby",
+  "PostLoadFinished": "hooks",
+  "PostLocalCombatReady": "hooks",
+  "PostCombatLoadFinished": "hooks",
+  "PostLocalBasePosition": "hooks",
+  "PostLocalReady": "hooks",
+  "PostLocalTurnComplete": "hooks",
+  "NotifyExternalTurnAdvance": "hooks",
+  "RegisterConsoleCommands": "commands",
+  "AddFrom": "commands",
+  "Add": "commands",
+  "Patch_Heartbeat_Update.Postfix": "pumppatch",
+  "Patch_Heartbeat_OnApplicationQuit.Postfix": "quitpatch"
+ },
+ "synthetic": [
+  {
+   "lines": [
+    1,
+    16
+   ],
+   "part": "primary",
+   "why": "usings + namespace, regenerated per part"
+  },
+  {
+   "lines": [
+    17,
+    19
+   ],
+   "part": "primary",
+   "emit": "class_doc",
+   "why": "NetGlue's own header and [ExcludeFromCodeCoverage]"
+  },
+  {
+   "lines": [
+    20,
+    21
+   ],
+   "part": "primary",
+   "why": "class declaration"
+  },
+  {
+   "lines": [
+    62,
+    64
+   ],
+   "part": "connect",
+   "why": "DELETED: '--- console commands ---' headed one run that is now four parts"
+  },
+  {
+   "lines": [
+    619,
+    621
+   ],
+   "part": "primary",
+   "why": "DELETED: '--- hooks used by the execution patches ---' had drifted off its members"
+  },
+  {
+   "lines": [
+    889,
+    890
+   ],
+   "part": "primary",
+   "why": "NetGlue's closing brace"
+  },
+  {
+   "lines": [
+    891,
+    896
+   ],
+   "part": "pumppatch",
+   "emit": "class_doc",
+   "why": "the pump site's header and its [HarmonyPatch] -- load-bearing"
+  },
+  {
+   "lines": [
+    897,
+    898
+   ],
+   "part": "pumppatch",
+   "why": "class declaration"
+  },
+  {
+   "lines": [
+    946,
+    947
+   ],
+   "part": "pumppatch",
+   "why": "closing brace"
+  },
+  {
+   "lines": [
+    948,
+    949
+   ],
+   "part": "quitpatch",
+   "emit": "class_doc",
+   "why": "the quit patch's [HarmonyPatch] -- load-bearing"
+  },
+  {
+   "lines": [
+    950,
+    951
+   ],
+   "part": "quitpatch",
+   "why": "class declaration"
+  },
+  {
+   "lines": [
+    959,
+    -1
+   ],
+   "part": "quitpatch",
+   "why": "closing braces"
+  }
+ ],
+ "forward_gaps": {
+  "Saves": [
+   534,
+   544
+  ],
+  "Campaign": [
+   599,
+   601
+  ],
+  "Pump": [
+   747,
+   749
+  ]
+ },
+ "parts": {
+  "primary": {
+   "file": "NetGlue.cs",
+   "class": "NetGlue",
+   "partial": true,
+   "modifiers": "internal static",
+   "usings": [
+    "System",
+    "System.Collections.Generic",
+    "System.Diagnostics.CodeAnalysis",
+    "System.Net",
+    "Content.Code.Utility",
+    "System.Reflection",
+    "System.Threading",
+    "HarmonyLib",
+    "PBAndJ.Core.Net",
+    "PBAndJ.Net",
+    "PhantomBrigade",
+    "QFSW.QC",
+    "UnityEngine"
+   ],
+   "header": "The runtime instance, the state that outlives a session, and the frame\npump. Start here.\n\nShutdown is here rather than with a caller because callers in several\nparts share it and none of them owns it."
+  },
+  "connect": {
+   "file": "NetGlue.Connect.cs",
+   "class": "NetGlue",
+   "partial": true,
+   "modifiers": "internal static",
+   "usings": [
+    "System",
+    "System.Collections.Generic",
+    "System.Diagnostics.CodeAnalysis",
+    "System.Net",
+    "Content.Code.Utility",
+    "System.Reflection",
+    "System.Threading",
+    "HarmonyLib",
+    "PBAndJ.Core.Net",
+    "PBAndJ.Net",
+    "PhantomBrigade",
+    "QFSW.QC",
+    "UnityEngine"
+   ],
+   "header": "Starting a session and joining one: pbj.host, pbj.join and pbj.rejoin.\n\nJoin and Rejoin funnel through the private Connect. Host does NOT -- it\nopens a listening transport instead, and shares only the helpers below.\nThose are here because Host and Connect are the only callers they have;\nLastRejection, because the connect screen asks it why an attempt failed."
+  },
+  "replay": {
+   "file": "NetGlue.Replay.cs",
+   "class": "NetGlue",
+   "partial": true,
+   "modifiers": "internal static",
+   "usings": [
+    "System",
+    "System.Collections.Generic",
+    "System.Diagnostics.CodeAnalysis",
+    "System.Net",
+    "Content.Code.Utility",
+    "System.Reflection",
+    "System.Threading",
+    "HarmonyLib",
+    "PBAndJ.Core.Net",
+    "PBAndJ.Net",
+    "PhantomBrigade",
+    "QFSW.QC",
+    "UnityEngine"
+   ],
+   "header": "pbj.replay-last -- the M6 gate. Round-trips the last executed turn's\ncaptured motion through the codec before playing it, so one command\nexercises the whole pipeline a client depends on."
+  },
+  "session": {
+   "file": "NetGlue.Session.cs",
+   "class": "NetGlue",
+   "partial": true,
+   "modifiers": "internal static",
+   "usings": [
+    "System",
+    "System.Collections.Generic",
+    "System.Diagnostics.CodeAnalysis",
+    "System.Net",
+    "Content.Code.Utility",
+    "System.Reflection",
+    "System.Threading",
+    "HarmonyLib",
+    "PBAndJ.Core.Net",
+    "PBAndJ.Net",
+    "PhantomBrigade",
+    "QFSW.QC",
+    "UnityEngine"
+   ],
+   "header": "Console commands that act on a session already running: what it is doing,\nstopping it, the local player's readiness, and asking the host for its\ncombat save."
+  },
+  "lobby": {
+   "file": "NetGlue.Lobby.cs",
+   "class": "NetGlue",
+   "partial": true,
+   "modifiers": "internal static",
+   "usings": [
+    "System",
+    "System.Collections.Generic",
+    "System.Diagnostics.CodeAnalysis",
+    "System.Net",
+    "Content.Code.Utility",
+    "System.Reflection",
+    "System.Threading",
+    "HarmonyLib",
+    "PBAndJ.Core.Net",
+    "PBAndJ.Net",
+    "PhantomBrigade",
+    "QFSW.QC",
+    "UnityEngine"
+   ],
+   "header": "The multiplayer save catalogue, the lobby built on it, and the campaign\nbit that decides where saves are written -- the console commands, and the\nhooks the screen and the actuator call for the same things."
+  },
+  "hooks": {
+   "file": "NetGlue.Hooks.cs",
+   "class": "NetGlue",
+   "partial": true,
+   "modifiers": "internal static",
+   "usings": [
+    "System",
+    "System.Collections.Generic",
+    "System.Diagnostics.CodeAnalysis",
+    "System.Net",
+    "Content.Code.Utility",
+    "System.Reflection",
+    "System.Threading",
+    "HarmonyLib",
+    "PBAndJ.Core.Net",
+    "PBAndJ.Net",
+    "PhantomBrigade",
+    "QFSW.QC",
+    "UnityEngine"
+   ],
+   "header": "Hooks the game-side patches and glue call when something has happened\nlocally. Every one returns void, so no caller can come to depend on the\nsession's answer -- and NotifyExternalTurnAdvance posts nothing at all: it\nonly records that a turn moved without going through the barrier."
+  },
+  "commands": {
+   "file": "NetGlue.Commands.cs",
+   "class": "NetGlue",
+   "partial": true,
+   "modifiers": "internal static",
+   "usings": [
+    "System",
+    "System.Collections.Generic",
+    "System.Diagnostics.CodeAnalysis",
+    "System.Net",
+    "Content.Code.Utility",
+    "System.Reflection",
+    "System.Threading",
+    "HarmonyLib",
+    "PBAndJ.Core.Net",
+    "PBAndJ.Net",
+    "PhantomBrigade",
+    "QFSW.QC",
+    "UnityEngine"
+   ],
+   "header": "Registration with Quantum Console. A [Command] attribute registers nothing\nin this game, so every command NetGlue owns is added by hand here -- along\nwith a few that live on other glue classes and have no registration of\ntheir own."
+  },
+  "pumppatch": {
+   "file": "NetGlue.PumpPatch.cs",
+   "class": "Patch_Heartbeat_Update",
+   "partial": false,
+   "modifiers": "internal static",
+   "usings": [
+    "System",
+    "System.Collections.Generic",
+    "System.Diagnostics.CodeAnalysis",
+    "System.Net",
+    "Content.Code.Utility",
+    "System.Reflection",
+    "System.Threading",
+    "HarmonyLib",
+    "PBAndJ.Core.Net",
+    "PBAndJ.Net",
+    "PhantomBrigade",
+    "QFSW.QC",
+    "UnityEngine"
+   ],
+   "header": "The Harmony patch that drives the pump. Its own file because it is its own\ntype: the [HarmonyPatch] attribute above the declaration is what makes it\napply at all."
+  },
+  "quitpatch": {
+   "file": "NetGlue.QuitPatch.cs",
+   "class": "Patch_Heartbeat_OnApplicationQuit",
+   "partial": false,
+   "modifiers": "internal static",
+   "usings": [
+    "System",
+    "System.Collections.Generic",
+    "System.Diagnostics.CodeAnalysis",
+    "System.Net",
+    "Content.Code.Utility",
+    "System.Reflection",
+    "System.Threading",
+    "HarmonyLib",
+    "PBAndJ.Core.Net",
+    "PBAndJ.Net",
+    "PhantomBrigade",
+    "QFSW.QC",
+    "UnityEngine"
+   ],
+   "header": "Tearing the session down when the game quits."
+  }
+ }
+}
