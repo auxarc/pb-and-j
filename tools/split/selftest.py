@@ -859,6 +859,45 @@ namespace Demo
           "(Dictionary<string, int>) is still a declaration",
           "Lookup: 0 call sites" in out or "Lookup: 0 " in out, out[:400])
 
+    # THE SAME GUARD, WRONG A THIRD TIME -- and none of the four cases above
+    # could reach it, because not one of them puts a call after `return`. The
+    # prefix `        return ` is word characters and whitespace, so it matched
+    # the declaration class; the comma guard is no help because the comma sits
+    # INSIDE the parentheses, after the match. On NetGlue.cs both of Connect's
+    # call sites vanished and the tool printed a confident zero.
+    ret = os.path.join(tmp, "ret.cs")
+    with open(ret, "w") as fh:
+        fh.write("class F\n{\n"
+                 "    private static string Target(int a, int b)\n"
+                 "    {\n        return \"x\";\n    }\n\n"
+                 "    private static string Caller()\n    {\n"
+                 "        if (a) { }\n"
+                 "        return Target(1, 2);\n    }\n\n"
+                 "    private static string Other()\n    {\n"
+                 "        return Target(3, 4) + Target(5, 6);\n    }\n}\n")
+    rc, out = run("ownership.py", "Target", ret)
+    check("counts a call after `return`, which has only a keyword before it "
+          "and so once looked exactly like a declaration -- and counts BOTH "
+          "of two such calls on one line",
+          "Target: 3 call sites" in out, out[:400])
+
+    # THE CONTROL THE FIX COULD BREAK. A statement-word denylist that is too
+    # eager stops subtracting real declarations, which inflates a count instead
+    # of hiding one -- the same defect pointing the other way. `new` is a
+    # modifier as well as an operator, so it must NOT disqualify.
+    decl = os.path.join(tmp, "decl.cs")
+    with open(decl, "w") as fh:
+        fh.write("class G\n{\n"
+                 "    public new string Target(int a)\n"
+                 "    {\n        return \"x\";\n    }\n\n"
+                 "    private static Dictionary<string, int> Lookup(int i)\n"
+                 "    {\n        return null;\n    }\n}\n")
+    rc, out = run("ownership.py", "Target,Lookup", decl)
+    check("still SUBTRACTS a real declaration whose own body returns on the "
+          "same line, and one modified by `new`",
+          "Target: 0 call sites" in out and "Lookup: 0 call sites" in out,
+          out[:400])
+
     verbatim = os.path.join(tmp, "verbatim.cs")
     with open(verbatim, "w") as fh:
         fh.write('class C { string s = @"Target(1)"; }\n')

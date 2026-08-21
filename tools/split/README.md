@@ -52,6 +52,15 @@ the incident; read them before trusting a tool.
    It is also **blind to fields and constants** — it counts an identifier
    followed by a call-paren — and it says so rather than printing a bare zero.
    Tally those by hand.
+
+   **A ZERO IS A CLAIM ABOUT THE SHAPE, NOT ABOUT THE CODE.** On NetGlue.cs it
+   reported `Connect: 0 call sites` when the file plainly calls it twice:
+   `return Connect(...)` has nothing but a keyword before the name, so it
+   matched the declaration prefix and was subtracted as its own declaration.
+   That is the *third* generation of one defect — bare statements (#45),
+   wrapped continuation lines (#46), now statement keywords — and every fix
+   only narrows the character class. The tool prints its own alternative
+   hypothesis next to a zero for exactly this reason. Grep it.
 6. **Cut.** `writeparts.py <spec>` slices bodies out of the original bytes.
    Nothing is retyped. It refuses to run on an unproven partition.
 7. **Run the oracles**, and prove each one BITES before believing it:
@@ -126,7 +135,7 @@ Five keys exist because leaving them out changed the code:
 make split-selftest
 ```
 
-74 cases: what each tool must REFUSE, and the sound input it must still
+76 cases: what each tool must REFUSE, and the sound input it must still
 accept. Each names a defect that actually bit, or the control proving the
 refusal is not simply always-on. The suite has been mutation-checked —
 breaking any one guard makes it fail — because a bite test that cannot fail is
