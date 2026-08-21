@@ -84,6 +84,9 @@ the incident; read them before trusting a tool.
    four to six false claims each time. An enumeration is a completeness claim;
    a count ages the moment the plan changes; a rationale must be READ, not
    recalled.
+9. **Record the decision.** `make record-split-grouping`, and commit the spec
+   to `specs/`. See "After the split" below — everything above compares a
+   before to an after, and once the split lands there is no before.
 
 ## The spec
 
@@ -142,7 +145,7 @@ Five keys exist because leaving them out changed the code:
 make split-selftest
 ```
 
-79 cases: what each tool must REFUSE, and the sound input it must still
+90 cases: what each tool must REFUSE, and the sound input it must still
 accept. Each names a defect that actually bit, or the control proving the
 refusal is not simply always-on. The suite has been mutation-checked —
 breaking any one guard makes it fail — because a bite test that cannot fail is
@@ -150,7 +153,9 @@ this project's most repeated mistake.
 
 ## What these tools cannot tell you
 
-- **Grouping.** Step 5 is a substitute, not a proof.
+- **Grouping**, at the moment of the split. Step 5 is a substitute, not a
+  proof. What `split-grouping.lock` adds is the *next* day: it cannot tell you
+  the placement was right, only that nobody has quietly changed it since.
 - **Which overload.** `ownership.py` counts by NAME, so two overloads of one
   name share a single tally. splitspec can address them separately; the
   ownership check cannot tell them apart, and a helper with overloads needs
@@ -159,6 +164,39 @@ this project's most repeated mistake.
   reordered `.cctor` — the one thing splitting a partial class can really
   change — is invisible. Verify it by reading, every time.
 - **Whether a comment is still true** where it landed.
+
+## After the split
+
+Every oracle in step 7 compares a before to an after. Once the split is
+committed there is no before any more, and **nothing notices a member drifting
+into the wrong part file.** What drifts is rarely an existing member moving; it
+is a NEW member landing in whichever part the author had open — a placement
+decision made by accident, when deciding placement on purpose is the whole
+value of the split.
+
+`split-grouping.lock` at the repo root records which part file every member of
+every split family lives in. `make check-split-grouping` runs from `dist` and
+refuses a build that departs from it; `make record-split-grouping` re-records
+once you have DECIDED the placement. It is the same shape as
+`wire-surface.lock`, for the same reason: a change that must be deliberate
+should have to be written down.
+
+A family is `Foo.cs` plus its `Foo.*.cs` siblings — the convention every split
+here has followed, since the primary part keeps the original name. Because that
+rule is how families are FOUND, the lock also records the family list: a split
+whose primary got renamed would otherwise stop being looked at entirely and take
+every one of its members with it, silently, since each member simply stops
+appearing on both sides at once.
+
+Overloads are counted, not numbered — three `NetGlue.Host` in one part is one
+row with count 3. Line numbers would churn the lock on every unrelated edit and
+train everyone to re-record without reading, which is how a lock stops being
+evidence. One name CAN legitimately live in two parts: `HostSession.Reject` and
+`KeyframePlayer.Dress` are both split across two files on purpose.
+
+And **commit the spec** to `specs/`. Fourteen of the first fifteen were written
+to `/tmp` and lost; the lock records *that* a member sits somewhere, the spec
+records *why*.
 
 ## A file that is SEVERAL TYPES
 

@@ -990,6 +990,137 @@ namespace Demo
     check("REFUSES a decompile it barely parsed, rather than reporting a "
           "clean empty comparison", rc != 0 and "VACUOUS" in out, out[:300])
 
+    print("grouping (the one property no other oracle here can see, and the "
+          "only one still watching after the split lands)")
+    groot = os.path.join(tmp, "groot")
+    gdir = os.path.join(groot, "src", "Fam")
+    odir = os.path.join(groot, "src", "Other")
+    os.makedirs(gdir)
+    os.makedirs(odir)
+
+    def gwrite(d, name, cls, body):
+        with open(os.path.join(d, name), "w") as fh:
+            fh.write("namespace Demo\n{\n    public partial class " + cls +
+                     "\n    {\n" + body + "    }\n}\n")
+
+    def fam(two, three, primary="        public void Alpha() { }\n"):
+        gwrite(gdir, "Fam.cs", "Fam", primary)
+        gwrite(gdir, "Fam.Two.cs", "Fam", two)
+        gwrite(gdir, "Fam.Three.cs", "Fam", three)
+
+    BETA = "        public void Beta() { }\n"
+    EPS = "        public void Epsilon() { }\n"
+    GAMMA = "        public void Gamma() { }\n"
+    BETA_I = "        public void Beta(int i) { }\n"
+
+    fam(BETA + EPS, GAMMA)
+    gwrite(odir, "Other.cs", "Other", "        public void Zeta() { }\n")
+    gwrite(odir, "Other.Bits.cs", "Other", "        public void Eta() { }\n")
+    # A decoy: a dotted name with no primary beside it is not a split family.
+    with open(os.path.join(gdir, "Loner.Part.cs"), "w") as fh:
+        fh.write("namespace Demo { public class Loner { public void D() { } } }\n")
+
+    glock = os.path.join(tmp, "g.lock")
+
+    def record():
+        rc, out = run("grouping.py", "--root", groot)
+        with open(glock, "w") as fh:
+            fh.write(out)
+        return rc, out
+
+    rc, out = record()
+    check("records a ledger for every family, and leaves a dotted file with "
+          "no primary beside it alone", rc == 0 and "families: 2" in out
+          and "Loner" not in out, out[:400])
+
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("ACCEPTS a tree that has not moved -- the control proving the "
+          "refusals below are not simply always-on",
+          rc == 0 and "split grouping OK" in out, out[:300])
+
+    # THE CASE THAT MATTERS MOST: two overloads of one name, deliberately in
+    # DIFFERENT part files. Keying the comparison by (directory, member)
+    # collapsed such a pair, dropped a row on each side and would report a move
+    # that never happened. Real instances: HostSession.Reject across
+    # Handshake.cs and Turn.cs, KeyframePlayer.Dress across Assets.cs and
+    # Sleep.cs -- both split on purpose, because their callers differ.
+    fam(BETA + EPS, GAMMA + BETA_I)
+    record()
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("ACCEPTS one name whose overloads live in two different parts, "
+          "which a comparison keyed by name alone silently collapsed",
+          rc == 0 and "split grouping OK" in out, out[:400])
+
+    # AND THE HALF THAT ACTUALLY BITES. The case above passes either way: a
+    # name-keyed comparison collapses BOTH sides identically, so an unchanged
+    # tree still matches and the defect hides. Collapsing drops a row, and a
+    # dropped row is a change that goes UNREPORTED -- so the test has to MOVE
+    # one of the two overloads and insist it is seen.
+    fam(BETA + EPS, GAMMA, primary="        public void Alpha() { }\n" + BETA_I)
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("REFUSES a move of ONE overload while its twin stays put, which a "
+          "name-keyed comparison could not see at all",
+          rc != 0 and "MOVED" in out and "Fam.Beta" in out, out[:400])
+    fam(BETA + EPS, GAMMA + BETA_I)
+
+    fam(BETA + EPS, GAMMA + BETA_I + "        public void Delta() { }\n")
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("REFUSES a NEW member, which is the drift that actually happens -- "
+          "a member landing in whichever part file was open",
+          rc != 0 and "NEW MEMBER" in out and "Fam.Delta" in out, out[:400])
+
+    fam(EPS, GAMMA + BETA_I, primary="        public void Alpha() { }\n" + BETA)
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("REFUSES a member that MOVED between two parts",
+          rc != 0 and "MOVED" in out and "Fam.Beta" in out, out[:400])
+
+    # A FAMILY THAT VANISHES IS THE DANGEROUS DIRECTION. Families are found by
+    # a naming rule, so renaming the primary stops the whole family being
+    # looked at -- silently, because every member disappears from both sides at
+    # once. The lock records the family list for exactly this. Note the OTHER
+    # family must survive, or the run refuses as vacuous before reporting it.
+    fam(BETA + EPS, GAMMA + BETA_I)
+    os.rename(os.path.join(odir, "Other.cs"),
+              os.path.join(odir, "OtherCore.cs"))
+    rc, out = run("grouping.py", "--root", groot, "--check", glock)
+    check("REFUSES a family whose primary was renamed, so it would otherwise "
+          "stop being discovered and take every member with it",
+          rc != 0 and "FAMILY GONE" in out, out[:400])
+    os.rename(os.path.join(odir, "OtherCore.cs"),
+              os.path.join(odir, "Other.cs"))
+
+    rc, out = run("grouping.py", "--root", os.path.join(tmp, "nothing-here"))
+    check("REFUSES a tree with no families at all rather than recording an "
+          "empty ledger", rc != 0 and "VACUOUS" in out, out[:300])
+
+    empty = os.path.join(tmp, "eroot", "src", "E")
+    os.makedirs(empty)
+    gwrite(empty, "E.cs", "E", "        public void One() { }\n")
+    gwrite(empty, "E.Blank.cs", "E", "")
+    rc, out = run("grouping.py", "--root", os.path.join(tmp, "eroot"))
+    check("REFUSES a part file the member map reads NOTHING from, rather than "
+          "recording a member's absence as its correct place",
+          rc != 0 and "VACUOUS" in out, out[:300])
+
+    import grouping as _g
+    check("the family rule proves itself on a canary before any recording",
+          _g.prove_discovery() is None)
+    real_fam = _g.families
+    try:
+        # A rule that finds the right NUMBER of families but the wrong ones --
+        # a blind spot rather than a blackout, which is the shape that would
+        # actually survive review.
+        _g.families = lambda root_dir=".": {("src/N", "Wrong"): ["Wrong.cs"]}
+        broke = False
+        try:
+            _g.prove_discovery()
+        except SystemExit:
+            broke = True
+        check("and that canary CATCHES a family rule gone blind, which would "
+              "record an empty ledger and check nothing forever", broke)
+    finally:
+        _g.families = real_fam
+
     shutil.rmtree(tmp)
     print(f"\nsplit kit selftest: {len(PASS)} passed, {len(FAIL)} failed")
     for f in FAIL:

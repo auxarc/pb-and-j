@@ -108,7 +108,7 @@ NONWIRE_FILES := $(NONWIRE_ROOT) $(addprefix src/PBAndJ.Core/Net/, \
                  ReplayVisibility.cs StateDigest.cs TrackThinning.cs  \
                  TurnBarrier.cs UnitAssignments.cs)
 
-.PHONY: check-file-sizes size-report-selftest measure-net-coverage test build dist deploy check-no-drive-channel check-game-hash check-mod-version check-wire-surface check-wire-partition check-coverage-scope record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
+.PHONY: check-file-sizes size-report-selftest measure-net-coverage test build dist deploy check-no-drive-channel check-game-hash check-mod-version check-wire-surface check-wire-partition check-coverage-scope check-split-grouping record-split-grouping record-wire-surface wire-surface-hash clean log peer peer-selftest peer-connect peer-listen package
 
 # metadata.yaml is the one place PbjProtocol.ModVersion cannot reach, and a
 # disagreement between them is invisible until a peer is refused by a host —
@@ -256,6 +256,21 @@ size-report-selftest:
 split-selftest:
 	@python3 tools/split/selftest.py
 
+# THE ONE PROPERTY THE SPLIT ORACLES CANNOT SEE, and the only one still being
+# watched after a split lands. ilcanon/docxml/totalcontent all compare a before
+# to an after; once the split is committed there is no before, and nothing
+# notices a member drifting into the wrong part file. In practice what drifts is
+# a NEW member landing in whichever part happened to be open -- a placement
+# decision made by accident, when deciding placement on purpose is the entire
+# value of the split. Same shape as wire-surface.lock: record the decision, and
+# refuse a build that departs from it.
+check-split-grouping:
+	@python3 tools/split/grouping.py --check split-grouping.lock
+
+record-split-grouping:
+	@python3 tools/split/grouping.py > split-grouping.lock
+	@grep '^# families:' split-grouping.lock | sed 's/^# /recorded split grouping — /'
+
 # Measures what peer-selftest actually covers in PBAndJ.Net, which the gate
 # cannot see because every type there is [ExcludeFromCodeCoverage].
 #
@@ -339,7 +354,7 @@ BASE ?= HEAD^
 build: test
 	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet build src/PBAndJ.Mod -c Release -p:PbjDrive=$(PBJ_DRIVE)'
 
-dist: build check-mod-version check-wire-surface check-coverage-scope
+dist: build check-mod-version check-wire-surface check-coverage-scope check-split-grouping
 	rm -rf dist/$(MOD_ID)
 	mkdir -p dist/$(MOD_ID)/Libraries
 	cp mod/metadata.yaml dist/$(MOD_ID)/
