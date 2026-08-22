@@ -1,8 +1,18 @@
 # M17 stage 2 — the wrecked-unit cluster: the reconstructed plan, and its third refutation
 
-Status: **written 2026-08-21 at `main` = `1708a0b`, tree clean. NOT BUILT. No build authorization.**
-Mod 0.22.0, wire v9 (`src/PBAndJ.Core/Net/PbjProtocol.cs:202`, `:226`; `mod/metadata.yaml`;
-`wire-surface.lock:3`).
+Status: ~~written 2026-08-21 at `main` = `1708a0b`, tree clean. NOT BUILT. No build authorization.~~
+🔴 **CORRECTED 2026-08-22 — BUILT, AND THIS HEADER WAS WRONG FOR A DAY WHILE §10 THREE SECTIONS BELOW
+DESCRIBED THE BUILD.** The work was written 2026-08-21 22:54–23:11 and left **uncommitted in a
+worktree**, so every document — this one included — went on saying it did not exist. Now commit
+`26413e8`, rebased onto `main` (`093bfeb`) as `dad9a50`.
+**Gated 2026-08-22, first gate ever run against it, all green:** `make dist` exit 0 · **2119 tests**
+(+17 over main's 2102) · **100% line/branch/method**, threshold enforced in the invocation
+(`/p:Threshold=100 /p:ThresholdType=line,branch,method`) · `peer-selftest` 11/11 ·
+`split-selftest` 90/90 · gitignore symlink 7/7 including case 0's control.
+Mod **0.24.0**, wire **v10** (`src/PBAndJ.Core/Net/PbjProtocol.cs`; `mod/metadata.yaml`;
+`wire-surface.lock` re-recorded — see the PR body for the FROM/TO and why the break is intended).
+⭐ **The lesson is the header itself:** a status line is prose, and prose is the least-checked thing
+in a commit. §10 existed and contradicted it, and nothing noticed until a planner read both.
 
 This file is the **reconstruction** of a plan that was written, reviewed twice, rewritten, and then
 lost with the session scratchpad it lived in. That is the third plan this project has lost to a
@@ -597,11 +607,27 @@ says so rather than treating it as a surprise.
 make record-wire-surface        # Makefile:326 — mandatory, the hash moves
 make record-split-grouping      # Makefile:270 — see below, and the roadmap omits it
 make dist                       # exit 0, and READ THE TAIL, not a grep for success words
-make peer-selftest              # ALL PASS at protocol v10
+make peer-selftest              # ALL PASS (11 scenarios) -- see the note below
 ```
 
-🔴 **`make record-split-grouping` is missing from `road-to-1-0.md` §6's W2 row and it is owed.**
-`split-grouping.lock` records 15 families / 145 part files / **1541 members** (`:11`), and
+✅ **`make record-split-grouping` WAS RUN — closed 2026-08-22.** `split-grouping.lock` now records
+15 families / 145 part files / **1577 members**, up from 1556 on `main`; all 21 new locked-family
+members are explicitly recorded (`DriveWreckFlag`, `FlushWreckFlagBatch`, `NetGlue.Session`,
+`ClientOwnsCombatOutcome`, and the tests), and `check-split-grouping` passes as part of `dist`.
+
+🔴 **AND A CORRECTION TO THE GATE LINE ABOVE, 2026-08-22 — `peer-selftest` CANNOT SEE THE PROTOCOL
+VERSION.** This file said `# ALL PASS at protocol v10`. It cannot: the entire verdict line is
+`[selftest] ALL PASS ({scenarios.Length} scenarios)` (`tools/pbj-peer/SelfTest.cs:115`), the version
+is printed only in raw-handshake mode (`Program.cs:104`), and **this branch changes no
+`tools/pbj-peer` file at all** — so the v10 run is *character-identical* to a v9 run, and a
+wrong-directory or stale-build run prints the same confident PASS. The gate is green; **it says
+nothing about the wire version.** ⇒ **State which QUESTION a green gate answers, not just that it
+was green.** A one-line version banner in the selftest verdict would retire this for every future
+bump and is filed as its own item.
+
+The superseded text, kept because the reasoning still holds for the *next* locked-family change:
+`split-grouping.lock` recorded 15 families / 145 part files / **1541 members** (`:11`) when this was
+written, and
 `KeyframePlayer` is one of them — `KeyframePlayer.Destruction.Apply.cs` currently contributes 4
 recorded members. Adding `DriveWreckFlag` to it changes the map, and `check-split-grouping`
 (`Makefile:267`) is a hard dependency of `dist` (`Makefile:357`). The same applies to the
