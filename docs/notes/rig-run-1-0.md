@@ -732,3 +732,174 @@ grep that works is `grep 'checkpoint: turn=' …`.
 | R1·9 debriefing fingerprints, before/after | | | |
 | R1·10 checkpoint resume, two machines | | | |
 | R1·11 🧑 M10 Leave-button swap | | | |
+
+### 9.3 B5b — the checkpoint-cadence **slope**, **TAKEN 2026-08-22**, headless, one instance
+
+**What this closes.** §9.1 measured one point — 433.27 ms mean at a census of 21 — and 21 is a
+developer's folder. This is the curve through it, and it decides **q6**, the cadence `N`.
+
+**Conditions.** Working area was the **`553540-pbj2`** prefix throughout; the real campaign prefix
+(`553540`, no suffix) was never read, written or deleted from. Deployed mod **0.23.0** — the same
+binary §9.1 measured with, deliberately, so the census-21 point is a *control on the whole chain*
+rather than a fresh unknown. `main` is now 0.24.0; the instrument is unchanged between them
+(`git diff 093bfeb..2e3a059 -- src/PBAndJ.Mod/Net/CheckpointGlue.cs` is empty), so nothing was
+rebuilt. One instance, `gamescope -W 1280 -H 720 --backend headless -- tools/game-instance.sh 2`.
+Campaign `pbj_fromsp`, scenario `generic_elimination`, host session, 1 participant, 5 Execute
+presses per point. GPU canary pair **before and after**: `GPU Recovery Action : None`, `vulkaninfo`
+creates a device on the RTX 4070 Ti (610.57.04). `journalctl -k -b | grep -c 'NVRM.*Xid'` = **0**
+at both ends — pattern proven non-vacuous by the same grep matching the one `NVRM` line that IS
+present (module load), and by *not* matching the r8169 `XID 609` NIC decoy. **`dmesg` was not used.**
+
+#### 9.3.1 The checkpoint reading, three censuses — and why it is the WRONG instrument for a slope
+
+| census | mean ms | worst ms | which zero-case was ruled out, and how |
+|---|---|---|---|
+| **21** | **440.61** | 449.27 | not zero. `attempts 5, writes 5, refusals 0, faults 0` — `writes=5` excludes "the path never ran", `attempts=5` excludes "the effect never reached the bridge". Every reading is ~4.4×10⁶ × the printed stopwatch resolution (0.0001 ms/tick), so it is not a clock that did not move. Log control: 186 `[pb-and-j]` lines, so the `checkpoint: turn=` grep's hits are not an artefact of an empty log |
+| **50** | **420.65** | 439.21 | as above; `5/5/0/0`, control 184 lines |
+| **150** | **462.16** | 478.61 | as above; `5/5/0/0`, control 179 lines |
+
+Census was recorded **in the same breath as the milliseconds**, by the same script, and re-counted
+after the 5 turns to prove it had not moved under the reading (`CENSUS_BEFORE == CENSUS_AFTER` at
+all three points).
+
+🔴 **The 50-point is BELOW the 21-point.** More than doubling the census made the save *faster*.
+That is not noise to be averaged away — it is the instrument telling you it cannot see what you are
+asking it. A least-squares line through these three gives 231 µs/dir with residuals of ±15 ms on a
+total signal of 21 ms, and its "super-linear" verdict is produced entirely by the negative first
+half. **A slope fitted inside its own noise is not a measurement.**
+
+⭐ **The confound, and `du -sb` is what exposed it.** The checkpoint stopwatch wraps *all* of
+`DataManagerSave.DoSave` — serialise, YAML write, `NewFormatSave` (zip), *then*
+`RefreshSaveHeaders`. The zip term scales with the **payload**, and the payload was not held
+constant across the three runs:
+
+| point | census | `du -sb pbj_combat_turn` |
+|---|---|---|
+| A | 21 | 116 978 |
+| B | 50 | 102 419 |
+| C | 150 | 96 461 |
+
+The save shrank ~18% from A to C (different fight, different surviving units). A falling zip cost
+and a rising header cost **partly cancelled**, which is exactly why the total barely moved. Reading
+the flat total as "the census does not matter" would have been the wrong conclusion drawn from a
+real number.
+
+#### 9.3.2 The header probe — the same walk, isolated, with a control
+
+`pbj.saves` is `LobbyCatalogue.Multiplayer(SaveCatalogueGlue.List())`; `List()` calls
+`DataManagerSave.GetSaveHeaders(true)` → **`RefreshSaveHeaders()`** — the same full walk of the same
+folder — and only filters to the `pbj_` namespace *afterwards* (`SaveCatalogueGlue.cs`, member
+`List`, `:49`). So its latency carries the walk and no zip, and it needs only the main menu:
+~2 minutes per census instead of ~12.
+
+**The control is what makes it a measurement.** Every sample times **both** `pbj.drive-state`
+(trivial, reads live ECS fields, walks no directories) and `pbj.saves` (same round trip **plus** the
+walk). The difference is the walk; `drive-state` absorbs the TCP hop and the wait for the game's
+next frame. Medians of 8 samples, first of each discarded (JIT + cold cache).
+
+| census | control ms | walk ms | **difference = header refresh** | µs per directory |
+|---|---|---|---|---|
+| **21** | 19 | 51 | **32** | 1333 |
+| **150** | 18 | 127 | **109** | 712 |
+| **300** | 9 | 238 | **229** | 756 |
+| **600** | 15 | 517 | **502** | 833 |
+| **1000** | 12 | 823 | **811** | 809 |
+
+`ZERO:` none of these is zero, and the control is the reason that means something — **the control
+did not grow with the census** (19 → 18 → 9 → 15 → 12 while the walk went 51 → 823). Had it tracked
+the census, the instrument would have been measuring something other than the walk and the run
+would have to be thrown away. The census-21 row is the least precise: 32 ms is close to the frame
+quantum, and its control sample carried a 304 ms outlier.
+
+**Fit over all five:** `header ms = −0.63 + 0.8142 × census`, residuals within ±16 ms.
+
+> **≈ 814 µs of main-thread stall per save directory, and the intercept is zero** — a purely
+> proportional cost, as the code shape predicts.
+
+**It is LINEAR**, and checked in the way averaging cannot hide: 21→300 gives 706 µs/dir, 300→1000
+gives 831 µs/dir. No blow-up at the top; the loop is `Directory.GetDirectories` plus one small YAML
+parse each (`UtilitiesYAML.cs:533`, `DataManagerSave.cs:621`), and it behaves like it.
+
+#### 9.3.3 The honest ceiling — **derived, not assumed**
+
+The caveat this reading was asked to answer, not assume: is a 150-save census realistic? **No, and
+the bound is structural rather than a guess.**
+
+* **Vanilla autosaves are capped at 9 directories, for ever.** `AutosaveFilenames` declares seven
+  fixed literal names (`quicksave`, `before_combat`, `after_combat`, `before_travel`, `after_stop`,
+  `campaign_end`, `game_exit`) — each `DoSave`d under that exact string, so each **overwrites**.
+  Checked one by one, including the two that are not in the obvious place:
+  `DataManagerSave.cs:3508` (quicksave) and `SettingUtility.cs:131` (campaign end).
+  The only numbered family is the timed ring, `"autosave_timed_" + lastUsedSlot`, and it wraps at
+  `DataShortcuts.overworld.autoSaveSlotCount`
+  (`OverworldTimedAutosaveSystem.cs:46-51`). The shipped value is
+  **`autoSaveSlotCount: 2`** (`Configs/Data/Settings/overworld.yaml:235`). 7 + 2 = **9**.
+* **The mod adds a bounded set too:** `pbj_combat_test` and `pbj_combat_turn`
+  (`LobbySaves.cs:54,75`), plus the `pbj_`-namespace mirrors of those same autosaves — at most 11.
+* **So ~20 directories are fixed-name and self-limiting. Only MANUAL saves grow**, and each one
+  costs a deliberate menu visit and a typed name.
+* **Observed:** all three real folders on this machine sit at 21–27 entries.
+
+**My read on where a real player lands: 20–40 directories typically; 100 is a heavy hoarder who
+never deletes; 150 is an outlier; 300+ is not a person.** At those censuses the header walk costs
+**16–33 ms** typically and **~81 ms** at the hoarder end — against a checkpoint whose *other* ~420 ms
+is payload, not census.
+
+#### 9.3.4 **Verdict on q6: N = 1 STANDS, and q6 closes**
+
+The decision rule was: `N>1` gets priced only if the per-turn write at a realistic lifetime census
+costs a visible hitch of order 1 s. It does not.
+
+| census | header term | per-turn checkpoint |
+|---|---|---|
+| 21 (measured) | 17 ms | **~440 ms** |
+| 30 (typical) | 24 ms | ~444 ms |
+| 100 (heavy) | 81 ms | ~501 ms |
+| 150 (outlier) | 122 ms | ~541 ms |
+| ~700 | ~570 ms | ~1 s ← the census that would trip the rule |
+
+**Reaching the 1 s bar needs ~700 save directories — about 35× the entire self-limiting autosave
+set, and reachable only by hand, one deliberate save at a time.** The lifetime-save-count scaling
+that `HostSession`'s remark flags as the thing "nobody has ever measured" is real, is linear, and
+is **not** the term that decides the cadence.
+
+⚠️ **What this does NOT say.** The ~420 ms constant is real, census-independent, paid every Execute,
+and it is *most* of the cost. Raising `N` would not make any single checkpoint cheaper — only rarer,
+at the price of the per-turn checkpoint the milestone is specified in terms of. If ~0.4 s of
+main-thread stall per turn is later judged too much to pay, **the lever is an async or
+smaller-payload save shape, not the cadence** — and that is a different question from q6, which
+asked about the census and is now answered. The cadence itself remains a one-line change:
+`checkpointEveryNTurns` has a single production construction site
+(`src/PBAndJ.Mod/Net/NetGlue.Connect.cs:86`).
+
+#### 9.3.5 Save-folder discipline, stated for the record
+
+Created **979** directories (`zzcensus_0001`–`zzcensus_0979`, each a `cp -a` of the real save
+`pbj_drift1` so its `metadata.yaml` parses like a real save). Deleted **979**. Final census **21
+directories / 23 entries** — byte-identical listing to the baseline recorded before any change *and*
+to the user's own pre-taken `baseline-pbj2.txt`. Both non-save files (`pbj_combat_test.zip`,
+`steam_autocloud.vdf`) present. **0 survivors carrying the marker prefix.** Every name was appended
+to a manifest **before** it was created, so a crash could orphan a manifest line but never an
+undeclared directory; every deletion named one exact path from that manifest and passed four checks
+(marker prefix, no separator/traversal/glob character, resolved parent is exactly the working
+folder, is a real directory) immediately before removal. **No wildcard, glob, or `find -delete` was
+used for any deletion.** The census was only ever changed with the game closed.
+
+**H-6:** `du -sb pbj_combat_turn` = **96 461 bytes** (2 files). Note it is payload-dependent, not
+fixed: the same slot read 116 978 / 102 419 / 96 461 across the three runs above.
+
+#### 9.3.6 Two traps this run paid for
+
+1. ⚠️ **`pbj.saves` is the WRONG instrument for "does the game see my extra saves?"** It reports
+   only the `pbj_`-prefixed catalogue, so at a census of 150 it answered `7 multiplayer save(s)` and
+   `grep -c zzcensus_` on its reply returned **0**. That zero is a claim about the *filter*, not
+   about the walk — the walk underneath it had just enumerated all 150. Read as written it would
+   have "proved" the inflation was invisible and condemned the whole reading as vacuous. The
+   command is still the right instrument for the *latency* of the walk; it is simply not a listing
+   of it.
+2. ⚠️ **`grep -c` exits 1 when the count is zero**, so under `set -e` the guard
+   `RUNNING="$(ps -eo comm= | grep -c '^PhantomBrigade')"` aborts the script **precisely when the
+   machine is clean** — the only state in which it is allowed to proceed. It failed closed here
+   (nothing was created; the census was still 21), but a guard that cannot run in the safe case is
+   not a guard. Fix is `|| true` on the substitution, and the same shape sits in
+   `tools/headless-experiment.sh` — harmless there only because that script does not set `-e`.
