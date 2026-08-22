@@ -69,9 +69,29 @@ else
   exit 1
 fi
 
-RUNNING="$(pgrep -f 'PhantomBrigade.exe' | wc -l)"
+# ⚠️ NOT `pgrep -f PhantomBrigade.exe`. That matches COMMAND LINES, so the very
+# shell running the check matches itself and the count is never below 1 -- a
+# guard that reports "an instance is already running" on a machine with none,
+# for ever. Cost one false reading before it was caught.
+#
+# `pgrep -x` cannot rescue it either: the name is longer than 15 characters, so
+# pgrep warns and returns 0 unconditionally. That is WORSE -- a zero that is
+# structurally unable to be anything else, which reads as a clean machine.
+#
+# `ps -eo comm=` compares the kernel's own (15-char-truncated) process name, so
+# nothing in this script's command line can match it. The canary below proves the
+# method can still find something, so a 0 here means zero instances rather than a
+# broken check.
+RUNNING="$(ps -eo comm= | grep -c '^PhantomBrigade')"
+CANARY="$(ps -eo comm= | grep -c '^steam$')"
+if [ "$CANARY" -eq 0 ]; then
+  fail "the instance check's canary found no 'steam' process, so its zero proves nothing."
+  note "Either Steam really is down (the precondition above should have caught that)"
+  note "or 'ps -eo comm=' is not behaving as expected here. Do not trust RUNNING=$RUNNING."
+  exit 1
+fi
 if [ "$RUNNING" -eq 0 ]; then
-  pass "no PhantomBrigade instance is running"
+  pass "no PhantomBrigade instance is running (canary: the same check sees steam)"
 else
   fail "$RUNNING PhantomBrigade process(es) already running."
   note "Close the Steam-launched game and any rig instance first:  tools/playtest-m12b.sh down"
@@ -118,7 +138,61 @@ teardown() {
     return
   fi
   say "6. Teardown"
-  tools/playtest-m12b.sh down >/dev/null 2>&1 && pass "instances down" || note "teardown reported an issue; check with pgrep -f PhantomBrigade.exe"
+  tools/playtest-m12b.sh down >/dev/null 2>&1 && pass "game instances down" || note "playtest down reported an issue"
+  reap_compositors
+}
+
+# ⚠️ `playtest-m12b.sh down` knows nothing about compositors, and gamescope does
+# not stay named `gamescope`: it execs into `gamescope-wl` (plus a
+# `gamescopereaper` child). A `pkill -f 'gamescope -W'` therefore matches
+# NOTHING and exits quietly, which is exactly what happened on 2026-08-22 — the
+# surviving compositor held a Vulkan device, every later launch failed with
+# vkCreateDevice -3, and three rounds were spent blaming setsid and a supposed
+# two-compositor limit before the orphan was found. The teardown was the vacuous
+# step, not the test.
+#
+# Kill by EXACT process name, verify, escalate to SIGKILL, and verify again —
+# a teardown that cannot confirm it worked is the thing that poisons tomorrow.
+reap_compositors() {
+  local left
+  pkill -x gamescope-wl 2>/dev/null
+  pkill -x gamescopereaper 2>/dev/null
+  sleep 3
+  left="$(ps -eo comm= | grep -cxE 'gamescope-wl|gamescopereaper')"
+  if [ "$left" -ne 0 ]; then
+    note "compositor ignored SIGTERM; escalating to SIGKILL"
+    pkill -9 -x gamescope-wl 2>/dev/null
+    pkill -9 -x gamescopereaper 2>/dev/null
+    sleep 3
+    left="$(ps -eo comm= | grep -cxE 'gamescope-wl|gamescopereaper')"
+  fi
+  # Proton leaves winedevice.exe behind after the game dies; it is not a
+  # compositor but it is the other thing nothing else reaps.
+  pkill -9 -x winedevice.exe 2>/dev/null
+  if [ "$left" -eq 0 ]; then
+    pass "compositors reaped (verified by name, not by pkill's exit code)"
+  else
+    fail "$left compositor process(es) still alive after SIGKILL."
+    note "They hold a Vulkan device. Until they are gone, EVERY new GPU"
+    note "application on this machine — gamescope, games, vulkaninfo — will fail"
+    note "with vkCreateDevice ERROR_INITIALIZATION_FAILED, and it will look like"
+    note "a driver fault rather than a leftover process."
+    note "  ps -eo pid,comm= | grep gamescope   then  kill -9 <pid>"
+  fi
+  # The canary that would have saved three rounds: prove a Vulkan device can
+  # still be created at all. If this fails with everything reaped, the driver
+  # itself is wedged and only a reboot (or a logout, which restarts the
+  # compositor holding the leaked contexts) will clear it.
+  if command -v vulkaninfo >/dev/null; then
+    if timeout 25 vulkaninfo --summary >/dev/null 2>&1; then
+      pass "Vulkan device creation still works — the machine is left as it was found"
+      else
+      fail "vulkaninfo can no longer create a device."
+      note "NOTHING NEW WILL START ON THE GPU until this clears — your desktop keeps"
+      note "working only because it already holds its device. A reboot clears it; a"
+      note "logout usually does too. Say so rather than leaving it to be discovered."
+    fi
+  fi
 }
 trap teardown EXIT
 

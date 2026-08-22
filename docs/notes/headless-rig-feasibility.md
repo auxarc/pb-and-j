@@ -1,5 +1,36 @@
 # Can the two-instance rig run headless? — feasibility, with evidence
 
+## ✅ RUN 2026-08-22 — THE HOP WAS TAKEN. Single instance CONFIRMED; the pair is UNANSWERED.
+
+The experiment in §8 was run against `main` = `4d9653e`, mod 0.23.0 deployed (`make deploy` exit 0).
+**Phantom Brigade runs fully headless inside `gamescope --backend headless`, with rendering real on
+the GPU.** §14 is the run log; the verdict below stands for one instance and is upgraded from
+"everything measurable says yes" to **measured**.
+
+⭐ **The hop this document could not take is taken: `SteamAPI.Init` succeeds through PROTON's shim
+inside a headless compositor.** It was inferred here from CoQ's *native* measurement; it is now
+observed directly. No `SteamAPI_Init() failed` in `Player.log` (grep proven non-vacuous: the same
+file returns 12 hits for `pb-and-j`), and the game answered `pbj.drive-state` with
+`state=mainmenu | … | patched=33`.
+
+⭐ **Rendering is real, and the screenshot was READ, not merely produced**: a fully composited main
+menu at 1280×720 — volumetric lighting, particles, depth of field — with `MODS / PB and J 0.23.0`
+drawn in the corner, which also proves the deployed build is the one under test. 194,506 distinct
+colours; a black frame was excluded by measurement, not by the exit code.
+
+⭐ **No focus trap.** `splash=True | menu=False` at t+20s became `splash=False | menu=True` at t+40s
+with nothing driving it. CoQ's trap does not reproduce here.
+
+🔴 **THE PAIR IS UNANSWERED, AND EVERY TEST THAT SAID OTHERWISE WAS CONTAMINATED.** The second
+instance failed with `vkCreateDevice failed (VkResult: -3)`. That looked like a two-compositor limit
+and **it was not** — see §14.2. §Verdict's "two headless gamescopes run concurrently" line remains
+MEASURED and uncontradicted (it was taken with trivial clients on a clean machine); whether two can
+coexist **with games in them** is now genuinely open.
+
+🔴 **The machine was left with Vulkan device creation broken**, GPU-wide, until reboot. §14.3.
+
+---
+
 Written 2026-08-21 against `main` = `1708a0b`, working tree otherwise untouched. Investigation only —
 no production code, no game launched, the user's desktop never touched. Every claim below is marked
 as MEASURED (I ran it, on this machine, today), READ (I read the file named), or **UNVERIFIED**.
@@ -276,3 +307,74 @@ If confirmed, the durable form is a ~10-line launch wrapper (env flag or
 6. Whether headless gamescope runs with **no desktop session at all** (fully logged out); all
    probes ran while a session existed, and the Steam client needs somewhere to live regardless.
 7. Whether `pbj.select-unit` frames the camera well enough for screenshot-based R1·7.
+
+
+---
+
+## 14. The run of 2026-08-22 — what happened, in order
+
+### 14.1 What passed
+
+| step | result |
+|---|---|
+| preconditions | Steam client up; **0** game instances; gamescope present; mod stale at 0.22.0 ⇒ `make deploy` → exit 0, 0.23.0, selftest ALL PASS |
+| 1. launch | `gamescope -W 1280 -H 720 --backend headless -- tools/game-instance.sh 2` — compositor up, socket `gamescope-0`, gamescope logged `steam app id: 553540`, a real `window xid` and a Wayland surface |
+| 2. liveness | `game-wait.sh 2` → `accepting on 127.0.0.1:27702`, exit 0 |
+| 3. **the Steam hop** | `pbj.drive-state` answered: `state=mainmenu … patched=33 … splash=True menu=False`. **SteamAPI.Init survived Proton inside a headless compositor.** |
+| 3b. splash | advanced to `menu=True` unaided by t+40s — no focus trap |
+| 4. **the render hop** | `gamescopectl screenshot` → 2.0 MB PNG, 1280×720, **194,506 distinct colours**; read by eye: full main menu with `PB and J 0.23.0` in the corner |
+| 5. the pair | ❌ `vkCreateDevice failed (VkResult: -3)`, no second socket |
+
+### 14.2 🔴 Why the pair result is worth nothing, and the shape it belongs to
+
+The second-instance failure was investigated for three rounds and blamed, in order, on a
+two-compositor Vulkan limit, then on `setsid` detaching from the logind session, then on the driver.
+**All three were wrong. A single orphaned compositor from step 1 was holding the Vulkan device.**
+
+`pkill -f 'gamescope -W'` matched **nothing and exited quietly**: gamescope execs into
+**`gamescope-wl`** (with a `gamescopereaper` child), so the pattern that launched it does not kill
+it. Every test after that point — including the ones labelled "clean machine" — ran against a live
+orphan. The teardown was the vacuous step, and it silently invalidated the experiment that followed.
+
+⭐⭐ **This is sighting 3's shape at one remove: not a guard that could not see, but a CLEANUP that
+could not clean, whose failure then presented as a property of the system under test.** A `pkill`
+exit code is not a reaped process. `tools/headless-experiment.sh` now reaps by exact name, escalates
+to SIGKILL, **verifies by name afterwards**, and runs a `vulkaninfo` canary so a wedged GPU is
+reported at the time instead of discovered the next day.
+
+Two further instrument defects, both caught during the same run:
+
+- `pgrep -f 'PhantomBrigade.exe'` **matches the shell running the check** — it reported 1 instance on
+  a machine with none, and would have done so for ever. Caught by the user, not by the tool.
+- `pgrep -x 'PhantomBrigade.exe'` cannot rescue it: the name exceeds 15 characters, so pgrep warns
+  and returns **0 unconditionally** — a zero structurally unable to be anything else, which reads as
+  a clean machine. The fix is `ps -eo comm=` plus a canary that aborts if the check itself is broken.
+
+### 14.3 🔴 The state the machine was left in
+
+After the run, `vkCreateDevice` fails **GPU-wide** — `vulkaninfo --summary` itself returns
+`ERROR_INITIALIZATION_FAILED`. This is not gamescope-specific. The running desktop is unaffected
+because it already holds its device, but **no new Vulkan application can start**: no game, no
+gamescope, nothing.
+
+Reaping the orphaned `gamescope-wl`/`gamescopereaper` and a leftover Proton `winedevice.exe` did not
+clear it; the leaked contexts outlive the processes. **A reboot clears it. A logout probably does
+too**, since it restarts the compositor holding the leaked contexts. `nvidia-smi --gpu-reset` is not
+available while the desktop compositor holds the GPU.
+
+⚠️ **Price this into the route.** A headless rig that can wedge the GPU on teardown is not yet an
+unattended one. Before any automation is built on this, the reap-and-verify path in
+`tools/headless-experiment.sh` needs a clean run of its own — ideally several launch/teardown cycles
+with the `vulkaninfo` canary green after each.
+
+### 14.4 What this changes for the rig
+
+- **Single-instance headless is confirmed and immediately useful.** Every R0 reading that needs one
+  machine — the checkpoint stall (design q6, which decides `N`), the checkpoint→Execute round trip —
+  can now be taken without the desktop.
+- **Every two-instance reading still needs the pair question answered**, which includes R1 in full
+  and therefore **R1·10b, the q9 decider for M12d stage D0**.
+- 🆕 **The 🧑 screenshot readings are cheaper than §6 assumed.** §6 said the corpse reading becomes
+  "automatable, camera framing unproven". The run shows screenshots can be captured *and read* in
+  the same loop that drives the game, so R1·7 is genuinely agent-closable. **R1·11 (the Leave button)
+  still needs a human** — nothing here tested input injection.
