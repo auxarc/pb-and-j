@@ -172,22 +172,63 @@ Host computes once and broadcasts. Non-negotiable, and the reason is stronger th
 ⇒ **Never derive the budget independently on any machine.** Host reads its own
 `salvageBudgetLast` after the screen opens and broadcasts the integer.
 
-### 2.5 The pool split
+### 2.5 The pool split ▸ ✅ **DECIDED 2026-08-22 — ONE SHARED BUDGET. Equal pools are DEAD.**
 
-Equal integer pools, one per present player, remainder discarded. Enforcement is **100% mod code**:
-the only vanilla check is `salvageCostValid = salvageCostTotal <= salvageBudgetLast` gating the
-finish button (`CIViewOverworldDebriefing.cs:2368-2370`); `ProcessSalvageSelections` ends in a
-`Debug.LogWarning` that explicitly lets the process continue (`EquipmentUtility.cs:1903-1906`).
+🔴 **The sentence this section opened with, and what killed it.** It read:
+
+> *"Equal integer pools, one per present player, remainder discarded."*
+
+**Killed by this plan's own KILL 7** (§7): *"Equal pools, remainder discarded, is obviously right"*
+— not a technical claim at all, **and it can make an item unclaimable by anyone that a solo player
+could afford.** That objection was escalated as §8 Q1 rather than built on; the user answered it on
+2026-08-22 and answered it against equal pools. Recording *why* it died matters more than recording
+that it did: the plan refuted its own premise, and the decision is that refutation being accepted.
+
+**The decision, stated as wiring.** Every participant sees and draws from **the same**
+`salvageBudgetLast`. Selections replicate (§2.1's correct-after model, unchanged). Nobody commits
+until the barrier releases (§2.6, unchanged). There is no per-player pool, no remainder, and no
+reservation arithmetic — the contended resource is one integer that everyone can see, and the
+barrier is what makes contention resolvable rather than racy.
+
+🔴 **The correction the decision as first relayed did NOT carry, and it is the load-bearing one.**
+The relay said *"vanilla's own `salvageCostValid = salvageCostTotal <= salvageBudgetLast` gate does
+the enforcing."* **It does not.** Read on 2026-08-22:
+
+- `salvageCostValid` is computed inside **`CIViewOverworldDebriefing`, member
+  `SalvageRefreshBudget`** (`decompiled/CIViewOverworldDebriefing.cs:2351`), and its only
+  consequences at `:2368-2378` are **UI**: `salvageButtonFinish.available = salvageCostValid`,
+  `salvageBudgetButtonDetails.available`, a label colour, the finish-label string, a tooltip, and a
+  fill amount. It is a **redraw**, not an admission check. Anything that reaches the commit without
+  passing through that redraw is unenforced.
+- The commit funnel's own over-budget arm **lets the process continue by design**:
+  `EquipmentUtility`, member `ProcessSalvageSelections` (declared `:1805`), `:1903-1906` —
+  `if (budget < costTotal) { Debug.LogWarning($"Salvage operation cost {costTotal} exceeds budget
+  {budget} | … letting the process continue..."); }` and then transfers the parts anyway. The
+  warning text says out loud that it is not a gate.
+
+⇒ **Enforcement is 100% mod code** — which this section already said and the relay lost. Concretely,
+it must live in **two** places, not one: **(a) host-side claim admission** (a claim that would push
+the merged total over the budget is refused at the host when it arrives, not repaired later), and
+**(b) the merged total as a precondition of barrier release** (the barrier does not release while
+the merged selection set is over budget). Neither can be a UI state; the UI is a mirror of (a).
+
+⚠️ **UNVERIFIED, and B4 must open it before designing around it:** §2.6 proposes releasing the
+per-machine commit with `buttonConfirm.callbackOnClick.Invoke()`. **Whether invoking the callback
+directly bypasses the button's `available` flag is not established here** — `available` is set on
+the button object, and a direct `Invoke()` on the delegate plausibly ignores it. If it does bypass,
+the vanilla UI gate is not even a backstop on the drive path, which strengthens (a)+(b) rather than
+weakening them; if it does not, the drive path can fail silently on an over-budget machine. **Open
+the button class and settle it** — do not assume either way.
 
 ⚠️ Per-group `costMultiplier` is not 0-or-1 — a recovered player frame priced at 0.4 while enemy
 units priced at 1.0 (design doc, 2026-08-08, **UNVERIFIED here**), and `GetSalvageCost` applies the
-multiplier only when `< 1f` (`:1640-1643`). Pool arithmetic uses each group's own multiplier.
-Scrap and recover are separately priced (`costDismantle*` vs `costTake*`, each intact/damaged) —
-a scrap is not free.
+multiplier only when `< 1f` (`:1640-1643`). **Still true and still needed** under one shared budget:
+the merged total (a)+(b) enforce is a sum over each group's own multiplier, and scrap and recover
+are separately priced (`costDismantle*` vs `costTake*`, each intact/damaged) — a scrap is not free.
 
-🔴 **Open, and it is a product decision, not a technical one — see §7 Q1.** An equal split can make
-an expensive item unclaimable by *anyone* that a solo player could have afforded. Ask the user
-before building it.
+⇒ **Stage D3's `SalvagePool` is dead as specified and must be re-specified or removed. That design
+work is item B4 of `docs/design/backlog-2026-08-22.md`, not this correction's** — this section
+records the decision and the enforcement finding; B4 writes the replacement and refutes it.
 
 ### 2.6 The barrier and the commit
 
@@ -203,7 +244,11 @@ Commit is per-machine and the funnel is single (`CIViewOverworldDebriefing.cs:28
 `ProcessSalvageSelections`; `SalvageFinish` is reached from `OnSalvageFinish` at `:2741`, wired to
 `salvageButtonFinish.callbackOnClick` at `:541`). The game's own confirmation modal is the natural
 per-player confirm, with the barrier releasing `buttonConfirm.callbackOnClick.Invoke()` on each
-machine once everyone has agreed (drivability measured end to end 2026-08-08 — **UNVERIFIED here**,
+machine once everyone has agreed (⚠️ **UNVERIFIED, flagged 2026-08-22, and B4 must settle it by
+opening the button class: whether a direct `callbackOnClick.Invoke()` bypasses the button's
+`available` flag.** `available` is what `SalvageRefreshBudget` sets from `salvageCostValid`
+(§2.5), so if `Invoke()` ignores it, the vanilla UI gate is not even a backstop on the drive
+path — which is an argument for host-side admission, not against this mechanism) (drivability measured end to end 2026-08-08 — **UNVERIFIED here**,
 but the public entry points are real: `OnSalvageRecover/Scrap/Skip(int)` at `:2026, :2031, :2036`,
 the `…Unit(int)` trio at `:1868, :1873, :1878`, `OnStageNextExternal()` at `:760`).
 
@@ -365,10 +410,34 @@ technical one, and it is escalated rather than assumed:
 ✅ **DECIDED 2026-08-21 by the user: measure first.** Neither shape is chosen; the deciding reading
 is **R1·10b** in `docs/notes/rig-run-1-0.md`, and it turned out to need **no new code** —
 `cm.force-victory` calls `EndCombatWithOutcome` directly, bypassing the bit-4 gate that blocks the
-ordinary path (`ConsoleCommandsCombat.cs:71-79`, `:31-39`; verified in the decompile).
-🔴 **Ordering constraint this creates:** the reading **must be taken before M17 stage 2 merges** —
-that PR's prefix closes the route it uses, and the `bypassOnce` hatch that would re-open it ships in
-the same PR. ⇒ **R1 before W2.**
+ordinary path (`decompiled/PhantomBrigade.DebugConsole/ConsoleCommandsCombat.cs`, members
+`ForceVictory` and `CombatStateCheck`; verified in the decompile). **That decision stands.**
+
+🔴 **CORRECTED 2026-08-22 — the ordering constraint this section claimed does not exist.** The
+sentence was:
+
+> *"🔴 **Ordering constraint this creates:** the reading **must be taken before M17 stage 2 merges**
+> — that PR's prefix closes the route it uses, and the `bypassOnce` hatch that would re-open it
+> ships in the same PR. ⇒ **R1 before W2.**"*
+
+Read literally it refutes itself: **closed and re-opened in one commit is not closed.** The two
+routes were derived side by side on 2026-08-22 and are **call-for-call identical** for this
+reading — `pbj.force-end victory` (`src/PBAndJ.Mod/Net/DestructProbeGlue.cs`, member `ForceEnd`)
+takes the same `IsGameState("combat")` guard, sets `WreckingPatches.BypassCombatEndOnce`, makes the
+**same** `ScenarioUtility.EndCombatWithOutcome(resolved, early: true)` call synchronously, and
+clears the flag in a `finally`; the prefix short-circuits on that flag
+(`src/PBAndJ.Mod/Net/WreckingPatches.cs`, member `SuppressCombatEnd`). Same method, same arguments,
+same precondition ⇒ no argument for ordering survives except "the hatch has never been driven",
+which is a risk, not a constraint.
+
+⇒ **The user ruled W2 FIRST (2026-08-22). M17 stage 2 merged as PR #60** (`main` = `d3a3b3b`, mod
+0.24.0, wire v10). **R1·10b is taken through `pbj.force-end`**, in the same sitting as R1·6a–6f,
+which need stage 2 deployed anyway. Full derivation: `docs/design/backlog-2026-08-22.md` §D.
+Nothing about D0's *question* changes — only the console command that asks it.
+
+⚠️ Item 4 above ("M17 stage 2 then closes even the accidental routes") is now **present tense**:
+after #60 a client can never open a debriefing by itself, content routes included. That makes D0
+mandatory rather than likely, and it is why the backlog schedules a **stage D0** ahead of D4/D5.
 
 **What does not change either way:** D1–D3 (Core, wire-neutral) stand as written, and §5's M1–M3
 readings remain the right instruments — M1's expected answer is now `exec=0` permanently.
@@ -418,6 +487,10 @@ is real and was pointing at the wrong milestone half.**
 **KILL 7 — "Equal pools, remainder discarded, is obviously right."** Not a technical claim at all,
 and it can make an item unclaimable by anyone that a solo player could afford. Escalated to the
 user as §8 Q1 rather than built on.
+✅ **AND IT LANDED, 2026-08-22: this objection is the reason equal pools are dead.** The user's
+ruling — one shared budget, barrier-gated — is this KILL accepted, not a preference expressed over
+it. §2.5 and §8 Q1 carry the decision. **The self-refutation pass is the thing that changed the
+design here**; that is worth more than the row it closed.
 
 **SURVIVED, with what would kill it:**
 
@@ -438,7 +511,7 @@ user as §8 Q1 rather than built on.
 
 | # | question | cheapest settling experiment |
 |---|---|---|
-| 1 | Equal pools, or one shared budget with reservations? | 🧑 One sentence to the user. It is a product decision and §2.5 should not be built until it is answered. |
+| 1 | Equal pools, or one shared budget with reservations? | ✅ **ANSWERED 2026-08-22 by the user: ONE SHARED BUDGET, barrier-gated.** ~~"🧑 One sentence to the user."~~ Asked and answered. Equal pools died to **this plan's own KILL 7** — an item unclaimable by anyone that a solo player could afford. And "with reservations" did not survive either: there is no reservation arithmetic, just one visible integer plus the barrier. §2.5 is rewritten to the decision, **including the finding the decision as relayed did not carry** — vanilla does **not** enforce the budget at the moment that matters (`SalvageRefreshBudget` only sets UI availability; `ProcessSalvageSelections` logs over-budget and continues), so enforcement is host-side claim admission **plus** merged-total as a precondition of barrier release. §2.5 is now buildable; **stage D3's `SalvagePool` is not** — its re-spec is backlog item B4. |
 | 2 | Is the `combat_salvage_drop_chance` roll reached in a real co-op campaign fight? | Rig M3. If `featuresChecked=True`, D3's manifest shrinks to roster reconciliation. |
 | 3 | Can an M12c combat checkpoint be loaded from the **overworld** state a stalled debriefing leaves a machine in? | One instance, one fight, checkpoint, finish the fight, then `pbj.combat-load` the checkpoint slot from the overworld. Read the action diff. Rides R0's tail at near-zero cost. |
 | 4 | Is `SalvageFinish`'s post-commit work deterministic given synced inputs? (design q7, `CIViewOverworldDebriefing.cs:2780+`) | Rig M6 — **and it is not closable before D5**, because it needs both machines to commit. Recorded as blocked rather than guessed. |

@@ -4,6 +4,17 @@ Written 2026-08-22 ~00:45, on the still-wedged machine, before the reboot. Every
 was read or run on this machine tonight unless it carries an **UNVERIFIED** tag; commands whose
 absence-of-output mattered were positively controlled first (each case is noted where it arises).
 
+✅ **THE WEDGE IS CLEARED — verified 2026-08-22, not merely reported.** `nvidia-smi -q` now says
+`GPU Recovery Action : None` (the line this file quotes as `Reset`). `journalctl -k -b` for the
+current boot holds **zero `NVRM: Xid` lines** — pattern positively controlled: the same journal
+prints 98+ `NVRM` lines, and the one case-insensitive "xid" hit is the r8169 NIC's `XID 609`, a chip
+identifier, not a fault. `journalctl --list-boots`: the previous boot ended **2026-08-22 01:32:03**
+and the current one began **01:32:29**, i.e. *after* the 00:01:44 Xid 51 — so the reboot really is
+on the far side of the wedge. ⚠️ **Trap for the next reader:** this boot's earliest kernel lines are
+stamped in **UTC** (`Aug 21 21:32:31` = 01:32:31 EDT); do not read that as "the boot predates the
+wedge". 🔴 **The §6 ladder has NOT been run** — it stays ATTENDED-ONLY, and nothing below it is
+answered. Clearing the wedge restored Vulkan; it did not answer the pair question.
+
 ## The verdict
 
 **Nothing leaked. The GPU took a scheduler fault — `Xid 51: BAD_TSG` — at 00:01:44, the moment

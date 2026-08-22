@@ -4,7 +4,15 @@
 `8f163a7`, mod **0.23.0**, wire v9 (protocol unmoved; the wire-SURFACE hash moved with `Seams.cs`),
 **2102 tests at 100%**, `make dist` exit 0, `peer-selftest` ALL PASS.
 **Rows 1 and 2 of the merge table below are done; the rest of this file stands as written.**
-Next is **R0** — the rig, which no agent can take — and it now has every instrument it needs.
+~~Next is **R0** — the rig, which no agent can take — and it now has every instrument it needs.~~
+
+🔴 **SUPERSEDED 2026-08-22 (item B3).** Two of the three sentences above have been overtaken:
+`main` = **`d3a3b3b`**, mod **0.24.0**, wire **v10**, **2119 tests at 100%**, split grouping
+**1577** members — **PR #60 merged M17 stage 2 (row 5, window W2)**. And **R0 has been TAKEN**
+(2026-08-22, headless, one instance — readings 1–3, numbers in `docs/notes/rig-run-1-0.md` §9.1);
+an agent took it after all, because single-instance headless turned out to work. The live plan for
+this cycle is `docs/design/backlog-2026-08-22.md`; this file sequences milestones, that one
+sequences the work. **Recount every baseline from your own `make dist` run — never inherit these.**
 ⭐ Both R0 blockers were absorbed into #51 before it merged; ⚠️ **the review's prescription for one of
 them was itself defective** and the shipped fix keys captures **by slot** rather than reusing the
 single `beforeSave` field — see §5 reading 2.
@@ -43,11 +51,23 @@ Four blockers stand between `main` and that definition, established and verified
    nothing (verified 2026-08-21; the pattern was proven able to match by finding the same names in
    the plan text). A build-ready, self-refuted plan exists in memory
    (`m12c-plan.md` / `m12c-plan-full.md`).
-2. **M17 stage 2 — the wrecked-unit cluster.** Not built; planned and refuted twice; the rewritten
-   plan text lived in a session scratchpad and must be presumed lost. Zero `"Filter"` Harmony
-   patches in `src/` (verified). The wire already carries `IsWrecked`
-   (`src/PBAndJ.Core/Net/UnitSnapshot.cs:335`, verified) but nothing applies the ECS flag.
-   One wire v10 break.
+2. **M17 stage 2 — the wrecked-unit cluster.** ✅ **BUILT, GATED, AND MERGED as PR #60 on
+   2026-08-22 — this blocker is discharged.** The sentences below are kept as written, because a
+   reader who remembers them should see what happened to them:
+   > *"Not built; planned and refuted twice; the rewritten plan text lived in a session scratchpad
+   > and must be presumed lost. Zero `"Filter"` Harmony patches in `src/` (verified)."*
+
+   **What killed them:** commit `26413e8` on `m17-stage2-wrecked-units` (24 files, +1585/−24),
+   rebased onto `093bfeb` as `dad9a50`, gated green (`make dist` exit 0, **2119 tests** at 100%
+   line/branch/method, peer-selftest ALL PASS 11 scenarios, split-selftest 90/90, grouping recorded
+   at **1577** members), and merged as **PR #60** — `main` = `d3a3b3b`, **mod 0.24.0, wire v10**.
+   The plan text was not lost: `docs/design/m17-stage2-plan.md` is in the tree, and its own stale
+   "NOT BUILT" header was corrected inside the branch (commit `1383a4c`).
+   The wire's `IsWrecked` (`src/PBAndJ.Core/Net/UnitSnapshot.cs`, member `IsWrecked`) now has an
+   applier; the three Harmony patches live in `WreckingPatches` and are readable at the rig through
+   `pbj.wreck-patches` (R1·6a) — **`src/PBAndJ.Mod` is in `UNCOVERED_PROJECTS`, so a patch that
+   resolves but never applies is SILENT to `make dist`; that probe is the only instrument for it.**
+   *(Corrected 2026-08-22, item B3.)*
 3. **M12d — zero code, largest, least prepared.** Design at
    `docs/design/m12-concurrent-management.md:416` (§M12d). The `DataBlockSavedSubsystem` has no
    `customTags` field (measured twice: 606 subsystem tags in, 0 out), mitigated by the
@@ -185,8 +205,15 @@ The plan is already refuted (six kills, recorded); do not re-derive it. It was w
         DoSave(CheckpointSlot, Normal, null, -1, false)`. Synchronous, no polling, no
         `delayUntil` (plan §3.3 gives the reasons — keep them as comments).
       - **The stall instrument ships inside this glue** (see R0): wrap the `DoSave` in a stopwatch,
-        log `pbj checkpoint: turn=<n> ms=<x> writes=<total-this-session>`, and register
+        log the per-turn stall line, and register
         `pbj.checkpoint-stat` printing attempts / refusals-by-reason / writes / last-ms / last-turn.
+        🔴 **CORRECTED 2026-08-22 (sighting 27).** This line prescribed the log as
+        ~~`pbj checkpoint: turn=<n> ms=<x> writes=<total-this-session>`~~. **What shipped, and what
+        an operator must grep for, is `[pb-and-j] checkpoint: turn=…`** —
+        `src/PBAndJ.Mod/Net/CheckpointGlue.cs`, member `Write`, `:197`, emits
+        `"[pb-and-j] checkpoint: turn=" + turn + " ms=" … + " writes=" … + " diff-armed=" …`.
+        `pbj checkpoint` is **not a substring** of that; the prescription here is where the
+        runbook's broken grep came from. The pattern that works is `grep 'checkpoint: turn='`.
       - `PbjProtocol.ModVersion` 0.22.0 → 0.23.0 + `mod/metadata.yaml`, then
         `make record-wire-surface`, same commit. If any new member lands in a split-family file,
         `make record-split-grouping` with the placement justified in the PR.
@@ -372,7 +399,12 @@ Exists because two L1 decisions fork on its answers and waiting for R1 would ser
 needs a client holding units, so the session's second instance joins for the tail.*)
 
 1. **The checkpoint stall** (design q6): drive a fight to planning phase, `pbj.execute` several
-   turns, read `pbj checkpoint: turn=N ms=X writes=K` per turn. Record the save-folder census
+   turns, read `[pb-and-j] checkpoint: turn=N ms=X writes=K diff-armed=…` per turn
+   (🔴 **CORRECTED 2026-08-22, sighting 27** — this row said ~~`pbj checkpoint: turn=N ms=X
+   writes=K`~~, a literal the code has never emitted: `CheckpointGlue.cs`, member `Write`, `:197`
+   writes the `[pb-and-j]` tag. `grep 'checkpoint: turn='` is the pattern that matches).
+   ✅ **TAKEN 2026-08-22** — mean 433.27 ms / worst 454.62 ms over 5 writes at a 21-save census;
+   numbers and their excluded zero-cases in `rig-run-1-0.md` §9.1. Record the save-folder census
    beside the number — the cost scales with lifetime save count (`RefreshSaveHeaders` re-parses
    every save's metadata, design `:403`), so the reading without the census is not a measurement.
    *Zero meaning:* `ms=0` with `writes>0` = the timer wrapped nothing (suspicious — DoSave zips);
@@ -409,6 +441,10 @@ needs a client holding units, so the session's second instance joins for the tai
 
 ### R1 — the one comprehensive run (after L1 complete + L3 build + L4 merged)
 
+✅ **Those three preconditions are all met as of 2026-08-22** (L1 = #51, L4 = #52, L3 build = #60).
+**R1 is one sitting, after W2** — §6's ordering note records why the old "R1 MUST RUN FIRST" row
+below the table contradicted this heading, and which of the two survived: this one.
+
 **Pre-flight, in order:**
 
 - [ ] `make deploy` exit 0 with BOTH instances closed (deploy `rm -rf`'s a mod folder whose DLL a
@@ -422,10 +458,15 @@ needs a client holding units, so the session's second instance joins for the tai
 - [ ] Host at a clean overworld, **no debrief view pending** (PB has no view stack; a pending
       screen re-drops onto the next battle).
 - [ ] Session up, both in one fight via the shipped M12b·2 path (the M16 route: `cm.kill-enemy` is
-      the guaranteed kill; ⚠️ the `EndCombatWithOutcome` prefix ships with W2, so the CLIENT's
-      console exit — `cm.force-victory`/`cm.force-defeat`, **there is no `cm.end-combat-*`**
-      (corrected 2026-08-21) — is dead there: plan combat exit via host victory, or the
-      `pbj.force-end` escape hatch W2 ships alongside the prefix).
+      the guaranteed kill; ⚠️ **UPDATED 2026-08-22 — W2 has merged, so this is now the present
+      tense, not a warning about the future:** the `EndCombatWithOutcome` prefix is live on `main`,
+      so the CLIENT's console exit — `cm.force-victory`/`cm.force-defeat`, **there is no
+      `cm.end-combat-*`** (corrected 2026-08-21) — **is dead on the client today**. Plan combat
+      exit via host victory, or use **`pbj.force-end <victory|defeat>`**
+      (`src/PBAndJ.Mod/Net/DestructProbeGlue.cs`, member `ForceEnd`), which sets
+      `WreckingPatches.BypassCombatEndOnce` around the identical
+      `ScenarioUtility.EndCombatWithOutcome(resolved, early: true)` call and clears it in a
+      `finally`. **This is also the route R1·10b now takes** — see §6's ordering note.)
 - [ ] Both HUDs woken (`pbj.select-unit <index>` on each) or `pbj.execute` refuses
       indistinguishably from a stalled barrier (M16 trap list).
 
@@ -445,6 +486,21 @@ so no reading destroys a later one's preconditions):
 | 6d | 🧑 the enemy tracker corrects | M17 stage 2's headline buy | the user's eyes on instance 3's unit-tab row, plus the probe's per-unit `wrecked=` list | n/a — human reading, and the counter half cannot substitute: `set=N` says the ECS moved, not that the UI redrew. **This is the reading that tests the explicit `RedrawUnitTabs`** |
 | 6e | no modal dialog, no frozen debris | M17 stage 2 — what the suppression buys | zero exceptions in the client `Player.log` during combat; eyes on a corpse's core for stuck fragments | a clean log is **not** evidence the cascade was suppressed, only that it did not throw. 6b is that evidence; read them together |
 | 6f | the escape hatch works: `pbj.force-end victory` on the client | M17 stage 2 — the console exit the prefix closes | the command's own return string + `pbj.net-status` | the command names its branch: `BYPASSED`, `prefix was NOT ARMED`, `NOT IN COMBAT`, `BAD ARGUMENT` or `THREW`. A silent return is impossible by construction, which is the point |
+
+🔴🔴 **DO NOT TAKE 6f WHERE THIS TABLE LISTS IT. 6f AND 10b ARE THE SAME DESTRUCTIVE ACT.**
+Found 2026-08-22 while correcting this file. `pbj.force-end victory` **ends the client's fight** — it
+is not a probe. Taken here, in phase 2 (during the fight), it destroys the preconditions of readings
+**6d, 7, 9, 10 and 10b**, which all need a live combat. The two readings are **one invocation** and
+they belong together in phase 4:
+
+> `pbj.debrief-probe` → `pbj.force-end victory` → `pbj.debrief-probe`
+
+where **the return string is 6f** and **the probe pair is 10b**. ⚠️ This table's numbering still
+reflects the old order; the ordering above wins. Re-numbering the readings changes the experiment's
+shape, so it is left to whoever owns the R1 booking rather than done here.
+⭐ The general shape, worth carrying: **a reading whose instrument MUTATES the thing being read
+cannot be scheduled by its number.** `pbj.debrief-probe` observes; `pbj.force-end` acts. Only one of
+them can be taken twice.
 | 7 | 🧑 client corpse stays collapsed through planning (eyes) | M17 stage 2 (stage 1's property, re-confirmed under stage 2) | the user watches instance 3 | n/a — human reading. Named because `OnHandleInactiveUnitCollision` and stage 1's freeze touch the same views and nobody has seen them together |
 | 8 | `presimulated` during varied fights | advanced-particle-blocks decision | `pbj.vfx-probe` (exists, `VfxProbeGlue.cs:428-475`) | 0 beside a non-zero scanned-total, across ≥3 varied fights, retires the feature; 0/0 = the probe ran outside combat |
 | 9 | host victory → host debriefing fingerprints | design q7 (partial) | `pbj.debrief-probe` before + after commit | entered=False = wrong moment **before** the commit only — *corrected 2026-08-21: `SalvageFinish` calls `TryExit` as its second act, so `entered=False` is CORRECT after the commit; the post-commit fingerprint comes from the inventory section, and the probe prints the stage on the same line* |
@@ -488,9 +544,13 @@ in memory as `planner-executor-loop`. The shape, and the three ways ours differs
 Some items here cannot be closed by any agent — they need the two-instance rig, a human's eyes, or a
 click. **A hole does not stall the plan.** Each is written with four fields: the measurement stated
 precisely enough that the taker need not interpret it; ⭐ **who can take it**; what each outcome
-changes; and **what may proceed under which assumption**. The open holes today are **R0**, **R1**
-(including R1·10b, the q9 decider), and the **post-reboot GPU ladder** in
-`docs/notes/gpu-wedge-forensics.md`.
+changes; and **what may proceed under which assumption**. ~~The open holes today are **R0**, **R1**
+(including R1·10b, the q9 decider), and the **post-reboot GPU ladder**.~~
+🔴 **UPDATED 2026-08-22:** **R0 is CLOSED** — readings 1–3 taken headless by an agent, numbers in
+`rig-run-1-0.md` §9.1; only its two-instance tail (the stage-D fork reading) is still open. The
+remaining holes are that **tail**, **R1** (including R1·10b, the q9 decider, now via
+`pbj.force-end`), and the **GPU ladder** in `docs/notes/gpu-wedge-forensics.md` §6 — which gates
+**headless pairs only**, never attended desktop R1 (see §6's R1 row).
 
 ⭐⭐ **Budget them:** *reach for the offline rig first, and spend the scarce human-gated measurement
 on what the rig cannot see.* The sister project lost a play session to three readings that reached
@@ -510,12 +570,41 @@ which the old row omitted; M12d gains a D0 gate — §8 q9):
 | ✅ 1 | **MERGED as #51.** **PR-1: M12c stages A+B+C — WINDOW W1** (built, integration-verified) **+ absorbs R0 blockers B-1/B-2**: `pbj.checkpoint-load`, `beforeSave` armed by `CheckpointGlue.Write` | L1 | wire-surface hash moves (`Seams.cs`); ModVersion **0.23.0**; protocol stays v9 | `make record-wire-surface` + `record-split-grouping` same commit (both already done in the lane); re-run `dist` + `peer-selftest` after absorbing the blockers |
 | ✅ 2 | **MERGED as #52.** PR-2: DebriefProbe + edge counter + runbook + nightfall transcription (built, integration-verified) — fix `rig-run-1-0.md:180`'s `cm.end-combat-*` before merge | L4 | none (verified on the merged tree) | `make dist`; rebase on PR-1 (`ModEntry.cs` adjacency only — the trial merge showed no textual conflict) |
 | 3 | PR-3: docs (this PR) — this file's corrections + the review + L2's two docs carrying their owed fixes (`SalvageFinish` rename ×2, `TryToDestroyCombatSite`, the `:268` defeat-gate correction, m12d-plan stage D0) | — | none | doc-only |
-| — | **R0** (deploy, mini reading **+ two-instance tail**) — 🧑 **HOLE: the user, at the rig.** ⚠️ Blocked behind the post-reboot GPU ladder (`gpu-wedge-forensics.md` §5); single-instance headless is confirmed so R0·1's stall reading no longer needs the desktop | — | — | numbers into the runbook; decides N and stage D's branch |
+| ✅ — | **R0** (deploy, mini reading **+ two-instance tail**) — **readings 1–3 TAKEN 2026-08-22, headless, by an AGENT.** ~~"🧑 HOLE: the user, at the rig. ⚠️ Blocked behind the post-reboot GPU ladder"~~ — **both halves of that were wrong by the time it was read**: single-instance headless is confirmed, so R0 needed neither the user nor the ladder. **Only the two-instance tail** (the stage-D fork reading) remains a hole, and it is desktop-takeable | — | — | numbers in `rig-run-1-0.md` §9.1. ⚠️ R0·1's 433 ms is a **POINT, not a slope** — it scales with lifetime save count and 21 saves is a developer's folder, so it does **not** close design q6 on its own; the tail still decides stage D's branch |
 | 4 | PR-4: M12c stage D — branch A (wire-neutral) or branch B (**its own wire window**, ordered against W2, never shared) | L1 | A: none — `make dist` proves the hash unmoved · B: protocol bump + re-record | branch per R0's tail |
-| 5 | **PR-5: M17 stage 2 — WINDOW W2** 🔴 **R1 MUST RUN FIRST** — this PR's `EndCombatWithOutcome` prefix closes the only route R1·10b (the q9 reading) can use, and the `bypassOnce` hatch that would re-open it ships in this same PR | L3 | wire **v10** + ModVersion **0.24.0** (UnitSnapshot + codec) | 🧑 user authorizes the build (plan §9; 3rd refutation already paid); `make record-wire-surface` **and `record-split-grouping`** same commit; `Closed`/`Faulted` predicate; `pbj.force-end` |
-| — | **R1** (deploy, the comprehensive run) — 🧑 **HOLE: the user, at the rig.** ⚠️ Needs the PAIR question answered first (two headless compositors with games in them — unproven, see `gpu-wedge-forensics.md`). **R1·10b must precede PR-5.** | — | — | closes §5's table (with its four dated corrections) |
+| ✅ 5 | **MERGED as #60. PR-5: M17 stage 2 — WINDOW W2** (2026-08-22; `main` = `d3a3b3b`). 🔴 **THE ORDERING SENTENCE THAT STOOD HERE IS REFUTED — see the note below this table** | L3 | wire **v10** + ModVersion **0.24.0** (UnitSnapshot + codec) | ✅ all discharged: gate green, `record-wire-surface` + `record-split-grouping` in the same commit (grouping **1577**), `Closed`/`Faulted` predicate, `pbj.force-end` shipped |
+| — | **R1** (deploy, the comprehensive run) — 🧑 **HOLE: the user, at the rig.** ⚠️ **CORRECTED 2026-08-22:** ~~"Needs the PAIR question answered first (two headless compositors with games in them — unproven)"~~ — **FALSE as a dependency.** The pair question gates only the *headless* two-instance variant. Two **desktop** instances are proven for the entire life of the rig (M12–M17 two-game verifications), which `gpu-wedge-forensics.md` §6 states in its first paragraph; and R1 contains 🧑 readings anyway (6d, 7, 11). ⇒ **attended desktop R1 needs nothing from the GPU ladder.** Also corrected: ~~"R1·10b must precede PR-5"~~ — PR-5 has merged; R1·10b now rides `pbj.force-end` (see the note below the table) | — | — | closes §5's table (with its dated corrections) |
 | 6+ | M12d PRs — **gated on m12d-plan stage D0 + refutation** (§8 q9); then **WINDOW W3** (likely protocol v11) | L5 | per L2's plan | `make record-wire-surface` per wire PR |
 | last | **1.0**: `make package` (adds `check-game-hash peer-selftest check-no-drive-channel`, `Makefile:484`) — release ships the mod zip only, never the peer | — | — | 🧑 the user cuts the release |
+
+🔴 **The R1/W2 ordering, corrected 2026-08-22 (backlog §D; item B3).** The sentence this table
+carried was:
+
+> *"🔴 **R1 MUST RUN FIRST** — this PR's `EndCombatWithOutcome` prefix closes the only route R1·10b
+> (the q9 reading) can use, and the `bypassOnce` hatch that would re-open it ships in this same PR"*
+
+**Read literally it contains its own refutation: closed and re-opened in one commit is not closed.**
+The derivation, run against the code on 2026-08-22:
+
+- Pre-W2 route: `cm.force-victory` → `CombatStateCheck()` (= `IDUtility.IsGameState("combat")`) →
+  `ScenarioUtility.EndCombatWithOutcome(CombatOutcome.Victory, early: true)`
+  (`decompiled/PhantomBrigade.DebugConsole/ConsoleCommandsCombat.cs`, member `ForceVictory`).
+- Post-W2 route: `pbj.force-end victory` → the same `IsGameState("combat")` guard → sets
+  `WreckingPatches.BypassCombatEndOnce = true` → **the identical call**
+  `ScenarioUtility.EndCombatWithOutcome(resolved, early: true)` → clears the flag in a `finally`
+  (`src/PBAndJ.Mod/Net/DestructProbeGlue.cs`, member `ForceEnd`). The prefix short-circuits on that
+  flag (`src/PBAndJ.Mod/Net/WreckingPatches.cs`, member `SuppressCombatEnd`) and the call is
+  synchronous, so the whole vanilla body runs inside the bypass window.
+
+Same static method, same arguments, same precondition ⇒ **"R1 must precede W2" was never a
+structural constraint**, only a preference for an instrument that had already been driven. **The
+user's ruling, 2026-08-22: W2 FIRST.** PR #60 merged; R1·10b is taken **through `pbj.force-end`**,
+in the same sitting as R1·6a–6f — which need stage 2 deployed anyway. The residual risk is named,
+not hidden: `pbj.force-end` has never run in a game and lives in the uncovered project, so its
+failure would cost that sitting's 10b reading — but the failure is **loud by construction**, the
+command names its branch (`BYPASSED` / `NOT ARMED` / `NOT IN COMBAT` / `BAD ARGUMENT` / `THREW`).
+This also dissolves the standing contradiction between §5's R1 precondition ("L3 build merged") and
+this row's old "R1 first": there is one R1, after W2.
 
 **Why W1 before W2:** M12c is build-ready today with its refutation already paid; M17 stage 2 owes
 a plan reconstruction and a third refutation before any code, so its window arrives later at no
@@ -532,8 +621,20 @@ its window second rebases and re-runs the full gate on the rebased tree; green i
 - **M17 stage 3 beyond the three re-scoped fields, and stage 4** — stage 3 was re-scoped into the
   v10 break (`deathStatus`/`knockedOut`/`ejected` only), stage 4 was cut (`destroyed` is write-only
   in vanilla; status ticks need their own suppression story). Recorded in `m17-review-findings.md`.
-- **Host-drop resume** — under host-only checkpoints there is no route (plan §9.4) and pricing one
-  reopens the client-checkpoint question. Post-1.0 unless the user pulls it in (§8 Q1).
+- **Host-drop resume** — 🔴 **SUPERSEDED 2026-08-22: it is IN 1.0.** The sentence that stood here
+  was:
+  > *"under host-only checkpoints there is no route (plan §9.4) and pricing one reopens the
+  > client-checkpoint question. Post-1.0 unless the user pulls it in (§8 Q1)."*
+
+  **The user pulled it in** (two rulings, 2026-08-22). Its premise also collapsed on inspection:
+  "there is no route" was true only of host-only checkpoints, and the mirror that creates one is
+  cheap because `ScenarioPayload` already carries a full game save over the wire. **Shape: N=2 —
+  on host drop, promote the sole client.** No candidate selection, no stability metric, no
+  election ships in 1.0 (~90% of sessions are exactly two players). Priced as its own milestone,
+  **M18**, in `docs/design/backlog-2026-08-22.md` §M18 — authority inventory, the moment matrix,
+  and a four-stage PR sequence H0–H3 with H1 taking its own wire window. It is the **last**
+  milestone: nothing in M12c/M12d depends on it, and H2 depends on M12c stage D. See also §8 Q1,
+  now ANSWERED.
 - **Advanced particle blocks as a feature** — 1.0 needs the READING (R1 #8); the ship/cut decision
   it feeds is content polish, not a blocker.
 - **A release before 1.0 / remote-friend compatibility** — settled by the release policy; local
@@ -558,7 +659,7 @@ its window second rebases and re-runs the full gate on the rebased tree; green i
 
 | # | question | cheapest settling experiment |
 |---|---|---|
-| 1 | Is host-drop resume in 1.0's scope? | 🧑 Ask the user one sentence. If yes: price a client-side mirror of the host's checkpoint bytes (it reopens plan KILL 2 — say so in the pricing). |
+| 1 | Is host-drop resume in 1.0's scope? | ✅ **ANSWERED 2026-08-22 by the user: YES, in 1.0.** ~~"Ask the user one sentence."~~ Asked and answered, in two rulings: it is in scope, and the design point is **N=2 — promote the sole client on host drop**, with no candidate selection, stability metric or election in 1.0. The pricing the row asked for is done: a client-side mirror of the host's checkpoint bytes, milestone **M18** in `docs/design/backlog-2026-08-22.md` §M18. It does reopen M12c plan KILL 2 (a client holding checkpoint bytes) and the pricing says so — the mirror is **store-verbatim**, versioned and integrity-checked, never a client-authored checkpoint, which is the distinction KILL 2 actually rests on. Sequenced LAST (§7). |
 | 2 | Does a mid-combat reload drive `ObserveCombatEdge` false→true? | ✅ **ANSWERED 2026-08-21 from the decompile** (`m12c-stage-d-fork.md` §2, review-verified): yes or the load refuses — exhaustive. R0's edge counter is the confirmation, not the decider; the live question moved to the fork reading (spine item 3). |
 | 3 | Does M12d need the unbuilt M12b generation-authority half? | L2 B1–B3 — decompile reads only; the probable answer (client reaches neither `OnCombatCompletionLate` caller) is already half-evidenced above. |
 | 4 | Do M12d's messages share a window with anything? | Answered by L2 B4; the default is NO — v10 does not stay open waiting for an unscoped milestone. |
@@ -567,7 +668,7 @@ its window second rebases and re-runs the full gate on the rebased tree; green i
 | 7 | Does the per-turn `DataManagerSave.saveName` mutation interact with M11d's `NameForRead`? | ✅ **ANSWERED 2026-08-21 by L1**: it cannot — `LoadingStart` passes the key explicitly and `NameForRead`'s `IsGameGeneratedSaveName` clause leaves the checkpoint's unprefixed name alone; pinned by `NameForRead_DoesNotRedirectTheCheckpointSlotsUnprefixedName` (in PR-1's tests). |
 | 8 | Is `SalvageFinish` (*corrected 2026-08-21: formerly the nonexistent `FinishDebriefing`*) deterministic given synced inputs? | Partial: R1 reading 9 fingerprints the host's commit. Full: two-machine comparison during M12d verification — **which now waits on q9**. |
 | 9 | 🔴 **NEW 2026-08-21 (review §3) — how does a CLIENT ever enter the debriefing?** No shipped or planned machinery feeds the client's post-combat chain: it cannot resolve its own combat on the ordinary path (§7), `CombatEndMessage` leaves it standing in the fight (`ClientSession.Dispatch.cs:228-246`), any load from combat is a campaign teardown, and W2's prefix closes even the content routes. M12d's D4/D5 presume the screen opens; today nothing opens it. | m12d-plan needs a **stage D0**: relay the host's outcome and drive the client's combat end + debriefing entry in place (new wire semantics + a deliberate prefix bypass), or make the host the sole committer with clients sending claims. One sentence from the user on which shape 1.0 wants would size it. L2's M1 reading stays as the confirmation — its expected value is `exec=0` on the shipped path, permanently, not "before M17 stage 2". |
-| 10 | Does shipped scenario content use `CombatForceExecution` or `transitionMode: OnExecutionEnd` (the two content routes §7 names)? | One grep over the game install's Configs (the YAML is not in this repo; `vendor/` holds only `Managed/`). Not a blocker — the prefix closes both routes either way. |
+| 10 | Does shipped scenario content use `CombatForceExecution` or `transitionMode: OnExecutionEnd` (the two content routes §7 names)? | ✅ **CLOSED 2026-08-22 — YES, BOTH, in shipped content.** ~~"One grep over the game install's Configs (the YAML is not in this repo…)"~~ — and the premise "not on this disk" was **wrong**: the Steam install is local and readable at `…/steamapps/common/Phantom Brigade/Configs/DataDecomposed/Combat/Scenarios/`. Re-run independently for this correction: `CombatForceExecution` in **2** scenario files (`unique_intro.yaml`, `unique_capital_center.yaml`); `transitionMode: OnExecutionEnd` **8** times (e.g. `unique_tutorial_liberation.yaml`, `unique_intro.yaml`). **Controls, so the counts are not claims about the patterns:** `transitionMode:` overall = **14** hits and `CombatCreateDamage` = **3** — both bite. ⚠️ Do not quote the ~210 bare `OnExecutionEnd` hits as the transition count; most are `evaluationContext:`, a different field. ⇒ **The contingency §7 names is LIVE in shipped content, not merely possible**, so W2's `EndCombatWithOutcome` prefix is required, not defence-in-depth. Any future thought of dropping it dies here. |
 
 ---
 

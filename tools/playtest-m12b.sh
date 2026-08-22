@@ -47,10 +47,19 @@
 # The suppression patch is a boundary, not permission to poke at it.
 #
 # WHY EVERYTHING POLLS. Writing the fight waits on DataManagerSave.CanSave, which
-# was MEASURED at 6.5 seconds on a real entry (blocked by `the turn is being
-# simulated`, not by the scenario intro the design doc predicted). Anything timed
-# rather than observed races it. There is no bare sleep in this file for that
-# reason; if you add one, you have introduced a flake.
+# blocks on `the turn is being simulated` (not on the scenario intro the design
+# doc predicted). Anything timed rather than observed races it. There is no bare
+# sleep in this file for that reason; if you add one, you have introduced a flake.
+#
+# CORRECTED 2026-08-22. This comment said the block "was MEASURED at 6.5 seconds
+# on a real entry". Re-measured on the headless rig during the R0 run: a FIRST
+# fight entry blocked 33.2 s. Re-entry after a checkpoint load took 3.4 s, so
+# 6.5 s was plausibly a re-entry, not a first entry -- the case this script
+# actually drives. Against ShipTimeoutSeconds = 90f (CombatShipGlue.cs, member
+# ShipTimeoutSeconds), the real headroom on a first entry is 2.7x, NOT 14x.
+# That still clears, but it is not the margin the old number implied, and a
+# slower machine or a fuller save folder eats it. A comment asserting headroom
+# is not a check on it: the 120 s poll deadline below is the check.
 #
 # ============================================================================
 
@@ -288,8 +297,14 @@ stage_fight() {
 
   await "$HOST_N" "combat=True" "host is in combat" 240
 
-  # The measured part. CanSave refused for 6.5s on the observed entry, so this
-  # is the wait that most needs to be a poll.
+  # The measured part. CanSave refused for 33.2s on the observed FIRST entry
+  # (re-measured 2026-08-22; the old figure here was 6.5s, which matches a
+  # re-entry, not this one), so this is the wait that most needs to be a poll.
+  # The wiring, not the intent: the 120s deadline below is larger than the mod's
+  # own 90s ShipTimeoutSeconds, so the mod gives up first and this loop reads its
+  # "gave up writing the fight" line instead of timing out on its own. Shrink it
+  # below 90 and a mod-side give-up becomes a script timeout -- a different
+  # failure with a different cause, reported as this one.
   local log; log="$(prefix_log "$HOST_N")"
   local deadline=$(( SECONDS + 120 ))
   while [ "$SECONDS" -lt "$deadline" ]; do

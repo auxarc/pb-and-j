@@ -50,15 +50,21 @@ Two habits that go with it, both paid for here already:
 | `pbj.drive-state` | game state, patch count, session summary | `session=` carries role and `pbj.net-status`'s string. |
 | `pbj.net-status` | role, session state, **turn**, participants, ready | `no session` is a distinct string, not an empty one. |
 
-### 1.2 Arriving with another lane — do not wait for them to write this file
+### 1.2 ~~Arriving with another lane — do not wait for them to write this file~~ ▸ ✅ **ALL SHIPPED**
 
-| command | lane | note |
+🔴 **CORRECTED 2026-08-22.** This table's heading and its whole premise are dead: **every command
+in it now ships on `main`.** L1 landed as **PR #51** (mod 0.23.0) and L3 — M17 stage 2 — landed as
+**PR #60** (`main` = `d3a3b3b`, mod **0.24.0**, wire **v10**). Nothing below is future work; the
+"arriving" column is kept only so a reader who remembers waiting for these can see they arrived.
+**Deploy 0.24.0 and they are all present.**
+
+| command | lane | status + note |
 |---|---|---|
-| `pbj.checkpoint-stat` | **L1**, inside `CheckpointGlue.cs` | attempts / refusals-by-reason / writes / last-ms / last-turn. This runbook references it; it does **not** ship it. |
-| `pbj checkpoint: turn=N ms=X writes=K` log line | **L1** | the per-turn stall line. |
-| `pbj.wreck-patches` | **L3**, `DestructProbeGlue.cs` | reading 6a. Whether the three stage-2 Harmony patches resolved and applied — the only instrument for a failure mode `make dist` cannot see. |
-| `pbj.destruct-probe` `cascade:` / `wreckFlags:` columns | **L3** | readings 6b and 6c. |
-| `pbj.force-end <victory\|defeat>` | **L3**, `DestructProbeGlue.cs` | reading 6f. The deliberate exit the `EndCombatWithOutcome` prefix leaves open; prints which branch it took. |
+| `pbj.checkpoint-stat` | **L1** | ✅ **SHIPPED** (`src/PBAndJ.Mod/Net/CheckpointGlue.cs`, member `CheckpointStat`). attempts / refusals-by-reason / writes / last-ms / last-turn. **Driven for real in R0·1** — see §9.1. |
+| the per-turn stall log line | **L1** | ✅ **SHIPPED** — 🔴 **and its literal here was WRONG. Sighting 27.** This row used to name it ~~`pbj checkpoint: turn=N ms=X writes=K`~~. The code emits **`[pb-and-j] checkpoint: turn=… ms=… writes=… diff-armed=…`** — `src/PBAndJ.Mod/Net/CheckpointGlue.cs`, member `Write`, `:197`. `pbj checkpoint` is **not a substring** of that, so the old pattern matches nothing, ever. **Grep `'checkpoint: turn='`.** |
+| `pbj.wreck-patches` | **L3** | ✅ **SHIPPED with #60** (`src/PBAndJ.Mod/Net/DestructProbeGlue.cs`). Reading 6a. Whether the three stage-2 Harmony patches resolved **and applied** — the only instrument for a failure mode `make dist` cannot see, because `src/PBAndJ.Mod` is in `UNCOVERED_PROJECTS`. |
+| `pbj.destruct-probe` `cascade:` / `wreckFlags:` columns | **L3** | ✅ **SHIPPED with #60.** Readings 6b and 6c. |
+| `pbj.force-end <victory\|defeat>` | **L3** | ✅ **SHIPPED with #60** (`DestructProbeGlue.cs`, member `ForceEnd`, registered as `Add(nameof(ForceEnd), "pbj.force-end", typeof(string))`). Reading 6f — **and now also the route for R1·10b**, see §4.5. Prints which branch it took. ⚠️ It has never run in a game; the risk is named in §4.5, and its failure is loud by construction. |
 
 ---
 
@@ -118,14 +124,53 @@ tools/drive.sh 2 "pbj.net-status" # TIMEOUT here = unreachable instance, not a f
 ```
 Start a campaign, host a session (`pbj.host`), enter a fight, reach planning phase.
 
+🆕 **Four things that step actually does, learned by doing it 2026-08-22 (R0's run).** The line
+above is one sentence; it was the most expensive sentence in this file.
+
+1. **A synchronised single-party load settles in `basecrawler`, not `overworld`** — and it reads
+   `overworld` *transiently* on the way. Poll until it stops moving; a state read taken too early
+   is a different answer, not a wrong one.
+2. **`ow.load-scenario` from the wrong state returns an EMPTY reply with `rc=0`.** ⚠️ This is a
+   drive-channel **vacuity shape**, and it is the one that will fool you: an empty reply is *not*
+   the same as a bad command key, and `rc=0` is not "it worked". Read the state first; treat an
+   empty reply as "the command was refused silently" and never as a null result.
+3. **Leaving the base raises a disengage dialog**, which blocks everything behind it until it is
+   answered — drive `pbj.dialog-confirm`. A script that does not expect it hangs at a step that
+   looks like a network stall.
+4. **Budget `make deploy` at >10 minutes wall here** (pb-dev container first entry + the full
+   coverage run). A first attempt on 2026-08-22 died at a 10-minute timeout mid-`make test`. Any
+   timeout an executor sets must clear that, or the tooling reports a failure the build never had.
+
 ### R0·1 — the checkpoint stall (design q6; decides N)
 
 ```
 tools/drive.sh 2 "pbj.execute"        # repeat for several turns
-grep 'pbj checkpoint: turn=' ~/…/Player.log
+grep 'checkpoint: turn=' ~/…/Player.log
 tools/drive.sh 2 "pbj.checkpoint-stat"
 ls -1 <save folder> | wc -l           # the census, recorded in the SAME breath as the ms
 ```
+
+🔴 **CORRECTED 2026-08-22 — SIGHTING 27, and it was found by running this block.** The grep above
+used to read:
+
+> `grep 'pbj checkpoint: turn=' ~/…/Player.log`
+
+**That pattern returns 0 against a log holding five of the line.** The line the code emits is
+`[pb-and-j] checkpoint: turn=0 ms=435.6241 writes=1 diff-armed=yes` —
+`src/PBAndJ.Mod/Net/CheckpointGlue.cs`, **member `Write`**, `:197`, which concatenates
+`"[pb-and-j] checkpoint: turn="`. The tag is `[pb-and-j]`; **`pbj checkpoint` is not a substring
+of it.** An operator following this block verbatim would have read a *working* checkpoint as "the
+path never ran", gone to `pbj.checkpoint-stat` for the explanation, and found `refusals 0` — which
+explains nothing, because there was nothing to explain. **The zero was an artefact of the
+instruction, not a property of the system.** Two sections above, §0 warns about exactly this.
+
+⭐ **The same day's counter-example, and it is the fix's whole point.** `make split-selftest` names
+its vacuity cases *in its own output*: `tools/split/selftest.py`, in `main()`, checks
+`"REFUSES a tree with no families at all rather than recording an empty ledger"` (`:1093`) and
+`"the family rule proves itself on a canary before any recording"` (`:1106`, asserting
+`grouping.prove_discovery() is None`). **Those PASSes mean something because the failure modes are
+CASES, not comments** — a harness that would have caught its own blindness. This runbook's R0·1
+grep was the same project failing the same test, in the file that states the rule.
 **Record:** `turn`, `ms`, `writes`, and the save count. The cost scales with lifetime save count —
 `RefreshSaveHeaders` re-parses every save's metadata — so **milliseconds without the census is not a
 measurement**, it is a number from an unknown machine.
@@ -173,6 +218,13 @@ why it goes last.
 ## 4. R1 — the comprehensive run
 
 **Precondition:** L1 complete, L3's build merged, this lane merged, R0 read.
+✅ **ALL FOUR MET as of 2026-08-22** — L1 = PR #51, this lane = PR #52, **L3's build = PR #60**,
+R0 readings 1–3 taken (§9.1). **R1 is one sitting, taken AFTER W2**, per the user's ruling; the
+"R1 must precede W2" text that used to sit in §4.5 is refuted there, with the derivation.
+⚠️ **The GPU ladder does not gate this.** It gates *headless* two-instance work only. Two
+**desktop** instances are proven for the entire life of the rig (M12–M17 verifications;
+`gpu-wedge-forensics.md` §6, first paragraph), and R1 contains 🧑 readings (6d, 7, 11) anyway —
+so **attended desktop R1 can be booked today**, ladder or no ladder.
 
 ### 4.1 Pre-flight, in order
 
@@ -191,9 +243,14 @@ why it goes last.
 - [ ] Session up; both machines in one fight via the shipped M12b·2 path.
 - [ ] Both HUDs woken with `pbj.select-unit <index>` on each — otherwise `pbj.execute` refuses in a
       way indistinguishable from a stalled barrier.
-- [ ] Combat exit is planned as **host victory via `cm.kill-enemy`**. ⚠️ If the M17 stage 2
-      `EndCombatWithOutcome` prefix has shipped, the client's console escape hatch is dead and host
-      victory is the *only* exit.
+- [ ] Combat exit is planned as **host victory via `cm.kill-enemy`**. ⚠️ ~~If~~ **CORRECTED
+      2026-08-22 — the conditional resolved: the M17 stage 2 `EndCombatWithOutcome` prefix HAS
+      shipped (PR #60, `main` = `d3a3b3b`, mod 0.24.0, wire v10).** So, in the present tense: the
+      client's *vanilla* console escape hatch (`cm.force-victory` / `cm.force-defeat`) **is dead**,
+      and the exits are host victory **or** `pbj.force-end <victory|defeat>`, which ships with the
+      prefix and bypasses it deliberately (`src/PBAndJ.Mod/Net/DestructProbeGlue.cs`, member
+      `ForceEnd`). Host victory is no longer the *only* exit — but `pbj.force-end` is destructive on
+      the client, so it stays in phase 4 (§4.5).
       ⚠️ **CORRECTED 2026-08-21:** this step named `cm.end-combat-*`, **which does not exist**
       (pattern proven non-vacuous against 40+ real commands in `ConsoleCommandsCombat.cs`). The real
       commands are **`cm.force-victory` / `cm.force-defeat`** (`ConsoleCommandsCombat.cs:71`, `:80`),
@@ -299,8 +356,16 @@ tools/drive.sh 3 "pbj.force-end victory"
 ```
 `ZERO:` there is none — the command names its branch: `BYPASSED`, `prefix was NOT ARMED (no live
 client session)`, `NOT IN COMBAT`, `BAD ARGUMENT` or `THREW`. A silent return is impossible by
-construction, which is the point. ⚠️ Take R1·10b **before** this PR merges; the prefix closes the
-route that reading uses.
+construction, which is the point. ⚠️ ~~Take R1·10b **before** this PR merges; the prefix closes the
+route that reading uses.~~ 🔴 **CORRECTED 2026-08-22: that PR (#60) has merged, and the ordering it
+asked for was never real.** R1·10b now uses **this same command** — see §4.5's R1·10b block.
+🔴 **AND A REAL ORDERING HAZARD THIS CREATES — new 2026-08-22, flagged rather than smoothed over.**
+6f as written sits in **phase 2 (during the fight)**, but `pbj.force-end victory` **ends the
+client's combat**. Taken here it destroys the preconditions of every later client reading — 6d, 7,
+9 and 10 included — and 10b in particular, which is *the same command on the same machine*.
+⇒ **6f and R1·10b are one act, not two.** Take them together, in phase 4, last: probe → `force-end`
+→ probe. 6f is the command's own return string; 10b is the `pbj.debrief-probe` pair around it. One
+`force-end` invocation yields both readings. **Do not drive `pbj.force-end` in phase 2.**
 
 **R1·7 — 🧑 client corpse stays collapsed through planning**
 **Human reading, agent cannot take it.** *Exactly what to do:* on instance 3, after the host's kill
@@ -367,25 +432,49 @@ no-session (`runtime=null`) from never-armed (`frames=0`).
 **R1·10b — 🔴 THE q9 READING: can a client open a debriefing at all?** *(decides M12d stage D0;
 user's call, 2026-08-21: measure rather than choose)*
 
-⚠️ **THIS READING MUST BE TAKEN BEFORE M17 STAGE 2 MERGES (window W2).** The stage 2 prefix on
-`ScenarioUtility.EndCombatWithOutcome` closes the only route this reading uses, and the
-`pbj.force-end … bypassOnce` hatch that would re-open it **ships with that same PR**. Take it now,
-on today's `main`, or it costs a bypass that does not exist yet.
+🔴 **THE ORDERING WARNING THAT STOOD HERE IS REFUTED. Corrected 2026-08-22.** It read:
 
-⭐ **No new code is needed — the sketch in the decision was wrong about that.** `cm.force-victory`
-calls `ScenarioUtility.EndCombatWithOutcome(CombatOutcome.Victory, early: true)` **directly**
-(`decompiled/PhantomBrigade.DebugConsole/ConsoleCommandsCombat.cs:71-79`), so it does **not** pass
-through the `if (flag3)` bit-4 gate at `CombatScenarioStateSystem.cs:229` that makes a client unable
-to resolve its own combat on the ordinary path. Its only guard is
-`CombatStateCheck()` → `IDUtility.IsGameState("combat")` (`:31-39`), which a client in a shipped
-fight satisfies. Verified in the decompile 2026-08-21.
+> *"⚠️ **THIS READING MUST BE TAKEN BEFORE M17 STAGE 2 MERGES (window W2).** The stage 2 prefix on
+> `ScenarioUtility.EndCombatWithOutcome` closes the only route this reading uses, and the
+> `pbj.force-end … bypassOnce` hatch that would re-open it **ships with that same PR**. Take it
+> now, on today's `main`, or it costs a bypass that does not exist yet."*
+
+**Read literally it refutes itself — closed and re-opened in one commit is not closed.** The two
+routes were derived side by side and are **call-for-call identical for this reading**:
+
+| | pre-W2 | post-W2 (today) |
+|---|---|---|
+| command | `cm.force-victory` | `pbj.force-end victory` |
+| guard | `CombatStateCheck()` → `IDUtility.IsGameState("combat")` | the same `IsGameState("combat")` test |
+| call | `ScenarioUtility.EndCombatWithOutcome(CombatOutcome.Victory, early: true)` | **the identical** `EndCombatWithOutcome(resolved, early: true)`, inside a `BypassCombatEndOnce` window cleared in a `finally` |
+| where | `decompiled/PhantomBrigade.DebugConsole/ConsoleCommandsCombat.cs`, members `ForceVictory` + `CombatStateCheck` | `src/PBAndJ.Mod/Net/DestructProbeGlue.cs`, member `ForceEnd`; prefix predicate `src/PBAndJ.Mod/Net/WreckingPatches.cs`, member `SuppressCombatEnd` |
+
+Same static method, same arguments, same precondition, synchronous — so the whole vanilla body runs
+inside the bypass window. ⇒ **the user ruled W2 FIRST (2026-08-22); PR #60 is merged** (`main` =
+`d3a3b3b`, mod 0.24.0, wire v10) **and R1·10b is taken through `pbj.force-end`, in this sitting,
+alongside R1·6a–6f — which need stage 2 deployed anyway.** Derivation:
+`docs/design/backlog-2026-08-22.md` §D.
+
+⭐ **Still true, and still the point:** `cm.force-victory` never passed through the `if (flag3)`
+bit-4 gate (`CombatScenarioStateSystem.cs:229`) that blocks a client from resolving its own combat
+on the ordinary path — and neither does `pbj.force-end`, for the same reason. **No new code was
+needed then and none is needed now.**
+
+⚠️ **The residual risk, named rather than hidden:** `pbj.force-end` has **never run in a game**, and
+it lives in `src/PBAndJ.Mod`, which is in `UNCOVERED_PROJECTS` — `make dist` cannot see it. If it
+fails at the rig, this reading is lost for the sitting. **The failure is loud, not silent:** the
+command returns one of `BYPASSED` / `prefix was NOT ARMED` / `NOT IN COMBAT` / `BAD ARGUMENT` /
+`THREW`, and a silent return is impossible by construction. Read the return string before the probe.
 
 ⚠️ **Destructive on the client** — it ends that machine's fight. Take it LAST, after R1·10, and
-expect to restart the session afterwards.
+expect to restart the session afterwards. **This one invocation is also R1·6f** (see phase 2's 6f
+note): the return string is 6f's reading, the probe pair is 10b's. Do not spend a second one.
 
 ```
 tools/drive.sh 3 "pbj.debrief-probe"            # BEFORE: baseline, expect present=False
-tools/drive.sh 3 "cm.force-victory"             # on the CLIENT, not the host
+tools/drive.sh 3 "pbj.force-end victory"        # on the CLIENT, not the host — READ THE RETURN
+                                                # STRING: it names its branch, and that is R1·6f.
+                                                # (was `cm.force-victory`; dead on a client since #60)
 tools/drive.sh 3 "pbj.debrief-probe"            # AFTER: the whole reading
 tools/drive.sh 3 "pbj.net-status"
 ```
@@ -400,9 +489,13 @@ tools/drive.sh 3 "pbj.net-status"
 - `present=False` — the overworld scene never loaded at all. **Shape B**, decided harder.
 
 `ZERO:` a `present=False` on the AFTER line is a real answer, **not** a failed probe — but only if
-the BEFORE line was also taken, which is why it is in the block. If `cm.force-victory` prints
-`"Command only available from combat"` the client was not in the fight and **nothing was measured**;
-that is the one outcome that must not be read as Shape B.
+the BEFORE line was also taken, which is why it is in the block. ~~If `cm.force-victory` prints
+`"Command only available from combat"`~~ **CORRECTED 2026-08-22 for the `pbj.force-end` route:** if
+the command returns **`NOT IN COMBAT`** the client was not in the fight and **nothing was
+measured** — and likewise for **`BAD ARGUMENT`** and **`THREW`**. Those three are the outcomes that
+must not be read as Shape B. **`prefix was NOT ARMED` is not one of them:** it means the call went
+straight through and the reading is valid (it only says no live client session had armed the
+prefix — read `pbj.net-status` beside it, because on a *client* that string is itself suspicious).
 
 **R1·11 — 🧑 the M10 Leave-button swap**
 **Human reading.** *Exactly what to do:* with the session still up and **not in a fight**, click
@@ -546,6 +639,11 @@ re-reads it.
 on `PBAndJ.Core`. `wire surface OK (unchanged since 0.22.0)` — this lane is wire-neutral and that the
 hash did not move is the proof, not the intent. `split grouping OK (15 families, 145 parts, 1541
 members)`, unchanged: the new files join no split family.
+
+⚠️ **Do not carry that 1541 forward — dated 2026-08-22.** It was correct *at `1708a0b`* and is a
+historical record, not a baseline. **`split-grouping.lock:11` is the census, and the prose is not:**
+1541 → **1556** at #51 → **1577** at #60 (`main` = `d3a3b3b`). ⭐ Every baseline in this file is a
+reading from a run on a named commit; **recount from your own `make dist`, never inherit.**
 
 One advisory, stated rather than hidden: `tools/size-report.py` flags
 `DebriefProbeGlue.cs` as a **new file over 500 lines (550)**. It gates nothing, and it sits with its

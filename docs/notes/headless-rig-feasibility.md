@@ -32,6 +32,13 @@ coexist **with games in them** is now genuinely open.
 🔴 **The machine was left with Vulkan device creation broken**, GPU-wide, until a reboot performs the
 PF FLR the driver is asking for. §14.3, and `gpu-wedge-forensics.md`.
 
+✅ **CLEARED 2026-08-22, verified:** `GPU Recovery Action : None`, **zero `NVRM: Xid` lines** in
+`journalctl -k -b` for the current boot (pattern positively controlled against the 98+ `NVRM` lines
+that ARE present, and against the r8169 `XID 609` NIC line that must *not* match), reboot at
+**01:32**, after the 00:01:44 fault. Vulkan creates devices again. 🔴 **The 4-rung ladder
+(`gpu-wedge-forensics.md` §6) is still UNRUN, so THE PAIR IS STILL UNANSWERED** — the wedge being
+gone is not the pair question being answered, and nothing here may be read as if it were.
+
 ---
 
 Written 2026-08-21 against `main` = `1708a0b`, working tree otherwise untouched. Investigation only —
@@ -411,8 +418,19 @@ with the `vulkaninfo` canary green after each.
 - **Single-instance headless is confirmed and immediately useful.** Every R0 reading that needs one
   machine — the checkpoint stall (design q6, which decides `N`), the checkpoint→Execute round trip —
   can now be taken without the desktop.
-- **Every two-instance reading still needs the pair question answered**, which includes R1 in full
-  and therefore **R1·10b, the q9 decider for M12d stage D0**.
+- 🔴 **CORRECTED 2026-08-22 — this bullet was FALSE as a dependency.** It read:
+  > *"**Every two-instance reading still needs the pair question answered**, which includes R1 in
+  > full and therefore **R1·10b, the q9 decider for M12d stage D0**."*
+
+  **What kills it:** the pair question is about *two headless compositors with games in them*. It
+  gates the **headless** two-instance variant and nothing else. **Two desktop instances are proven
+  for the entire life of this rig** — every M12–M17 two-game verification ran that way — which
+  `gpu-wedge-forensics.md` §6 states in its own first paragraph, in this same repo, written the
+  same night this bullet was. R1 also contains 🧑 readings (6d, 7, 11) that want a human at the
+  desk regardless. ⇒ **attended desktop R1, R1·10b included, needs NOTHING from the ladder and can
+  be booked today.** The accurate statement is narrower: *every **unattended headless** two-instance
+  reading waits on the pair question.* ⭐ The defect worth remembering is the quantifier: "every
+  two-instance reading" swallowed a case the evidence two sections away already excluded.
 - 🆕 **The 🧑 screenshot readings are cheaper than §6 assumed.** §6 said the corpse reading becomes
   "automatable, camera framing unproven". The run shows screenshots can be captured *and read* in
   the same loop that drives the game, so R1·7 is genuinely agent-closable. **R1·11 (the Leave button)
