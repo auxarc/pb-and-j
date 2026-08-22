@@ -70,12 +70,17 @@ namespace PBAndJ.Core.Net
         /// </summary>
         private bool submittedThisTurn;
 
-        // Keepalive. Stamped from the last TickEvent, the only place a clock
-        // enters a session.
+        // Keepalive. A TickEvent is the only place a clock enters a session, so
+        // `nowSeconds` between ticks is the PREVIOUS tick's reading. The runtime
+        // drains the mailbox before it ticks, which means HandleMessage stamps
+        // `lastInboundSeconds` with a clock that predates the drain — so what
+        // arrives is recorded as a flag and the tick that closes the pump does
+        // the stamping. See HandleTick in ClientSession.Link.cs.
         private double nowSeconds;
         private double lastInboundSeconds;
         private bool ticked;
         private bool stamped;
+        private bool inboundSinceTick;
 
         /// <summary>The fight we were last offered, so arriving bytes can be matched to it.</summary>
         private string? pendingCombatSave;

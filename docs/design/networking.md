@@ -1029,8 +1029,18 @@ see that event's remarks for why. `PbjRuntime` throttles it to `TickIntervalSeco
 machinery does not allocate an effect list 60 times a second to learn that nothing has expired.
 
 Because a tick is the only place a clock enters a session, `HandleMessage` has no `now` of its own:
-it stamps with the time carried by the last tick, at most a quarter second stale against a
-twenty-second timeout.
+it stamps with the time carried by the last tick.
+
+🔴 **CORRECTED 2026-08-22 — the sentence that stood here is what hid a real defect for months.**
+It read: ~~"at most a quarter second stale against a twenty-second timeout."~~ **A quarter second is
+the tick throttle's minimum INTERVAL, not a bound on STALENESS.** The stamp is stale by the whole
+**frame gap**, which is unbounded — and inbound is drained *before* the tick that judges it
+(`PbjRuntime.Pump`), so traffic received during a long gap was back-dated to the pre-gap clock and
+the very next tick read the entire gap as silence. A client-side gap ≥ 30 s faulted a live host; a
+host-side gap ≥ 20 s reaped a live client, with its Pong already drained in the same pump.
+⇒ `HandleTick` now **re-credits traffic drained since the last tick**, stamping at the clock that
+actually judges. ⭐ **The unit is the frame gap, not the operation's wall time** — a lesson that
+also dissolved a separate false alarm about a 33 s fight-ship wait.
 
 **The timeouts are deliberately asymmetric — peer 20s, host 30s.** The host is the side that
 hitches (scenario loads, shader compilation under Proton), and a client `Fault` is terminal with no
@@ -1047,9 +1057,16 @@ would be wrong to — a blocking `Read` with a timeout throws on a healthy idle 
 cable-pull is now caught by the Core timeout, which issues a `DisconnectEffect`, which closes the
 socket, which makes the blocked `Read` throw.
 
-Known gap: only *registered* peers are timed out. A socket that connects and never sends `Hello` is
-never reaped. It holds an accept slot but not a peer slot, and the listener binds `127.0.0.1` by
-default, so this is noted rather than solved.
+~~Known gap: only *registered* peers are timed out. A socket that connects and never sends `Hello`
+is never reaped.~~ 🔴 **STALE — CLOSED SINCE M7, and this paragraph never noticed.**
+`HostSession.ExpireSilentHandshakes` (`src/PBAndJ.Core/Net/HostSession.Tick.cs:27`, called from
+`HandleTick` at `:67`) reaps exactly those sockets against `HandshakeTimeoutSeconds`, and its own
+remark says so. ⚠️ It carries the **same stale-stamp shape** the keepalive fix above repaired —
+`pendingHandshakes` is stamped from a drained `PeerConnectedEvent` at the previous tick's clock — so
+a ≥ 10 s frame gap during which a socket connects drops it as "never handshook" before its `Hello`
+can be drained. Self-healing (the peer reconnects), which is likely why nobody saw it; recorded
+rather than fixed here, because this change is scoped to the two directions that are not
+self-healing.
 
 ## Threading
 

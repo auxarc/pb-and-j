@@ -148,7 +148,12 @@ namespace PBAndJ.Core.Net
                 return effects;
             }
 
-            // Any traffic proves the host is alive.
+            // Any traffic proves the host is alive. Recorded as a flag as well
+            // as stamped, because `nowSeconds` here is the PREVIOUS tick's
+            // clock: the runtime drains the mailbox before it ticks, so this
+            // stamp predates the drain by however long the last frame took.
+            // HandleTick re-stamps from the flag at the clock that judges.
+            inboundSinceTick = true;
             if (ticked)
             {
                 lastInboundSeconds = nowSeconds;

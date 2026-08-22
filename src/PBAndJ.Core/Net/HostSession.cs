@@ -100,11 +100,17 @@ namespace PBAndJ.Core.Net
             new Dictionary<int, List<RejectedOrder>>();
         private readonly List<int> pendingResultOrder = new List<int>();
 
-        // Keepalive. Stamped with the time carried by the last TickEvent, since
-        // that is the only place a clock enters a session — at most one tick
-        // interval stale against a 20s timeout.
+        // Keepalive. A TickEvent is the only place a clock enters a session, so
+        // `nowSeconds` between ticks is the PREVIOUS tick's reading, not a live
+        // one — and the runtime drains the mailbox before it ticks, so a stamp
+        // taken in HandleMessage predates the drain by the whole frame gap. Who
+        // spoke is therefore recorded as a set and stamped by the tick that
+        // closes the pump; see HandleTick in HostSession.Tick.cs.
         private readonly Dictionary<int, double> lastInboundSeconds = new Dictionary<int, double>();
         private readonly Dictionary<int, double> lastPingSeconds = new Dictionary<int, double>();
+
+        /// <summary>Peers whose traffic was drained since the last tick.</summary>
+        private readonly HashSet<int> inboundSinceTick = new HashSet<int>();
 
         /// <summary>
         /// Peers that dropped and may still come back, keyed by the peer id they

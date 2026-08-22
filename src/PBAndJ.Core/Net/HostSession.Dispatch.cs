@@ -137,7 +137,12 @@ namespace PBAndJ.Core.Net
             }
 
             // Any traffic at all proves the peer is alive, so the stamp goes
-            // here rather than in the individual arms.
+            // here rather than in the individual arms. Recorded in the set as
+            // well as stamped, because `nowSeconds` here is the PREVIOUS tick's
+            // clock: the runtime drains the mailbox before it ticks, so this
+            // stamp predates the drain by however long the last frame took.
+            // HandleTick re-stamps from the set at the clock that judges.
+            inboundSinceTick.Add(peerId);
             if (ticked)
             {
                 MarkAlive(peerId);
