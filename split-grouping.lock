@@ -8,7 +8,7 @@
 # Re-record only when you have DECIDED the placement is the one you
 # want:  make record-split-grouping
 #
-# families: 15   part files: 145   members: 1577
+# families: 15   part files: 145   members: 1578
 
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.ClientOwnsCombatOutcome	1
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.ClientSession	2
@@ -1557,6 +1557,7 @@ tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	
 tools/pbj-peer	SelfTest	SelfTest.cs	SelfTest.PrefixedLog	1
 tools/pbj-peer	SelfTest	SelfTest.cs	SelfTest.Run	1
 tools/pbj-peer	SelfTest	SelfTest.cs	SelfTest.TimeoutSeconds	1
+tools/pbj-peer	SelfTest	SelfTest.cs	SelfTest.TryResolveBuild	1
 tools/pbj-peer	SelfTest	SelfTest.AssetFallbacks.cs	SelfTest.RunAssetFallbacks	1
 tools/pbj-peer	SelfTest	SelfTest.Builders.cs	SelfTest.BuildAssetCapture	1
 tools/pbj-peer	SelfTest	SelfTest.Builders.cs	SelfTest.BuildPoseTrack	1

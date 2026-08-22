@@ -34,6 +34,19 @@ namespace PBAndJ.Peer
 
         internal static int Run()
         {
+            // 🔴 WHICH BUILD WAS THIS? The verdict line below used to be
+            // `ALL PASS (N scenarios)` and nothing else, which made a green run
+            // at protocol v10 CHARACTER-IDENTICAL to a green run at v9 -- and
+            // one was duly credited with answering a question it never asked.
+            // A stale build, or a run out of the wrong directory, printed the
+            // same confident PASS. The run now states the build it was, and it
+            // HALTS rather than guess if it cannot tell.
+            if (!TryResolveBuild(out var protocolVersion, out var modVersion, out var whyNot))
+            {
+                Console.WriteLine($"[selftest] FATAL: this run cannot say which build it is -- {whyNot}");
+                return 1;
+            }
+
             var scenarios = new (string Name, Func<int> Body)[]
             {
                 ("turn cycle", RunTurnCycle),
@@ -66,8 +79,12 @@ namespace PBAndJ.Peer
             // legitimate addition and would answer only half the question; this
             // catches BOTH directions -- a scenario registered but not written,
             // and a scenario written but never registered, which is the silent
-            // one. See the negative test in Program.cs's --selftest-guard mode,
-            // which is proven to fail before it is trusted.
+            // one. Both directions were made to fail by hand before this guard
+            // was trusted (8a928b7). 🔴 The comment that stood here cited "the
+            // negative test in Program.cs's --selftest-guard mode": THERE IS NO
+            // SUCH MODE and there never was -- 8a928b7 touched this file only,
+            // and `grep -rn selftest-guard` matched nothing but the citation
+            // itself. Corrected 2026-08-22 (item B10).
             //
             // Length > 3 excludes Run itself: BindingFlags.NonPublic matches
             // `internal` as well as `private`, so the entry point matched its own
@@ -112,8 +129,72 @@ namespace PBAndJ.Peer
                 }
             }
 
-            Console.WriteLine($"[selftest] ALL PASS ({scenarios.Length} scenarios)");
+            Console.WriteLine(
+                $"[selftest] ALL PASS ({scenarios.Length} scenarios, "
+                + $"protocol v{protocolVersion}, mod {modVersion})");
             return 0;
+        }
+
+        /// <summary>
+        /// Reads the protocol identity out of the PBAndJ.Core this process
+        /// actually loaded, so the verdict line can say which build it was.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 NEVER a literal here, and not quite a plain reference either.
+        /// <c>PbjProtocol.Version</c> and <c>PbjProtocol.ModVersion</c> are
+        /// <c>const</c>, so writing them in this file bakes a copy into
+        /// pbj-peer.dll at compile time: that reports the build of the HARNESS,
+        /// not of the Core the scenarios exercise. Those two differ in exactly
+        /// the stale-build case this whole line exists to expose. So the numbers
+        /// printed come off the loaded assembly's own metadata, and the
+        /// compile-time literals are kept only as the thing to disagree with.
+        /// <para>
+        /// It HALTS rather than printing "unknown", and it halts at the CAUSE:
+        /// a peer running against a Core it was not built against has already
+        /// invalidated every scenario below, and a run that prints a version it
+        /// cannot stand behind would reproduce the defect being fixed one level
+        /// down. Detecting is not halting.
+        /// </para>
+        /// </remarks>
+        private static bool TryResolveBuild(out int protocolVersion, out string modVersion, out string whyNot)
+        {
+            protocolVersion = 0;
+            modVersion = string.Empty;
+
+            var core = typeof(PbjProtocol).Assembly;
+            var versionField = typeof(PbjProtocol).GetField(
+                nameof(PbjProtocol.Version), BindingFlags.Public | BindingFlags.Static);
+            var modField = typeof(PbjProtocol).GetField(
+                nameof(PbjProtocol.ModVersion), BindingFlags.Public | BindingFlags.Static);
+            if (versionField == null || modField == null)
+            {
+                whyNot = $"PbjProtocol in {core.Location} has no Version/ModVersion constant to read";
+                return false;
+            }
+
+            if (versionField.GetRawConstantValue() is not int loadedVersion
+                || modField.GetRawConstantValue() is not string loadedMod)
+            {
+                whyNot = $"PbjProtocol.Version/ModVersion in {core.Location} are not the constants this expects";
+                return false;
+            }
+
+            // The compile-time literals, inlined into this assembly. Equal to the
+            // loaded ones in every healthy run; unequal exactly when the harness
+            // and the Core under test are different builds.
+            if (loadedVersion != PbjProtocol.Version
+                || !string.Equals(loadedMod, PbjProtocol.ModVersion, StringComparison.Ordinal))
+            {
+                whyNot = $"stale build -- this peer was compiled against protocol v{PbjProtocol.Version} "
+                    + $"mod {PbjProtocol.ModVersion}, but the Core it loaded ({core.Location}) "
+                    + $"is protocol v{loadedVersion} mod {loadedMod}";
+                return false;
+            }
+
+            protocolVersion = loadedVersion;
+            modVersion = loadedMod;
+            whyNot = string.Empty;
+            return true;
         }
 
 
