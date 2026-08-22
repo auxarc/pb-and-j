@@ -1,12 +1,25 @@
-# Vendored game assemblies — never commit game code
-vendor/
+# Vendored game assemblies — never commit game code.
+#
+# ⚠️ NO TRAILING SLASH, and that is load-bearing rather than style. A
+# directory-only pattern (`vendor/`) does NOT match a SYMLINK, so in a lane
+# worktree — where these are symlinked back to the main checkout because a bare
+# worktree cannot build without them — `git add -A` STAGES THE LINK, committing
+# this machine's absolute path, home directory and username included. Measured
+# 2026-08-22 in a throwaway repo, with a positive control proving the check could
+# see staging at all: `vendor/` staged the link, `vendor` did not.
+#
+# The previous mitigation was "commit by explicit path", which is a discipline
+# that has to hold on every commit in every concurrent lane. This makes git
+# actually ignore the thing. Guarded by tools/gitignore-symlink-check.sh.
+# (Same discovery path as the sister project, which hit it first and told us.)
+vendor
 
-# Decompiled reference output — never commit
-decompiled/
-decompiled-firstpass/
+# Decompiled reference output — never commit. No trailing slash: see vendor above.
+decompiled
+decompiled-firstpass
 
-# Cloned third-party reference mods — not ours to commit
-references/
+# Cloned third-party reference mods — not ours to commit. No trailing slash: see vendor.
+references
 
 # Local machine-specific build config
 *.local.props
@@ -17,8 +30,9 @@ bin/
 obj/
 dist/
 
-# Project-local NuGet cache (shared ~/.nuget has container-ownership issues)
-.packages/
+# Project-local NuGet cache (shared ~/.nuget has container-ownership issues).
+# No trailing slash: see vendor — this one is 416M and is symlinked into every lane.
+.packages
 
 # Test artifacts
 coverage.json

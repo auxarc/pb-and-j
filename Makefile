@@ -354,7 +354,15 @@ BASE ?= HEAD^
 build: test
 	$(DBX) bash -lc '$(DOTNET_ENV) cd $(REPO) && dotnet build src/PBAndJ.Mod -c Release -p:PbjDrive=$(PBJ_DRIVE)'
 
-dist: build check-mod-version check-wire-surface check-coverage-scope check-split-grouping
+# check-gitignore-symlinks is here rather than in a pre-commit hook because the
+# failure it catches is a ONE-CHARACTER regression (a trailing slash returning to
+# .gitignore) whose consequence is a lane worktree committing this machine's home
+# path into a public repo. Nothing else in the build would notice. It runs git in
+# a throwaway repo and costs about a second.
+check-gitignore-symlinks:
+	@tools/gitignore-symlink-check.sh
+
+dist: build check-mod-version check-wire-surface check-coverage-scope check-split-grouping check-gitignore-symlinks
 	rm -rf dist/$(MOD_ID)
 	mkdir -p dist/$(MOD_ID)/Libraries
 	cp mod/metadata.yaml dist/$(MOD_ID)/
