@@ -76,6 +76,13 @@ namespace PBAndJ.Mod
             Net.BeamInjectGlue.RegisterConsoleCommands();
             Net.StageCProbeGlue.RegisterConsoleCommands();
             Net.DestructProbeGlue.RegisterConsoleCommands();
+            // RIG INSTRUMENTS for the 1.0 comprehensive run. Their sweep
+            // conditions are stated in docs/notes/rig-run-1-0.md as TESTS
+            // ("is reading N recorded with its numbers?"), never as an
+            // observation a later grep can make come true by being written
+            // down. Swept 2026-08-21: NEW, KEPT.
+            Net.DebriefProbeGlue.RegisterConsoleCommands();
+            Net.CombatEdgeProbeGlue.RegisterConsoleCommands();
         }
     }
 
