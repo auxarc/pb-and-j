@@ -562,16 +562,57 @@ verified byte-identical.
 
 ## 9. Results
 
-*(empty — R0 and R1 have not been run. Numbers go here the day they are taken, inline, with the
-`ZERO:` case that was actually observed named beside each one.)*
+*(R1 has not been run. Numbers go here the day they are taken, inline, with the `ZERO:` case that was
+actually observed named beside each one.)*
 
-### 9.1 R0
+### 9.1 R0 — **TAKEN 2026-08-22**, headless, one instance
+
+**Conditions.** `main` = `093bfeb`, mod 0.23.0. `make deploy` **exit 0** (2102/2102 tests, `wire
+surface OK (unchanged since 0.23.0)`, `split grouping OK (15 families, 145 parts, 1556 members)`,
+peer selftest `ALL PASS (11 scenarios)`); tail read, not grepped for success words. One instance
+only, launched as `gamescope -W 1280 -H 720 --backend headless -- tools/game-instance.sh 2`.
+Campaign `pbj_fromsp` (the save with a deployable squad), scenario `generic_elimination`, host
+session, 1 participant. GPU canary pair taken **before and after**: `GPU Recovery Action : None`,
+`vulkaninfo` creates a device on the RTX 4070 Ti (driver 610.57.04). No `NVRM ... Xid` line in
+`journalctl -k -b` at any point — pattern proven non-vacuous by the same grep matching the one NVRM
+line that IS present (the module-load line), and by *not* matching the r8169 `XID 609` NIC line.
 
 | reading | date | number | which zero-case, if zero |
 |---|---|---|---|
-| R0·1 checkpoint stall + save census | | | |
-| R0·2 action diff across the checkpoint load | | | |
-| R0·3 re-entry edge verdict | | | |
+| R0·1 checkpoint stall + save census | 2026-08-22 | **mean 433.2703 ms, worst 454.6161 ms over 5 writes**; per turn 435.6241 / 431.8885 / 452.7222 / 391.5005 / 454.6161; `attempts 5, writes 5, refusals 0, faults 0`; **census 21 saves** (20 before the first checkpoint write created `pbj_combat_turn`; 23 directory entries, of which 21 carry `metadata.yaml`) | not zero. `writes=5` excludes "the path never ran"; `attempts=5` excludes "the effect never reached the bridge"; every reading is ~4×10⁶ × the printed stopwatch resolution (0.0001 ms/tick), so it is not a clock that did not move |
+| R0·2 action diff across the checkpoint load | 2026-08-22 | **`save/load diff \| before 31 \| after 31 \| MATCH`** — the plan survived the reload intact | not zero, and the diff **ran**: `diff skipped` appears **0** times in the log, and the arming line is present verbatim — `restore diff ARMED by the automatic checkpoint write at turn 4 \| slot 'pbj_combat_turn' \| 31 action(s) captured before the save`. **B-2's fix is live on a real game.** |
+| R0·3 re-entry edge verdict | 2026-08-22 | **`exits=1 enters=1 trail=X@680,E@764`** — VERDICT: *the edge fired both ways*, exit **before** enter, which is the order M12c stage D wants | not zero, and all six ways to get a false zero are excluded on the same line: `armed=True` with the arm receipt seen (never-armed), `frames=13766` (postfix not applied), `runtime=present hasSession=True` (no session), `tickMoves=888 stopped=False` (dead pump), `enters/exits` non-zero (level-stuck), and `lastInCombat=True liveInCombat=True` agree (stale bridge) |
+
+**R0·2+3 were taken as ONE load**, per §6.1, and last, per §6.2. Session before the load: `HOST |
+Planning | turn 5`. After: `HOST | Planning | turn 4` — Execute pressable, one turn back, which is
+the checkpoint the write at turn 4 laid down. The destructive edge behaved exactly as §3 predicts;
+the log carries the whole sequence in order: `left the multiplayer campaign` → `combat ended —
+unlocking 0 peers` → `action dump | turn 4 | 31 actions` → `restore diff ARMED …` → `save/load diff
+… MATCH` → `in combat on turn 4 — writing the fight for 0 peers` → `fight written to
+'pbj_combat_test' after 3.4s` → `combat started on turn 4`.
+
+**What R0·1 says about N (design q6).** ~0.43 s of main-thread stall per Execute, on a machine with
+**21** saves. That is the cost the cadence decision is about, and it is not small: it is roughly the
+whole budget of a turn boundary, paid every turn, and it **scales with the player's lifetime save
+count** rather than with this save — `RefreshSaveHeaders` YAML-parses every `metadata.yaml` in the
+Normal folder. 21 is a *developer's* folder; a campaign player accumulates autosaves without
+bound, so this number is a floor, not a typical case. Measuring the slope (the same reading against
+a deliberately inflated save folder) is the cheapest way to turn this into a cadence, and it needs
+no second instance — see NEW WORK below.
+
+**Rendering was real.** A `gamescopectl` screenshot taken after the reload is the live combat scene
+(1280×720, **93,917 distinct colours**, mission panel, unit paths, a burning wreck, turn counter at
+4) — so the headless verdict from 2026-08-22 holds for a *combat* scene and not only the main menu.
+
+⚠️ **One defect in this runbook, found by running it.** §3's R0·1 block says
+`grep 'pbj checkpoint: turn=' ~/…/Player.log`. **That pattern returns 0 against a log that contains
+five of the line.** The real line is `[pb-and-j] checkpoint: turn=0 ms=435.6241 writes=1
+diff-armed=yes` — the tag is `[pb-and-j]`, and `pbj checkpoint` is not a substring of it. An
+operator following §3 verbatim would have read a working checkpoint as "the path never ran", gone to
+the refusals-by-reason for an explanation of a zero that was an artefact of their own pattern, and
+found `refusals 0` — which explains nothing, because there was nothing to explain. This is the
+twenty-seventh sighting of the house defect, and it was in the file whose §0 warns about it. The
+grep that works is `grep 'checkpoint: turn=' …`.
 
 ### 9.2 R1
 
