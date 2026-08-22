@@ -1,0 +1,218 @@
+# Citations made by docs/design/m18-host-migration.md (M18 H0).
+#
+# Regenerate the LINE column by re-reading the tree; the MEMBER named in the
+# third column is what makes a rotted line recoverable. Two citations handed to
+# H0 by the pricing had already rotted, which is why this file exists.
+
+# ── the control: deliberately absent, so a run that reports "all verified"
+#    without opening the tree is impossible. See cite-check.sh's header.
+CONTROL src/PBAndJ.Core/Net/ClientSession.cs | 1 | THIS_STRING_IS_NOT_IN_THE_TREE
+
+# ── ClientSession: the control M18 must beat
+src/PBAndJ.Core/Net/ClientSession.cs          | 306 | private void Fault
+src/PBAndJ.Core/Net/ClientSession.cs          | 320 | SetExecutionLockEffect(false)
+src/PBAndJ.Core/Net/ClientSession.cs          | 156 | ClientOwnsCombatOutcome
+src/PBAndJ.Core/Net/ClientSession.cs          | 219 | LobbyRoster
+src/PBAndJ.Core/Net/ClientSession.cs          |  53 | NoLobbyPeers
+src/PBAndJ.Core/Net/ClientSession.cs          | 244 | LobbyParticipantCount
+src/PBAndJ.Core/Net/ClientSession.cs          |  75 | private double nowSeconds
+src/PBAndJ.Core/Net/ClientSession.cs          |  81 | pendingCombatSave
+src/PBAndJ.Core/Net/ClientSession.cs          |  83 | pendingCombatTurn
+src/PBAndJ.Core/Net/ClientSession.Link.cs     |  35 | return new PbjEffect
+src/PBAndJ.Core/Net/ClientSession.Link.cs     |  48 | Fault(NetLog.TransportFailed
+src/PBAndJ.Core/Net/ClientSession.Link.cs     |  70 | private void HandleTick
+src/PBAndJ.Core/Net/ClientSession.Link.cs     |  72 | nowSeconds = tick.NowSeconds
+src/PBAndJ.Core/Net/ClientSession.Link.cs     |  85 | var silent = nowSeconds - lastInboundSeconds
+src/PBAndJ.Core/Net/ClientSession.Link.cs     |  91 | Fault(NetLog.HostTimedOut
+src/PBAndJ.Core/Net/ClientSession.Dispatch.cs | 151 | Any traffic proves the host is alive
+src/PBAndJ.Core/Net/ClientSession.Dispatch.cs | 154 | lastInboundSeconds = nowSeconds
+src/PBAndJ.Core/Net/ClientSession.Dispatch.cs | 185 | State = ClientSessionState.Faulted
+src/PBAndJ.Core/Net/ClientSession.CombatEntry.cs |  28 | rewritten at the start of every mission
+src/PBAndJ.Core/Net/ClientSession.CombatEntry.cs |  32 | HandleCombatOffer
+src/PBAndJ.Core/Net/ClientSession.CombatEntry.cs |  34 | pendingCombatSave = offer.SaveName
+src/PBAndJ.Core/Net/ClientSession.CombatEntry.cs |  57 | ScenarioRequestMessage(offer.Digest)
+src/PBAndJ.Core/Net/ClientSession.Scenario.cs  |  98 | HandleScenario(
+src/PBAndJ.Core/Net/ClientSession.Scenario.cs  | 109 | payload.Matches
+src/PBAndJ.Core/Net/ClientSession.Scenario.cs  | 117 | WriteScenarioEffect
+src/PBAndJ.Core/Net/ClientSession.Scenario.cs  | 123 | pendingCombatSave != null
+
+# ── HostSession: the turn cycle, the checkpoint, the refused commit
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 133 | private void TryCommit
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 169 | ApplyOrderEffect
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 176 | THE MOMENT
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 194 | checkpointEveryNTurns == 0
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 196 | WriteCheckpointEffect(barrier.Turn)
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 199 | committedTurn = barrier.Turn
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 200 | CommitTurnEffect(committedTurn)
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 203 | private void HandleCommitOutcome
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 205 | if (!outcome.Committed)
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 207 | CommitRefused
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 213 | submitted.Clear()
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 218 | SetExecutionLockEffect(false)
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 222 | State = HostSessionState.Executing
+src/PBAndJ.Core/Net/HostSession.Turn.cs | 237 | TurnCommitMessage(outcome.Turn)
+
+# ── HostSession: construction, cadence, the seal
+src/PBAndJ.Core/Net/HostSession.cs |  59 | lobbySealed
+src/PBAndJ.Core/Net/HostSession.cs |  78 | admitted
+src/PBAndJ.Core/Net/HostSession.cs |  81 | LoadBarrier()
+src/PBAndJ.Core/Net/HostSession.cs |  92 | combatEntry
+src/PBAndJ.Core/Net/HostSession.cs | 169 | Default 1
+src/PBAndJ.Core/Net/HostSession.cs | 185 | checkpointEveryNTurns = 1
+src/PBAndJ.Core/Net/HostSession.cs | 199 | if (checkpointEveryNTurns < 1)
+src/PBAndJ.Core/Net/HostSession.cs | 221 | State = bridge.InCombat
+src/PBAndJ.Core/Net/HostSession.cs | 228 | CheckpointEveryNTurns
+
+# ── HostSession: combat entry / exit, and the SHIP WINDOW between them
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs |  38 | HandleCombatEntered
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs |  40 | State = HostSessionState.Planning
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs |  41 | barrier.AdvanceTo(bridge.CurrentTurn)
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs |  53 | ShipCombatEffect
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs |  59 | HandleLocalCombatReady
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs |  78 | CombatShipFailed
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs |  85 | DropEveryoneFromTheFight
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs |  86 | StartCombatForEveryone(effects)
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs | 106 | combatEntry.Start
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs | 204 | private void StartCombatForEveryone
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs | 211 | Reassign(effects)
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs | 214 | private void HandleCombatExited
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs | 216 | State = HostSessionState.Lobby
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs | 217 | UnitAssignments.Empty
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs | 218 | barrier.AdvanceTo(-1)
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs | 226 | combatEntry.InFlight
+src/PBAndJ.Core/Net/HostSession.CombatEntry.cs | 240 | CombatEndMessage
+
+# ── HostSession: the other two State writers, correctly attributed
+src/PBAndJ.Core/Net/HostSession.TurnComplete.cs |  17 | HandleLocalTurnComplete
+src/PBAndJ.Core/Net/HostSession.TurnComplete.cs | 113 | State = HostSessionState.Planning
+src/PBAndJ.Core/Net/HostSession.Dispatch.cs     |  48 | case TransportFailedEvent
+src/PBAndJ.Core/Net/HostSession.Dispatch.cs     |  51 | State = HostSessionState.Closed
+src/PBAndJ.Core/Net/HostSession.Dispatch.cs     | 189 | case ByeMessage
+src/PBAndJ.Core/Net/HostSession.Dispatch.cs     | 190 | HandleDisconnect
+
+# ── HostSession: barriers, handshake, rejoin, offers, reassign
+src/PBAndJ.Core/Net/HostSession.Load.cs      |  41 | load.InFlight
+src/PBAndJ.Core/Net/HostSession.Load.cs      |  50 | load.Start
+src/PBAndJ.Core/Net/HostSession.Handshake.cs |  81 | WelcomeMessage
+src/PBAndJ.Core/Net/HostSession.Handshake.cs |  91 | AnnounceLobby
+src/PBAndJ.Core/Net/HostSession.Handshake.cs |  92 | OfferScenario
+src/PBAndJ.Core/Net/HostSession.Handshake.cs |  93 | TellNewcomerAboutCombat
+src/PBAndJ.Core/Net/HostSession.Handshake.cs | 100 | TurnCommitMessage(committedTurn)
+src/PBAndJ.Core/Net/HostSession.Handshake.cs | 103 | Reassign(effects)
+src/PBAndJ.Core/Net/HostSession.Handshake.cs | 159 | HandleRejoin
+src/PBAndJ.Core/Net/HostSession.Handshake.cs | 187 | UnknownSession
+src/PBAndJ.Core/Net/HostSession.Handshake.cs | 196 | BadResumeToken
+src/PBAndJ.Core/Net/HostSession.Handshake.cs | 231 | if (State == HostSessionState.Executing)
+src/PBAndJ.Core/Net/HostSession.Handshake.cs | 233 | TurnCommitMessage(committedTurn)
+src/PBAndJ.Core/Net/HostSession.Handshake.cs | 309 | TellNewcomerAboutCombat
+src/PBAndJ.Core/Net/HostSession.Scenario.cs  |  33 | OfferSave(peerId, LobbySaveNames.ScenarioSlot
+src/PBAndJ.Core/Net/HostSession.Scenario.cs  |  41 | IsNonCampaignSlot
+src/PBAndJ.Core/Net/HostSession.Scenario.cs  | 144 | IsNonCampaignSlot
+src/PBAndJ.Core/Net/HostSession.Lobby.cs     |  85 | private void OfferSelectedSave
+src/PBAndJ.Core/Net/HostSession.Lobby.cs     |  88 | IsNonCampaignSlot
+src/PBAndJ.Core/Net/HostSession.Roster.cs    | 131 | private void Reassign
+src/PBAndJ.Core/Net/HostSession.Tick.cs      |  60 | private void HandleTick
+
+# ── the slot namespace and its seven guard sites
+src/PBAndJ.Core/Net/LobbySaves.cs      |  54 | ScenarioSlot = Prefix
+src/PBAndJ.Core/Net/LobbySaves.cs      |  68 | Only the host writes one
+src/PBAndJ.Core/Net/LobbySaves.cs      |  75 | CheckpointSlot = Prefix
+src/PBAndJ.Core/Net/LobbySaves.cs      | 100 | public static bool IsNonCampaignSlot
+src/PBAndJ.Core/Net/LobbySaves.cs      | 273 | private static bool IsReserved
+src/PBAndJ.Core/Net/LobbySaves.cs      | 286 | IsNonCampaignSlot
+src/PBAndJ.Core/Net/LobbySaves.cs      | 400 | private static bool IsOffered
+src/PBAndJ.Core/Net/LobbySaves.cs      | 403 | IsNonCampaignSlot
+src/PBAndJ.Core/Net/LobbySaveWrites.cs | 119 | IsProtectedFromOverwrite
+src/PBAndJ.Core/Net/LobbySaveWrites.cs | 121 | IsNonCampaignSlot
+src/PBAndJ.Mod/Net/SaveVisibilityPatches.cs | 164 | IsNonCampaignSlot
+src/PBAndJ.Mod/Net/SaveVisibilityPatches.cs | 259 | DataPathHelper.IsReservedFilename
+src/PBAndJ.Mod/Net/SaveVisibilityPatches.cs | 264 | IsProtectedFromOverwrite
+src/PBAndJ.Mod/Net/SaveVisibilityPatches.cs | 281 | CIViewPauseSave.OnDeleteButton
+
+# ── the runtime: the edge, the seeds, the commit outcome
+src/PBAndJ.Core/Net/PbjRuntime.cs |  47 | lastInCombat = bridge.InCombat
+src/PBAndJ.Core/Net/PbjRuntime.cs |  64 | mailbox.DrainAll()
+src/PBAndJ.Core/Net/PbjRuntime.cs |  82 | ObserveCombatEdge()
+src/PBAndJ.Core/Net/PbjRuntime.cs |  83 | ObserveTick(nowSeconds)
+src/PBAndJ.Core/Net/PbjRuntime.cs | 117 | ObserveCombatEdge
+src/PBAndJ.Core/Net/PbjRuntime.cs | 255 | CommitOutcomeEvent(commit.Turn, bridge.CommitTurn())
+
+# ── protocol constants and the message set
+src/PBAndJ.Core/Net/PbjProtocol.cs |  60 | Null on both sides
+src/PBAndJ.Core/Net/PbjProtocol.cs | 217 | Version = 10
+src/PBAndJ.Core/Net/PbjProtocol.cs | 260 | ModVersion = "0.24.0"
+src/PBAndJ.Core/Net/PbjProtocol.cs | 289 | Deliberately longer than
+src/PBAndJ.Core/Net/PbjProtocol.cs | 295 | HostTimeoutSeconds = 30.0
+src/PBAndJ.Core/Net/PbjProtocol.cs | 327 | LoadTimeoutSeconds = 120.0
+src/PBAndJ.Core/Net/PbjMessage.cs  |   9 | 31+ are unallocated
+src/PBAndJ.Core/Net/PbjMessage.cs  |  51 | Poses = 31
+src/PBAndJ.Core/Net/PbjMessage.cs  |  56 | ReplayAssets = 32
+src/PBAndJ.Core/Net/PbjMessage.cs  | 778 | class ScenarioMessage
+src/PBAndJ.Core/Net/PbjMessage.cs  | 800 | Files
+src/PBAndJ.Core/Net/PbjMessage.cs  | 810 | struct LobbyPeerState
+src/PBAndJ.Core/Net/PbjEffect.cs   |  61 | class WriteCheckpointEffect
+src/PBAndJ.Core/Net/PbjEffect.cs   |  71 | The turn whose plan the checkpoint holds
+src/PBAndJ.Core/Net/PbjEffect.cs   | 427 | class WriteScenarioEffect
+
+# ── the payload, its bounds and its refusals
+src/PBAndJ.Core/Net/ScenarioPayload.cs |  19 | DisallowedDestination = 7
+src/PBAndJ.Core/Net/ScenarioPayload.cs |  31 | PartsNotContiguous = 9
+src/PBAndJ.Core/Net/ScenarioPayload.cs |  37 | MixedContentForm = 10
+src/PBAndJ.Core/Net/ScenarioPayload.cs |  85 | class ScenarioPayload
+src/PBAndJ.Core/Net/ScenarioPayload.cs | 111 | 119 KB
+src/PBAndJ.Core/Net/ScenarioPayload.cs | 119 | MaxTotalBytes = 3 << 18
+src/PBAndJ.Core/Net/ScenarioPayload.cs | 138 | MaxPartBytes = 1 << 18
+
+# ── the bind rules, the reachability reversal
+src/PBAndJ.Core/Net/ConnectForm.cs | 124 | CheckHostBind
+src/PBAndJ.Core/Net/ConnectForm.cs | 141 | CheckPassphraseForBind
+src/PBAndJ.Core/Net/ConnectForm.cs | 143 | IsLoopback
+
+# ── the glue: hosting, joining, teardown
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs |  47 | public static string Host(string bind
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs |  49 | runtime != null
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs |  57 | CheckHostBind
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs |  62 | OpenBindNeedsPassphrase
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs |  80 | new CombatGameBridge()
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs |  86 | new HostSession(
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs |  89 | new PbjRuntime(
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs |  92 | HostListening
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs |  98 | HostListeningOpenly
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs | 150 | public static string Rejoin
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs | 161 | runtime != null
+src/PBAndJ.Mod/Net/NetGlue.Connect.cs | 234 | NewSessionId
+src/PBAndJ.Mod/Net/NetGlue.cs         | 142 | Shutdown
+src/PBAndJ.Mod/Net/NetGlue.cs         | 157 | ClientSession leaving
+src/PBAndJ.Mod/Net/NetGlue.cs         | 164 | bridge = null
+src/PBAndJ.Mod/Net/NetGlue.cs         | 167 | ResetLock
+
+# ── the bridge: commit refusal, scenario write, the one static ResetLock clears
+src/PBAndJ.Mod/Net/CombatGameBridge.Turn.cs     |  27 | ExecutionLocked
+src/PBAndJ.Mod/Net/CombatGameBridge.Turn.cs     |  33 | CommitInProgress
+src/PBAndJ.Mod/Net/CombatGameBridge.Turn.cs     |  35 | internal static void ResetLock
+src/PBAndJ.Mod/Net/CombatGameBridge.Turn.cs     |  37 | ExecutionLocked = false
+src/PBAndJ.Mod/Net/CombatGameBridge.Turn.cs     |  73 | public bool CommitTurn
+src/PBAndJ.Mod/Net/CombatGameBridge.Turn.cs     |  92 | refuses silently in four normal
+src/PBAndJ.Mod/Net/CombatGameBridge.Scenario.cs |  78 | public bool WriteScenario
+src/PBAndJ.Mod/Net/CombatGameBridge.Scenario.cs |  94 | pbj-incoming
+src/PBAndJ.Mod/Net/CombatGameBridge.Scenario.cs | 177 | SaveFolder
+
+# ── the ship poll: the missing window's only state
+src/PBAndJ.Mod/Net/CombatShipGlue.cs |  47 | 26.7s, 26.9s and 27.4s
+src/PBAndJ.Mod/Net/CombatShipGlue.cs |  57 | ShipTimeoutSeconds = 90f
+src/PBAndJ.Mod/Net/CombatShipGlue.cs |  59 | SayWhyEverySeconds = 1f
+src/PBAndJ.Mod/Net/CombatShipGlue.cs |  61 | private static bool armed
+src/PBAndJ.Mod/Net/CombatShipGlue.cs | 115 | Called every frame
+src/PBAndJ.Mod/Net/CombatShipGlue.cs | 172 | WaitAndSayWhy
+src/PBAndJ.Mod/Net/CombatShipGlue.cs | 186 | sinceSaidWhy >= SayWhyEverySeconds
+src/PBAndJ.Mod/Net/CombatShipGlue.cs | 193 | blockedSeconds >= ShipTimeoutSeconds
+
+# ── the checkpoint glue, and the console command that is not role-gated
+src/PBAndJ.Mod/Net/CheckpointGlue.cs | 100 | internal static void Write
+src/PBAndJ.Mod/Net/CheckpointGlue.cs | 105 | DataManagerSave.CanSave(false)
+src/PBAndJ.Mod/Net/CheckpointGlue.cs | 164 | CheckpointSlot
+src/PBAndJ.Mod/Net/CheckpointGlue.cs | 191 | CheckpointSlot
+src/PBAndJ.Mod/Net/CheckpointGlue.cs | 229 | public static string CheckpointLoad
+
+# ── other documents this one makes claims ABOUT
+docs/design/road-to-1-0.md | 640 | remote-friend compatibility
