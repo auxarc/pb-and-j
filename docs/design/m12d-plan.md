@@ -362,6 +362,14 @@ technical one, and it is escalated rather than assumed:
   client's experience is a custom screen rather than the game's, and D5 stops being "drive the
   public statics" and becomes real UI work.
 
+✅ **DECIDED 2026-08-21 by the user: measure first.** Neither shape is chosen; the deciding reading
+is **R1·10b** in `docs/notes/rig-run-1-0.md`, and it turned out to need **no new code** —
+`cm.force-victory` calls `EndCombatWithOutcome` directly, bypassing the bit-4 gate that blocks the
+ordinary path (`ConsoleCommandsCombat.cs:71-79`, `:31-39`; verified in the decompile).
+🔴 **Ordering constraint this creates:** the reading **must be taken before M17 stage 2 merges** —
+that PR's prefix closes the route it uses, and the `bypassOnce` hatch that would re-open it ships in
+the same PR. ⇒ **R1 before W2.**
+
 **What does not change either way:** D1–D3 (Core, wire-neutral) stand as written, and §5's M1–M3
 readings remain the right instruments — M1's expected answer is now `exec=0` permanently.
 
