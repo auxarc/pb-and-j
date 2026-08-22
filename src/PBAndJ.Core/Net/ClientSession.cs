@@ -131,6 +131,34 @@ namespace PBAndJ.Core.Net
 
         public ClientSessionState State { get; private set; } = ClientSessionState.Handshaking;
 
+        /// <summary>
+        /// Whether a client in this state still owns the outcome of the fight it
+        /// is in. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// The predicate the mod's <c>ScenarioUtility.EndCombatWithOutcome</c>
+        /// prefix is armed by. It lives here, as a pure function of the state
+        /// enum declared above it, because it is a decision and the mod glue that
+        /// asks it is outside the coverage gate — a wrong <c>if</c> there costs
+        /// the whole feature and nothing would fail the build.
+        /// <para>
+        /// 🔴 <b><see cref="ClientSessionState.Closed"/> and
+        /// <see cref="ClientSessionState.Faulted"/> are excluded as a correctness
+        /// requirement, not as tidiness.</b> <see cref="Fault"/>'s own comment
+        /// states the intent: a lost host must never leave the local execute
+        /// button disabled, because the player continues single-player from
+        /// there. That human then simulates locally, <c>CombatExecutionEndSystem</c>
+        /// fires, the victory count runs — and a prefix still armed would eat the
+        /// outcome and make the fight <b>unwinnable and unlosable for ever</b>.
+        /// A <c>Bye</c> reaches the same place.
+        /// </para>
+        /// </remarks>
+        public static bool ClientOwnsCombatOutcome(ClientSessionState state)
+        {
+            return state != ClientSessionState.Closed
+                && state != ClientSessionState.Faulted;
+        }
+
         /// <summary>Our id in the session, or -1 before Welcome.</summary>
         public int PeerId { get; private set; } = -1;
 

@@ -172,10 +172,18 @@ namespace PBAndJ.Core.Net
             float wreckedAt = 0f,
             IReadOnlyList<PartDestruction>? wreckedParts = null,
             IReadOnlyList<PartState>? parts = null,
-            bool hasFrameIntegrity = false)
+            bool hasFrameIntegrity = false,
+            bool pilotDead = false,
+            string? pilotDeathCause = null,
+            bool pilotKnockedOut = false,
+            bool pilotEjected = false)
         {
             Parts = parts ?? NoPartStates;
             HasFrameIntegrity = hasFrameIntegrity;
+            PilotDead = pilotDead;
+            PilotDeathCause = pilotDeathCause;
+            PilotKnockedOut = pilotKnockedOut;
+            PilotEjected = pilotEjected;
             Name = name;
             Position = position;
             Rotation = rotation;
@@ -428,6 +436,81 @@ namespace PBAndJ.Core.Net
         /// </para>
         /// </remarks>
         public bool HasFrameIntegrity { get; }
+
+        /// <summary>
+        /// Whether this unit's pilot is dead on the host. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// Read by <c>ScenarioUtility.IsUnitActive</c> as
+        /// <c>persistentEntity.hasDeathStatus</c> (<c>:6427</c>), on the PILOT's
+        /// persistent entity reached through the unit's <c>entityLinkPilot</c> —
+        /// which is why one pilot per unit makes this record the right home and
+        /// no second message type is needed.
+        /// <para>
+        /// ⚠️ A client cannot derive it. The producer is
+        /// <c>CombatPilotStatReactionSystem</c>, which triggers on
+        /// <c>PersistentMatcher.PilotStatValues</c> and locally invents a death
+        /// from <c>hp &lt;= 0</c> — inventing a cause, concussing the entity,
+        /// forcing an ejection and raising the same modal dialog M17 spends a
+        /// patch suppressing. So the pilot's stat values deliberately do NOT
+        /// travel and the conclusion does.
+        /// </para>
+        /// <para>
+        /// 🔑 <b>Applied by writing the component, never the helper.</b>
+        /// <c>PilotUtility.DeclareDeath</c> additionally fires
+        /// <c>OnPilotEvent</c>, zeroes two pilot stats and runs combat-state
+        /// focus events — the same class of cascade this milestone exists to
+        /// avoid. <c>AddDeathStatus(time, cause)</c> is the whole write.
+        /// </para>
+        /// </remarks>
+        public bool PilotDead { get; }
+
+        /// <summary>
+        /// The host's own word for how the pilot died. Meaningful only when
+        /// <see cref="PilotDead"/>.
+        /// </summary>
+        /// <remarks>
+        /// Carried rather than manufactured client-side because the cause is a
+        /// content string the game shows to the player, and a client that
+        /// invented "trauma" for a pilot the host recorded differently would be
+        /// wrong in the one place the difference is visible.
+        /// <para>
+        /// Capped at <see cref="PbjMessageCodec.MaxPilotDeathCauseLength"/>
+        /// characters, and the cap <b>refuses</b> rather than truncating: a
+        /// shortened cause travels as a string the host never wrote, which is a
+        /// lie the far side cannot detect. Null and empty stay distinct — null
+        /// is "the host said nothing".
+        /// </para>
+        /// </remarks>
+        public string? PilotDeathCause { get; }
+
+        /// <summary>
+        /// Whether this unit's pilot is knocked out on the host. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// A different question from <see cref="PilotDead"/>, asked separately by
+        /// <c>IsUnitActive</c> (<c>:6431</c>) under its own opt-out parameter, so
+        /// collapsing the two would change the answer for every caller that
+        /// passes <c>inactiveIfPilotKnockedOut: false</c>.
+        /// <para>
+        /// Safe to plant: <b>no matcher <c>PersistentMatcher.KnockedOut</c>
+        /// exists at all</b>, so nothing on the client reacts to the write.
+        /// </para>
+        /// </remarks>
+        public bool PilotKnockedOut { get; }
+
+        /// <summary>
+        /// Whether this unit's pilot has ejected on the host. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// Read by <c>IsUnitActive</c> (<c>:6427</c>) beside the death status.
+        /// <c>PersistentMatcher.Ejected</c> has exactly one reference and it is a
+        /// non-reactive <c>IGroup</c> in
+        /// <c>OverworldCombatOutcomeProcessingSystem</c>, a system a client never
+        /// triggers — its collector is <c>CombatOutcomeProcessing.Added()</c>,
+        /// and outcome processing is host work.
+        /// </remarks>
+        public bool PilotEjected { get; }
 
         /// <summary>
         /// Projects onto the narrower type the digest is defined over.

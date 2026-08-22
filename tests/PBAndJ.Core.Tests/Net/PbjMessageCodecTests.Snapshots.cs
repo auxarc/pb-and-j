@@ -310,6 +310,146 @@ namespace PBAndJ.Core.Tests.Net
             Assert.True(float.IsNaN(m.Units[0].Integrity));
         }
 
+        // --- M17 stage 2, wire v10: the pilot ---
+
+        // Per unit, at the very tail of the record, and with each unit setting a
+        // DIFFERENT combination — so a reader that dropped one field, read them
+        // in the wrong order, or let one unit's tail run into the next unit's
+        // name cannot pass. The three pilot bits are now the last things in the
+        // record, which is exactly where an off-by-one lands.
+        [Fact]
+        public void RoundTrip_Snapshot_PreservesThePilotPerUnit()
+        {
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f,
+                    pilotDead: true, pilotDeathCause: "trauma",
+                    pilotKnockedOut: false, pilotEjected: true),
+                new UnitSnapshot("pb_mech_02", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f,
+                    pilotDead: false, pilotDeathCause: null,
+                    pilotKnockedOut: true, pilotEjected: false),
+            }));
+
+            Assert.True(m.Units[0].PilotDead);
+            Assert.Equal("trauma", m.Units[0].PilotDeathCause);
+            Assert.False(m.Units[0].PilotKnockedOut);
+            Assert.True(m.Units[0].PilotEjected);
+
+            Assert.False(m.Units[1].PilotDead);
+            Assert.Null(m.Units[1].PilotDeathCause);
+            Assert.True(m.Units[1].PilotKnockedOut);
+            Assert.False(m.Units[1].PilotEjected);
+        }
+
+        // isWrecked has crossed since M15 and stage 2 adds NO second bit for it.
+        // Asserted here rather than argued: a duplicate would show up as the flag
+        // surviving one accessor and not the other.
+        [Fact]
+        public void RoundTrip_Snapshot_StillCarriesTheUnitWreckExactlyOnce()
+        {
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f,
+                    isWrecked: true, wreckedAt: 3.5f,
+                    pilotDead: true, pilotDeathCause: "trauma"),
+            }));
+
+            Assert.True(m.Units[0].IsWrecked);
+            Assert.Equal(3.5f, m.Units[0].WreckedAt);
+            Assert.True(m.Units[0].PilotDead);
+        }
+
+        // 🔴 The cap VALUE, pinned as a literal. Every other test here derives its
+        // string length from the constant, which pins the mechanism ("the check
+        // uses the cap") and says nothing about the number -- raising the cap
+        // raised those tests with it and not one of them failed. Proven by doing
+        // exactly that. This is the row that makes "raise the cap" a mutation
+        // rather than a no-op.
+        [Fact]
+        public void MaxPilotDeathCauseLength_IsThirtyTwo()
+        {
+            // Small on purpose: the field is a content key the game writes
+            // itself, not free-form text. It also has to stay well under
+            // PbjWriter.MaxStringLength, or a test writing cap+1 characters
+            // would trip the writer's own limit instead of this one -- which is
+            // how the first version of the two tests below passed for the wrong
+            // reason.
+            Assert.Equal(32, PbjMessageCodec.MaxPilotDeathCauseLength);
+            Assert.True(PbjMessageCodec.MaxPilotDeathCauseLength * 4 < PbjWriter.MaxStringLength);
+        }
+
+        // Refusal, not truncation, and on the ENCODE side: an over-long cause is
+        // this machine's own bug, and a silently shortened one would travel as a
+        // cause string the host never wrote. Raising the cap is the mutation.
+        [Fact]
+        public void Encode_SnapshotWithAnOverlongDeathCause_Throws()
+        {
+            var cause = new string('x', PbjMessageCodec.MaxPilotDeathCauseLength + 1);
+            var message = new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f, pilotDead: true, pilotDeathCause: cause),
+            });
+
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Encode(message));
+        }
+
+        // The cap holds at exactly the limit, so the refusal above is a fact
+        // about the cap and not about any long string at all.
+        [Fact]
+        public void RoundTrip_SnapshotWithADeathCauseAtTheCap_Survives()
+        {
+            var cause = new string('x', PbjMessageCodec.MaxPilotDeathCauseLength);
+            var m = RoundTrip(new SnapshotMessage(1, null, new[]
+            {
+                new UnitSnapshot("pb_mech_01", new Vec3(0f, 0f, 0f), new Vec4(0f, 0f, 0f, 1f),
+                    new Vec3(0f, 0f, 1f), 1f, pilotDead: true, pilotDeathCause: cause),
+            }));
+
+            Assert.Equal(cause, m.Units[0].PilotDeathCause);
+        }
+
+        // And the decode side, which the encode cap cannot speak for: a peer is
+        // not this process and can put anything on the wire.
+        [Fact]
+        public void Decode_SnapshotWithAnOverlongDeathCause_Throws()
+        {
+            var writer = new PbjWriter();
+            writer.WriteByte((byte)PbjMessageType.Snapshot);
+            writer.WriteInt32(1);
+            writer.WriteString("d");
+            writer.WriteInt32(1);
+            writer.WriteString("pb_mech_01");
+            for (var i = 0; i < 10; i++)
+            {
+                writer.WriteSingle(0f);      // position, rotation, facing
+            }
+            writer.WriteSingle(1f);          // integrity
+            writer.WriteBool(false);         // isHidden
+            writer.WriteBool(false);         // isHiddenDetectable
+            writer.WriteBool(true);          // isDeployed
+            writer.WriteBool(false);         // hasArrivalTime
+            writer.WriteSingle(0f);          // arrivalTime
+            writer.WriteBool(false);         // isWrecked
+            writer.WriteSingle(0f);          // wreckedAt
+            writer.WriteInt32(0);            // wrecked parts
+            writer.WriteBool(false);         // hasFrameIntegrity
+            writer.WriteInt32(0);            // part states
+            writer.WriteBool(true);          // pilotDead
+            writer.WriteString(new string('x', PbjMessageCodec.MaxPilotDeathCauseLength + 1));
+            // 🔴 The record MUST be completed. Stopping here made the reader run
+            // off the end of the buffer, so Decode threw for framing rather than
+            // for the cap and this test passed with the cap check deleted --
+            // proven by deleting it and watching this stay green.
+            writer.WriteBool(false);         // pilotKnockedOut
+            writer.WriteBool(false);         // pilotEjected
+
+            Assert.Throws<PbjProtocolException>(() => PbjMessageCodec.Decode(writer.ToArray()));
+        }
+
         [Fact]
         public void Decode_SnapshotWithTooManyUnits_Throws()
         {

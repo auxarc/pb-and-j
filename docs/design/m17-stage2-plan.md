@@ -1,8 +1,18 @@
 # M17 stage 2 — the wrecked-unit cluster: the reconstructed plan, and its third refutation
 
-Status: **written 2026-08-21 at `main` = `1708a0b`, tree clean. NOT BUILT. No build authorization.**
-Mod 0.22.0, wire v9 (`src/PBAndJ.Core/Net/PbjProtocol.cs:202`, `:226`; `mod/metadata.yaml`;
-`wire-surface.lock:3`).
+Status: ~~written 2026-08-21 at `main` = `1708a0b`, tree clean. NOT BUILT. No build authorization.~~
+🔴 **CORRECTED 2026-08-22 — BUILT, AND THIS HEADER WAS WRONG FOR A DAY WHILE §10 THREE SECTIONS BELOW
+DESCRIBED THE BUILD.** The work was written 2026-08-21 22:54–23:11 and left **uncommitted in a
+worktree**, so every document — this one included — went on saying it did not exist. Now commit
+`26413e8`, rebased onto `main` (`093bfeb`) as `dad9a50`.
+**Gated 2026-08-22, first gate ever run against it, all green:** `make dist` exit 0 · **2119 tests**
+(+17 over main's 2102) · **100% line/branch/method**, threshold enforced in the invocation
+(`/p:Threshold=100 /p:ThresholdType=line,branch,method`) · `peer-selftest` 11/11 ·
+`split-selftest` 90/90 · gitignore symlink 7/7 including case 0's control.
+Mod **0.24.0**, wire **v10** (`src/PBAndJ.Core/Net/PbjProtocol.cs`; `mod/metadata.yaml`;
+`wire-surface.lock` re-recorded — see the PR body for the FROM/TO and why the break is intended).
+⭐ **The lesson is the header itself:** a status line is prose, and prose is the least-checked thing
+in a commit. §10 existed and contradicted it, and nothing noticed until a planner read both.
 
 This file is the **reconstruction** of a plan that was written, reviewed twice, rewritten, and then
 lost with the session scratchpad it lived in. That is the third plan this project has lost to a
@@ -597,11 +607,27 @@ says so rather than treating it as a surprise.
 make record-wire-surface        # Makefile:326 — mandatory, the hash moves
 make record-split-grouping      # Makefile:270 — see below, and the roadmap omits it
 make dist                       # exit 0, and READ THE TAIL, not a grep for success words
-make peer-selftest              # ALL PASS at protocol v10
+make peer-selftest              # ALL PASS (11 scenarios) -- see the note below
 ```
 
-🔴 **`make record-split-grouping` is missing from `road-to-1-0.md` §6's W2 row and it is owed.**
-`split-grouping.lock` records 15 families / 145 part files / **1541 members** (`:11`), and
+✅ **`make record-split-grouping` WAS RUN — closed 2026-08-22.** `split-grouping.lock` now records
+15 families / 145 part files / **1577 members**, up from 1556 on `main`; all 21 new locked-family
+members are explicitly recorded (`DriveWreckFlag`, `FlushWreckFlagBatch`, `NetGlue.Session`,
+`ClientOwnsCombatOutcome`, and the tests), and `check-split-grouping` passes as part of `dist`.
+
+🔴 **AND A CORRECTION TO THE GATE LINE ABOVE, 2026-08-22 — `peer-selftest` CANNOT SEE THE PROTOCOL
+VERSION.** This file said `# ALL PASS at protocol v10`. It cannot: the entire verdict line is
+`[selftest] ALL PASS ({scenarios.Length} scenarios)` (`tools/pbj-peer/SelfTest.cs:115`), the version
+is printed only in raw-handshake mode (`Program.cs:104`), and **this branch changes no
+`tools/pbj-peer` file at all** — so the v10 run is *character-identical* to a v9 run, and a
+wrong-directory or stale-build run prints the same confident PASS. The gate is green; **it says
+nothing about the wire version.** ⇒ **State which QUESTION a green gate answers, not just that it
+was green.** A one-line version banner in the selftest verdict would retire this for every future
+bump and is filed as its own item.
+
+The superseded text, kept because the reasoning still holds for the *next* locked-family change:
+`split-grouping.lock` recorded 15 families / 145 part files / **1541 members** (`:11`) when this was
+written, and
 `KeyframePlayer` is one of them — `KeyframePlayer.Destruction.Apply.cs` currently contributes 4
 recorded members. Adding `DriveWreckFlag` to it changes the map, and `check-split-grouping`
 (`Makefile:267`) is a hard dependency of `dist` (`Makefile:357`). The same applies to the
@@ -921,7 +947,7 @@ principle. It costs one grep and it is **not** a blocker: the prefix closes both
 
 | # | claim | why unverified | cheapest verification |
 |---|---|---|---|
-| 1 | a client's level destruction can reach `CrashEntity` (KILL 5) | needs `Area/AreaSimulatedChunk` collision behaviour on a replaying client | **rig, free ride-along on R1**: after 6b, `pbj.destruct-probe` on the client and check no corpse has `isCrashing`; a static alternative is to read `AreaSimulatedChunk.cs:150-190` for a `Simulating` guard — one file, agent-cheap, do this first |
+| 1 | ~~a client's level destruction can reach `CrashEntity` (KILL 5)~~ | ✅ **CLOSED 2026-08-21 during the build — see §10** | done statically; the rig ride-along is now optional confirmation, not the closure |
 | 2 | subsystem `destroyed` is write-only in vanilla (stage 4 cut) | round 2's reading, not re-taken today | read `UnitUtilities.CreateSubsystemsFromSave` and grep `destroyed` in `DataBlockSavedSubsystem` — one grep, agent-cheap |
 | 3 | `UnitStatusUpdateSystem` triggers on `CombatMatcher.SimulationTime` (stage 4 cut) | round 2's reading, not re-taken | open `UnitStatusUpdateSystem.GetTrigger` — one file |
 | 4 | `OverworldCombatOutcomeProcessingSystem.cs:190-199` / `:200` line numbers | quoted from memory; the member was verified, the lines were not | navigate by member (`Execute`), re-derive |
@@ -939,3 +965,163 @@ in the same commit → branch → PR → merge in W2, after W1.
 
 *Written by lane L3, 2026-08-21, at `main` = `1708a0b`. Superseded only by a later refutation, and a
 later refutation should say which of §7's five kills it re-opened.*
+
+---
+
+## 10. BUILD NOTES (2026-08-21) — what the build found, kept, and had to correct
+
+Written by the build lane against this document. **Five of the plan's decisions were checked at the
+code face and every one held.** What follows is only the deltas.
+
+### 10.1 ✅ KILL 5's open thread is CLOSED, and the answer is the opposite of the one feared
+
+**The guard the plan hoped for does not exist.** `AreaSimulatedChunk.OnCollisionEnter`
+(`decompiled/Area/AreaSimulatedChunk.cs:133-193`) is a Unity physics callback with **no `Simulating`
+condition anywhere in the file** — its only guard is `colliderToPointMap.ContainsKey(thisCollider)`,
+and the AoE call sits unguarded at `:187`, exactly where the plan said. Read literally, §8 item 1
+would have come back "thread live".
+
+**It is closed one level down instead, by the very flag stage 2 sets.**
+`OverlapUtility.OnAreaOfEffectAgainstUnits` builds its hit list at
+`decompiled/PhantomBrigade.Data/OverlapUtility.cs:317-325` and admits a unit only when
+`linkedPersistentEntity != null && !linkedPersistentEntity.isWrecked` (**`:320`**); the `CrashEntity`
+call at `:480` iterates nothing else. **A wrecked unit is invisible to the whole AoE path.** Setting
+`isWrecked` does not open `AreaSimulatedChunk.cs:187` — it shuts it. That is a stronger closure than
+a `Simulating` guard, because it does not depend on simulation state at all.
+
+⚠️ **The plan's downstream citation is wrong and harmlessly so.** It routes
+`:187 → OnAreaOfEffectAgainstUnits → EquipmentUtility.cs:3105 CrashEntity`. `EquipmentUtility` is at
+`decompiled/EquipmentUtility.cs`, **not** under `PhantomBrigade.Data/`, and `:3105` is a
+weapon-damage caller on a different path. The real chain is
+`AreaSimulatedChunk.cs:187 → OverlapUtility.cs:280 → OverlapUtility.cs:480`.
+
+### 10.2 🔴 A SECOND ROUTE THE PLAN NEVER NAMED, and it is the one that stays open
+
+Grepping the *component* rather than the claim (the ⭐⭐ rule) turned up a second caller from the
+same `AreaManager`: **`OverlapUtility.CheckUnitsOnDestroyedPoint`** (`:32-88`), reached from
+`AreaManager.ApplyDestructionToPoint:2701` and `AreaManager.CreateSimulatedPoint:3063`.
+
+Read with the guard *above* it, which is the whole point:
+
+```
+if (data.classTag == UnitClassKeys.turret) {
+    if (!linkedPersistentEntity.isWrecked) { ... OnDestruction ... }        // :73  guarded
+}
+else if (!value.isCrashing && !value.hasCurrentDashAction && !value.hasUnitImpaledStatus) {
+    ActionUtility.CrashEntity(value, ..., bypassCrashableCheck: true);      // :79-82  NOT guarded
+}
+```
+
+A **wrecked non-turret** standing on a destroyed floor tile therefore does reach `CrashEntity`, and
+`bypassCrashableCheck: true` skips the first early-out. This is the live residue of KILL 5.
+
+**How reachable is it?** Only if this client's own `AreaManager` destroys a point. The six producers
+of area damage were listed and read:
+
+| producer | reachable on a pb-and-j client? |
+|---|---|
+| `CombatCollisionSystem.cs:446` | needs `projectile.hasInflictedImpact` on a collision-event entity — simulation work |
+| `BeamProjectionSystem.cs:371` | guarded by `beamEnt.hasInflictedImpact`; **`InflictedImpact` has zero hits in `src/`** (control: `NetGlue` returns 74), so mod-injected beams cannot damage the level |
+| `TriggerEventDelegates.cs:22` | trigger collisions, not driven by a non-simulating client |
+| `DataManagerSave.cs:3402` | load-time `ApplyDamageFromList` — no unit is wrecked yet |
+| `CombatCreateDamage.cs:42` | **scenario content**, an `ICombatFunction` |
+| `ConsoleCommandsCombat.cs:1314`, `CIViewInternalCombatTools.cs:366` | debug console / internal tools |
+
+⇒ **Unreachable through any path this mod drives; reachable in principle through scenario content or
+the debug console** — precisely the contingency class §7A already prices for `CombatForceExecution`.
+Not a blocker. It is written into `DriveWreckFlag`'s remarks as the first place to look if a
+client's corpse ever ragdolls, which is what §7 KILL 5 asked for.
+
+⚠️ Also worth carrying: `grep -rn 'AreaManager|areaManager|AreaVolumePoint' src/` returns **0**
+against a control of **74** for `NetGlue`. The mod does not touch level destruction at all.
+
+### 10.3 Corrections to this document that were already made on `main`
+
+`3a160c4` is later than the `1708a0b` this plan was written at, and the review lane had already
+landed three of the plan's "owed elsewhere" items. **They were not re-done:**
+
+- §4.2's *"fix the roadmap line"* — `road-to-1-0.md` already says *"there is no `cm.end-combat-*`"*.
+- §6's *"`record-split-grouping` is missing from §6's W2 row"* — the W2 row already names it.
+- §7 KILL 1's *"`road-to-1-0.md:429` should be softened"* — already reads
+  *"~~impossible by construction~~ 🔴 CORRECTED"*.
+
+What §5.3 asked for and was **not** yet done: R1 reading 6 was still a single row. It is now 6a–6f
+in `road-to-1-0.md` §5 and in `docs/notes/rig-run-1-0.md`.
+
+🔴 **And that runbook carried a claim stage 2 falsifies.** `rig-run-1-0.md`'s R1·6 block said *"a
+client's own ECS reads zero for `wrecked` by design, so read L3's applied counter, not the ECS
+column."* True until this PR; from this PR the ECS column **is** the reading. Sighting 19's shape —
+prose that goes stale into a wrong instruction — caught only because §5.3 sent the build into that
+file. Corrected in place with the date and the reason.
+
+### 10.4 Two things the plan under-specified, decided here and named
+
+1. **`AddDeathStatus` takes a `time` this wire does not carry.** §3.2 lists the field as
+   `PilotDead + PilotDeathCause` and no float. The component is `{ float time; string cause; }` and
+   `time` is **serialized** (`DataHelperSaveSerialization.cs:368-369`). Decision: **write `0f`**, and
+   say so, for exactly §3.4's reason — it is the host's number on the host's clock, a client that
+   invented one would put a different value in its own checkpoint, and nothing reads it during a
+   fight (the two readers are the extended pilot-info and overworld-debriefing views).
+2. **§2.2 lists the batch calls as steps 4 and 5 of `DriveWreckFlag` while also saying "once per
+   batch, not per unit".** `ApplyDestruction` is called inside a per-target, per-frame loop, so
+   those two cannot live in the per-unit method. Split into `FlushWreckFlagBatch`, called once after
+   the target loop in `Advance` and once after the wreck loop in `ApplySettled`, and inert unless a
+   flag actually changed.
+
+### 10.5 One member is more ornamental than the plan implies
+
+`DestructionState.ShouldHoldWreckFlagAcrossCombatEnd` is a constant-`true` property. Nothing
+*branches* on it — a branch would be dead code, since `ClearDestruction` simply does not touch the
+ECS flag. It is a documented decision with a Core test that pins it and a comment in
+`ClearDestruction` pointing at it. That is what §5.1 asked for, and it is worth knowing it buys
+documentation and a mutation target rather than behaviour.
+
+### 10.6 🔴 The mutation run found TWO defects in the build's own new tests, and one in the harness
+
+Every guard §5.1 names was mutation-checked **one mutation at a time** (sighting 18), and three
+things came back that would otherwise have shipped as green-over-nothing.
+
+**The harness first.** Its first run reported *"exit=2, failing tests (0)"* for all six mutations —
+which reads as "the tests do not bite". It was reading `stdout` only, and xUnit writes `[FAIL]` to
+`stderr`. ⭐ Caught by disbelieving the zero and re-running one mutation by hand with the streams
+merged. **A zero was a claim about the parse, not about the tests.**
+
+**Defect 1 — `Decode_SnapshotWithAnOverlongDeathCause_Throws` passed with the cap check deleted.**
+The hand-built frame stopped after the cause string and omitted the last two bools, so the reader
+ran off the end of the buffer and `Decode` threw `PbjProtocolException` for **framing**. The
+assertion could not tell that from the cap refusing. Fixed by completing the record; re-proven by
+deleting the check and watching the test go red.
+
+**Defect 2 — the cap VALUE was pinned by nothing.** Every cap test built its string as
+`new string('x', MaxPilotDeathCauseLength + 1)`, so raising the constant raised the tests with it:
+**32 → 64 failed nothing at all.** They pinned the mechanism ("the check consults the cap"), never
+the number, and §5.1's named mutation *"raise the cap"* was a no-op against them. Fixed with a
+literal `Assert.Equal(32, ...)`.
+
+⚠️ **And the first attempt at that mutation was itself a bad control** — sighting 15's shape.
+Raising the cap to **4096** collides with `PbjWriter.MaxStringLength`, which is exactly 4096, so a
+`cap + 1` string trips the *writer's* limit: the encode test passed for the wrong reason and the
+decode test failed for the wrong reason. The pin now also asserts `cap * 4 < MaxStringLength` so the
+two limits cannot drift into each other again.
+
+**Final state — eight mutations, eight bites, each by its own test:**
+
+| mutation | caught by |
+|---|---|
+| swap `PilotKnockedOut`/`PilotEjected` in the ctor | `Constructor_RetainsEveryPilotField`, `Constructor_KnockedOutIsSeparateFromDead` |
+| reorder two bools on the codec write side | `RoundTrip_Snapshot_PreservesThePilotPerUnit` |
+| drop the cause string from the wire | that plus both cap round-trips |
+| raise the cap 32 → 64 | `MaxPilotDeathCauseLength_IsThirtyTwo` |
+| neuter the encode cap check | `Encode_SnapshotWithAnOverlongDeathCause_Throws` |
+| neuter the decode cap check | `Decode_SnapshotWithAnOverlongDeathCause_Throws` |
+| flip `ShouldHoldWreckFlagAcrossCombatEnd` | `ShouldHoldWreckFlagAcrossCombatEnd_IsTrue` |
+| let `Faulted` own the combat outcome | `ClientOwnsCombatOutcome_IsFalseOnceTheSessionIsOver(Faulted)` |
+
+### 10.7 What still needs the rig
+
+Nothing in stage 2 has run in a game. `make dist` cannot see a Harmony patch that failed to apply,
+so **reading 6a (`pbj.wreck-patches`) is the first thing to take** and it needs neither a fight nor
+a second instance. The static half of that proof is done: the three attributes were read out of the
+**built** `PBAndJ.Mod.dll` with `ilspycmd` (decompiled in place, sighting 23) and carry the right
+target type and member name, and each target declares exactly one matching member in the decompile.
+What no static check can establish is that Harmony bound them at load — that is `owners=` on 6a.

@@ -4,8 +4,12 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
+using HarmonyLib;
+using PBAndJ.Core.Net;
 using PhantomBrigade;
+using PhantomBrigade.Combat.Systems;
 using PhantomBrigade.Data;
+using PhantomBrigade.Game;
 using QFSW.QC;
 using UnityEngine;
 
@@ -76,6 +80,22 @@ namespace PBAndJ.Mod.Net
             // this feature can have while still looking correct on screen.
             sb.Append(" | pose: frozen=").Append(KeyframePlayer.FrozenUnits)
                 .Append(" unfrozen=").Append(KeyframePlayer.Unfrozen);
+            // M17 stage 2, reading 6b. set=0 against a host wrecked count above
+            // zero means the apply path is dead. refused>0 names an exception in
+            // the log. ⚠️ A wreck-visual counter moving is NOT evidence this ran:
+            // wrecksPlayed, frozen and wreckFlags answer three different
+            // questions and all three have to be read.
+            sb.Append(" | wreckFlags: set=").Append(KeyframePlayer.WreckFlagsSet)
+                .Append(" cleared=").Append(KeyframePlayer.WreckFlagsCleared)
+                .Append(" refused=").Append(KeyframePlayer.WreckFlagsRefused);
+            // Reading 6a, and the two halves must be read TOGETHER. filtered=0
+            // passed=0 means the Filter was never called at all -- the patch did
+            // not apply, or nothing was wrecked. filtered=0 passed>0 means the
+            // patch applied and the predicate was false. The predicate is printed
+            // beside them so the second case cannot be mistaken for the first.
+            sb.Append(" | cascade: filtered=").Append(WreckingPatches.CascadeFiltered)
+                .Append(" passed=").Append(WreckingPatches.CascadePassed)
+                .Append(" suppressing=").Append(WreckingPatches.SuppressCascade);
             sb.Append(" | ");
             ReportFrameIntegrity(sb);
 
@@ -588,6 +608,139 @@ namespace PBAndJ.Mod.Net
         }
 
         /// <summary>
+        /// Whether M17 stage 2's three Harmony patches resolved to real members.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>This exists because nothing else in the build can tell you.</b>
+        /// <c>src/PBAndJ.Mod</c> is in <c>UNCOVERED_PROJECTS</c>, so a
+        /// <c>[HarmonyPatch]</c> whose target moved, or whose attribute was
+        /// dropped by an editing accident, compiles green, deploys green, runs,
+        /// and simply never fires. No test and no oracle sees it.
+        /// <para>
+        /// Two different facts, printed separately because they fail separately.
+        /// <c>resolved</c> asks the same question Harmony's own attribute
+        /// resolution asks — <c>AccessTools.DeclaredMethod</c> on the declaring
+        /// type by name — so a <c>false</c> there means the string form is wrong
+        /// or the game moved the member. <c>owners</c> is how many Harmony ids
+        /// have patched that method; <c>0</c> against <c>resolved=True</c> means
+        /// the target is fine and <b>our patch class never applied</b>.
+        /// </para>
+        /// <para>
+        /// ⚠️ A zero here is never "nothing was wrecked". It is a fact about the
+        /// patch set and is readable the moment the game is up, with no fight
+        /// loaded and no second instance.
+        /// </para>
+        /// </remarks>
+        [Command("pbj.wreck-patches", "M17 stage 2: did the three wrecking patches resolve and apply?")]
+        public static string WreckPatches()
+        {
+            var sb = new StringBuilder("[pb-and-j] M17 stage 2 patches | ");
+            Report(sb, "CombatUnitWreckingSystem.Filter",
+                typeof(CombatUnitWreckingSystem), "Filter");
+            sb.Append(" | ");
+            Report(sb, "CombatUnitDestructionEffectSystem.Filter",
+                typeof(CombatUnitDestructionEffectSystem), "Filter");
+            sb.Append(" | ");
+            Report(sb, "ScenarioUtility.EndCombatWithOutcome",
+                typeof(ScenarioUtility), nameof(ScenarioUtility.EndCombatWithOutcome));
+            sb.Append(" | suppressCascade=").Append(WreckingPatches.SuppressCascade)
+                .Append(" suppressCombatEnd=").Append(WreckingPatches.SuppressCombatEnd);
+
+            var line = sb.ToString();
+            Debug.Log(line);
+            return line;
+        }
+
+        private static void Report(StringBuilder sb, string label, Type type, string member)
+        {
+            // DeclaredMethod, not Method: Harmony's own attribute resolution does
+            // not search base types, so a probe that did would report a resolved
+            // target for an attribute that cannot find one.
+            var method = AccessTools.DeclaredMethod(type, member);
+            sb.Append(label).Append(": resolved=").Append(method != null);
+            if (method == null)
+            {
+                sb.Append(" owners=n/a");
+                return;
+            }
+            var info = Harmony.GetPatchInfo(method);
+            var owners = info?.Owners;
+            sb.Append(" owners=").Append(owners == null ? 0 : owners.Count);
+        }
+
+        /// <summary>
+        /// The rig's escape hatch out of a fight the client can no longer end
+        /// for itself. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// Stage 2's <c>EndCombatWithOutcome</c> prefix makes vanilla's
+        /// <c>cm.force-victory</c> and <c>cm.force-defeat</c> silent no-ops on a
+        /// client — deliberately, because the routes it is really closing are
+        /// content-driven and accidental. This restores the <i>deliberate</i>
+        /// one.
+        /// <para>
+        /// ⚠️ There is no <c>cm.end-combat-*</c> command in this game, whatever a
+        /// runbook says. The real pair is <c>cm.force-victory</c> /
+        /// <c>cm.force-defeat</c>, and both are untouched on the HOST — the
+        /// predicate requires a live client session — so the normal rig exit is
+        /// still host victory.
+        /// </para>
+        /// <para>
+        /// 🔑 <b>Every branch names itself.</b> A silent return would be
+        /// indistinguishable from a bypass that worked, which is exactly the
+        /// reading this command exists to make unambiguous.
+        /// </para>
+        /// </remarks>
+        [Command("pbj.force-end", "M17 stage 2: end this client's combat past the outcome prefix")]
+        public static string ForceEnd(string outcome)
+        {
+            if (!IDUtility.IsGameState("combat"))
+            {
+                return "[pb-and-j] force-end: NOT IN COMBAT — nothing was called";
+            }
+
+            CombatOutcome resolved;
+            if (string.Equals(outcome, "victory", StringComparison.OrdinalIgnoreCase))
+            {
+                resolved = CombatOutcome.Victory;
+            }
+            else if (string.Equals(outcome, "defeat", StringComparison.OrdinalIgnoreCase))
+            {
+                resolved = CombatOutcome.Defeat;
+            }
+            else
+            {
+                return "[pb-and-j] force-end: BAD ARGUMENT '" + outcome
+                    + "' — say victory or defeat; nothing was called";
+            }
+
+            var armed = WreckingPatches.SuppressCombatEnd;
+            try
+            {
+                WreckingPatches.BypassCombatEndOnce = true;
+                ScenarioUtility.EndCombatWithOutcome(resolved, early: true);
+            }
+            catch (Exception e)
+            {
+                return "[pb-and-j] force-end: THREW inside the game — "
+                    + e.GetType().Name + ": " + e.Message;
+            }
+            finally
+            {
+                // In a finally rather than after the call: leaving this set would
+                // disarm the prefix for the rest of the session, which is the one
+                // failure this command could cause that nothing would report.
+                WreckingPatches.BypassCombatEndOnce = false;
+            }
+
+            return armed
+                ? "[pb-and-j] force-end: BYPASSED the prefix and ended combat in " + resolved
+                : "[pb-and-j] force-end: prefix was NOT ARMED (no live client session) — "
+                    + "the call went straight through and cm.force-* would have worked too; "
+                    + "combat ended in " + resolved;
+        }
+
+        /// <summary>
         /// Hands these commands to Quantum Console.
         /// </summary>
         /// <remarks>
@@ -606,6 +759,8 @@ namespace PBAndJ.Mod.Net
             Add(nameof(DestructSockets), "pbj.destruct-sockets", typeof(int));
             Add(nameof(DestructInject), "pbj.destruct-inject",
                 typeof(string), typeof(int), typeof(string));
+            Add(nameof(WreckPatches), "pbj.wreck-patches");
+            Add(nameof(ForceEnd), "pbj.force-end", typeof(string));
         }
 
         private static void Add(string methodName, string command, params Type[] signature)

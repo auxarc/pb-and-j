@@ -214,6 +214,44 @@ namespace PBAndJ.Core.Net
         private static readonly PartDestruction[] NoParts = new PartDestruction[0];
 
         /// <summary>
+        /// Whether the ECS <c>isWrecked</c> flag M17 stage 2 plants must SURVIVE
+        /// <see cref="Clear"/>. It must.
+        /// </summary>
+        /// <remarks>
+        /// 🔴 <b>The one decision in this class that is about state this class
+        /// does not own</b>, which is exactly why it is written down here rather
+        /// than left implicit in what <c>ClearDestruction</c> happens not to do.
+        /// The next reader's instinct on seeing a clear path that forgets the
+        /// held sets but leaves a game component standing is to "tidy up".
+        /// <para>
+        /// <b>The horn that settles it is the FAULT case, not the ordinary
+        /// one.</b> <c>StopKeyframes</c> — hence <c>ClearDestruction</c> — fires
+        /// on three events, not one: a host's <c>CombatEnd</c>, a <c>Bye</c>,
+        /// and a local <c>Fault</c>. On the last two the human <b>keeps playing
+        /// that same fight single-player</b> — <c>ClientSession.Fault</c> says so
+        /// in its own comment — so they will set <c>Simulating</c> themselves and
+        /// reach the all-hostiles-inactive count, which consults
+        /// <c>IsUnitActive</c>, which consults <c>isWrecked</c>. Clearing the flag
+        /// would resurrect every corpse into that count and make the fight
+        /// unwinnable.
+        /// </para>
+        /// <para>
+        /// The other horn — "a client would carry wrecked units onto its own
+        /// overworld" — is simply false, and that asymmetry is what makes this a
+        /// decision rather than a trade. A client cannot reach its own overworld
+        /// from inside a host's fight without a campaign teardown:
+        /// <c>DataHelperLoading.TryLoading</c> sets
+        /// <c>isTeardownOfCampaignRequested</c> for any load started outside the
+        /// main menu, and <c>TeardownCampaignSystem</c> ends by destroying every
+        /// persistent entity — including every unit that received the flag.
+        /// <b>The teardown is the whole argument</b>: if a future milestone ever
+        /// gives a client an in-place route from a host's combat to its own
+        /// overworld, this decision must be re-taken.
+        /// </para>
+        /// </remarks>
+        public static bool ShouldHoldWreckFlagAcrossCombatEnd => true;
+
+        /// <summary>
         /// What the latest snapshot said about one unit.
         /// </summary>
         /// <remarks>

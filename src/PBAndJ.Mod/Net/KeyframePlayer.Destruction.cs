@@ -145,6 +145,41 @@ namespace PBAndJ.Mod.Net
         /// <summary>Corpses handed back to their animator by a revival.</summary>
         internal static int Unfrozen { get; private set; }
 
+        /// <summary>
+        /// Units whose ECS <c>isWrecked</c> flag this client has SET. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ <b>A third question again, and not answerable from either of the
+        /// other two.</b> <see cref="WrecksPlayed"/> says a wreck visual was
+        /// drawn, <see cref="FrozenUnits"/> says a corpse is being held down, and
+        /// this says the ECS moved. Stage 1 already paid for confusing the first
+        /// two; all three have to be read.
+        /// <para>
+        /// Counts <i>changes</i>, not calls: the flag setter early-returns when
+        /// the value is unchanged, so a re-drive of a corpse already flagged adds
+        /// nothing here. A figure that climbs frame on frame would mean the
+        /// change guard above this has stopped working.
+        /// </para>
+        /// </remarks>
+        internal static int WreckFlagsSet { get; private set; }
+
+        /// <summary>The same flag cleared by a revival. M17 stage 2.</summary>
+        /// <remarks>
+        /// Reachable only through the settle path, which is the only one that can
+        /// carry <c>wrecked: false</c>. Stage 1's <c>unfrozen</c> read zero on
+        /// every real run so far, and this will too until something un-wrecks a
+        /// unit in a live fight.
+        /// </remarks>
+        internal static int WreckFlagsCleared { get; private set; }
+
+        /// <summary>Flag writes that threw inside game code. M17 stage 2.</summary>
+        /// <remarks>
+        /// Non-zero names an exception in the log. The write itself cannot throw
+        /// — it is a component add — so anything here came from
+        /// <c>OnHandleInactiveUnitCollision</c> or from the batch refresh.
+        /// </remarks>
+        internal static int WreckFlagsRefused { get; private set; }
+
 
         /// <summary>
         /// Takes a snapshot's wrecked-part sets and settles what it may. M15.

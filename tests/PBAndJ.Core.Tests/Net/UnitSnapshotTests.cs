@@ -186,6 +186,58 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(4f, v.W);
         }
 
+
+        // --- M17 stage 2, wire v10: the pilot ---
+
+        [Fact]
+        public void Constructor_DefaultsToALivePilot()
+        {
+            // A unit whose snapshot says nothing about its pilot must not arrive
+            // as a corpse. Every one of these defaults is the "nothing has
+            // happened" answer, and the cause is null rather than "" so that
+            // "no cause" and "an empty cause the host actually sent" stay
+            // distinguishable on the wire.
+            var unit = Snapshot();
+            Assert.False(unit.PilotDead);
+            Assert.Null(unit.PilotDeathCause);
+            Assert.False(unit.PilotKnockedOut);
+            Assert.False(unit.PilotEjected);
+        }
+
+        [Fact]
+        public void Constructor_RetainsEveryPilotField()
+        {
+            // All four set to something different from their default and from
+            // each other's position in the argument list, so swapping
+            // PilotKnockedOut and PilotEjected in the constructor body cannot
+            // pass. That swap is the mutation this test exists for.
+            var unit = new UnitSnapshot(
+                "pb_mech_01", default, default, default, 0.5f,
+                pilotDead: true, pilotDeathCause: "trauma",
+                pilotKnockedOut: false, pilotEjected: true);
+
+            Assert.True(unit.PilotDead);
+            Assert.Equal("trauma", unit.PilotDeathCause);
+            Assert.False(unit.PilotKnockedOut);
+            Assert.True(unit.PilotEjected);
+        }
+
+        [Fact]
+        public void Constructor_KnockedOutIsSeparateFromDead()
+        {
+            // The pair that IsUnitActive asks two different questions of
+            // (ScenarioUtility.cs:6427 and :6431). A knocked-out pilot is not a
+            // dead one and carries no death cause.
+            var unit = new UnitSnapshot(
+                "pb_mech_01", default, default, default, 0.5f,
+                pilotKnockedOut: true);
+
+            Assert.True(unit.PilotKnockedOut);
+            Assert.False(unit.PilotDead);
+            Assert.False(unit.PilotEjected);
+            Assert.Null(unit.PilotDeathCause);
+        }
+
         [Fact]
         public void ToUnitState_KeepsOnlyWhatTheDigestIsDefinedOver()
         {
