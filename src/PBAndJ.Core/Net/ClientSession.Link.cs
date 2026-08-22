@@ -11,7 +11,8 @@ namespace PBAndJ.Core.Net
     // here that ends a session rather than beginning one.
     //
     // The clock fields it stamps stay in ClientSession.cs, because HandleMessage
-    // stamps them too -- any inbound traffic proves the host is alive.
+    // touches them too -- any inbound traffic proves the host is alive. Which tick
+    // that traffic is credited to is the whole subtlety here: see HandleTick.
     //
     // One part of ClientSession, a single class split across files. Class-level prose
     // lives ONLY in ClientSession.cs: this file uses // rather than /// so the
@@ -72,6 +73,12 @@ namespace PBAndJ.Core.Net
             nowSeconds = tick.NowSeconds;
             ticked = true;
 
+            // Consumed here and nowhere else. This is the first moment the
+            // session clock reads a time at or after the drain that produced the
+            // traffic, so it is the only honest moment to credit it.
+            var spokeSincePreviousTick = inboundSinceTick;
+            inboundSinceTick = false;
+
             if (!stamped)
             {
                 // Seed rather than judge on the first tick — in-game the clock
@@ -79,6 +86,21 @@ namespace PBAndJ.Core.Net
                 // otherwise look silent since time zero and fault immediately.
                 lastInboundSeconds = nowSeconds;
                 stamped = true;
+                return;
+            }
+
+            if (spokeSincePreviousTick)
+            {
+                // The host spoke during the pump this tick closes, so re-stamp
+                // at the clock that judges rather than leave HandleMessage's
+                // stamp of the PREVIOUS tick's clock standing. Without this the
+                // silence below is measured from before a stall that the proof
+                // of life arrived during: one 30s frame gap — a long load, a
+                // hitched frame — faulted a host that had just answered a ping.
+                //
+                // A restart, not a reprieve: a host that speaks once and then
+                // dies is still faulted a full HostTimeoutSeconds after this.
+                lastInboundSeconds = nowSeconds;
                 return;
             }
 

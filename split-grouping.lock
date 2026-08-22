@@ -8,7 +8,7 @@
 # Re-record only when you have DECIDED the placement is the one you
 # want:  make record-split-grouping
 #
-# families: 15   part files: 145   members: 1578
+# families: 15   part files: 145   members: 1586
 
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.ClientOwnsCombatOutcome	1
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.ClientSession	2
@@ -42,6 +42,7 @@ src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.State	1
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.Turn	1
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.assets	1
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.bridge	1
+src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.inboundSinceTick	1
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.lastInboundSeconds	1
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.modVersion	1
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.nowSeconds	1
@@ -108,6 +109,7 @@ src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.checkpointEveryNTurns
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.combatEntry	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.committedTurn	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.departed	1
+src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.inboundSinceTick	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.lastInboundSeconds	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.lastPingSeconds	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.load	1
@@ -614,6 +616,8 @@ tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Keepalive.cs	C
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Keepalive.cs	ClientSessionTests.Ping_ChangesNoState	1
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Keepalive.cs	ClientSessionTests.Ping_DuringTheHandshake_IsAnsweredRatherThanTreatedAsAViolation	1
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Keepalive.cs	ClientSessionTests.Ping_IsAnsweredWithAMatchingPong	1
+tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Keepalive.cs	ClientSessionTests.Tick_AfterAFrameGapTheHostSpokeDuring_DoesNotFaultIt	1
+tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Keepalive.cs	ClientSessionTests.Tick_AfterAFrameGapTheHostSpokeDuring_RestartsTheClockRatherThanDisablingIt	1
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Keepalive.cs	ClientSessionTests.Tick_AfterTheHostTimeout_FaultsAndUnlocksExecution	1
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Keepalive.cs	ClientSessionTests.Tick_BeforeTheHostTimeout_DoesNothing	1
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Keepalive.cs	ClientSessionTests.Tick_FirstOne_SeedsRatherThanJudging	1
@@ -892,6 +896,8 @@ tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Handshake.cs	HostS
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Handshake.cs	HostSessionTests.Handle_PeerConnected_LogsButDoesNotRegister	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Keepalive.cs	HostSessionTests.AnyInboundMessage_KeepsAPeerAlive	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Keepalive.cs	HostSessionTests.Pong_CountsAsTrafficAndProducesNothing	1
+tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Keepalive.cs	HostSessionTests.Tick_AfterAFrameGapThePeerSpokeDuring_DoesNotDropIt	1
+tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Keepalive.cs	HostSessionTests.Tick_AfterAFrameGapThePeerSpokeDuring_RestartsTheClockRatherThanDisablingIt	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Keepalive.cs	HostSessionTests.Tick_AfterAPeerFirstSpokeBetweenTicks_DoesNotThrow	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Keepalive.cs	HostSessionTests.Tick_AfterThePingInterval_PingsAQuietPeer	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Keepalive.cs	HostSessionTests.Tick_AfterTheTimeout_DropsTheSilentPeer	1
@@ -1408,6 +1414,8 @@ tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Effects.cs	PbjRuntim
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Effects.cs	PbjRuntimeTests.Pump_WriteCheckpointEffect_AsksTheBridgeForTheCommittingTurn	1
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Effects.cs	PbjRuntimeTests.Pump_WriteCheckpointEffect_LandsAfterEveryOrderAndBeforeTheCommit	1
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Lifecycle.cs	PbjRuntimeTests.Post_QueuesALocalEvent	1
+tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Lifecycle.cs	PbjRuntimeTests.Pump_AfterAFrameGap_KeepsTheHostWhoseTrafficItJustDrained	1
+tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Lifecycle.cs	PbjRuntimeTests.Pump_AfterAFrameGap_KeepsThePeerWhoseTrafficItJustDrained	1
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Lifecycle.cs	PbjRuntimeTests.Pump_AfterStop_DoesNothing	1
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Lifecycle.cs	PbjRuntimeTests.Pump_PingsAndTheClientPongs	1
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Lifecycle.cs	PbjRuntimeTests.Pump_ReportsMailboxOverflow	1

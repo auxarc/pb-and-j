@@ -126,6 +126,51 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Empty(All<DisconnectEffect>(host.Handle(new TickEvent(1025))));
         }
 
+        /// <remarks>
+        /// The mirror of the client's frame-gap case, and the more expensive of
+        /// the two: the runtime drains before it ticks, so a Pong that arrived
+        /// during a long local stall was stamped with the pre-stall clock and
+        /// the very next tick read the whole stall as silence. One 20s frame gap
+        /// on the HOST dropped a perfectly live client, and the host then fought
+        /// alone.
+        /// </remarks>
+        [Fact]
+        public void Tick_AfterAFrameGapThePeerSpokeDuring_DoesNotDropIt()
+        {
+            var host = WithPeer();
+            host.Handle(new TickEvent(1000));
+
+            // Drained during the gap; the session clock still reads 1000.
+            host.HandleMessage(1, new PongMessage(7));
+
+            Assert.Empty(All<DisconnectEffect>(
+                host.Handle(new TickEvent(1000 + PbjProtocol.PeerTimeoutSeconds))));
+            Assert.Single(host.Peers);
+        }
+
+        /// <remarks>
+        /// The other half: traffic during the gap RESTARTS the reaping clock, it
+        /// does not switch it off. A peer that spoke once and then died is still
+        /// dropped a timeout later — otherwise the fix would trade a false
+        /// positive for a session that can never notice a dead client.
+        /// </remarks>
+        [Fact]
+        public void Tick_AfterAFrameGapThePeerSpokeDuring_RestartsTheClockRatherThanDisablingIt()
+        {
+            var host = WithPeer();
+            host.Handle(new TickEvent(1000));
+            host.HandleMessage(1, new PongMessage(7));
+            host.Handle(new TickEvent(1020));
+            Assert.Single(host.Peers);
+
+            // Nothing since. The clock now runs from 1020, not from 1000.
+            Assert.Empty(All<DisconnectEffect>(
+                host.Handle(new TickEvent(1020 + PbjProtocol.PeerTimeoutSeconds - 1))));
+            Assert.Equal(1, Single<DisconnectEffect>(
+                host.Handle(new TickEvent(1020 + PbjProtocol.PeerTimeoutSeconds))).PeerId);
+            Assert.Empty(host.Peers);
+        }
+
         [Fact]
         public void Tick_WithNoPeers_DoesNothing()
         {

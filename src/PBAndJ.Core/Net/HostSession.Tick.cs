@@ -80,6 +80,24 @@ namespace PBAndJ.Core.Net
                     continue;
                 }
 
+                if (inboundSinceTick.Contains(peer.PeerId))
+                {
+                    // Spoke during the pump this tick closes. HandleMessage
+                    // stamped it with the PREVIOUS tick's clock — the only one
+                    // a session has between ticks — so re-stamp at the clock
+                    // that judges. Without this the silence below is measured
+                    // from before a stall that the proof of life arrived
+                    // during: one 20s frame gap on THIS machine dropped a peer
+                    // that had just answered a ping, and the host went on to
+                    // report that the fight could not be shared.
+                    //
+                    // A restart, not a reprieve: a peer that speaks once and
+                    // then dies is still reaped a full PeerTimeoutSeconds after
+                    // this.
+                    MarkAlive(peer.PeerId);
+                    continue;
+                }
+
                 var silent = nowSeconds - last;
                 if (silent >= PbjProtocol.PeerTimeoutSeconds)
                 {
@@ -97,6 +115,12 @@ namespace PBAndJ.Core.Net
                     effects.Add(new SendEffect(peer.PeerId, new PingMessage(nextPingNonce++)));
                 }
             }
+
+            // Emptied rather than pruned per peer: ids in here that the loop
+            // above did not visit belong to sockets that are not peers — a
+            // handshake in flight, or one already dropped — and leaving them
+            // would credit a stranger's silence to whoever inherits the id.
+            inboundSinceTick.Clear();
         }
 
         /// <summary>

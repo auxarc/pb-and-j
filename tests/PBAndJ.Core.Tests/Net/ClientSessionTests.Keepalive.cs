@@ -84,6 +84,57 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(ClientSessionState.Planning, client.State);
         }
 
+        /// <remarks>
+        /// The unit here is a single long LOCAL frame gap on the receiving side,
+        /// which is not the same quantity as a peer that has stopped sending.
+        /// The runtime drains the mailbox before it ticks, so a Ping that
+        /// arrives during a stall is in hand before the tick that judges the
+        /// silence — and stamping it with the pre-stall clock had that tick
+        /// charge the whole stall to a host that had just proved it was alive.
+        /// One 30s frame gap was enough to fault a live host.
+        /// </remarks>
+        [Fact]
+        public void Tick_AfterAFrameGapTheHostSpokeDuring_DoesNotFaultIt()
+        {
+            var client = Welcomed();
+            client.Handle(new TickEvent(1000));
+
+            // Drained during the gap; the session clock still reads 1000.
+            client.HandleMessage(ClientSession.HostConnectionId, new PingMessage(1));
+
+            var effects = client.Handle(new TickEvent(1000 + PbjProtocol.HostTimeoutSeconds));
+            Assert.Empty(All<SetExecutionLockEffect>(effects));
+            Assert.Equal(ClientSessionState.Planning, client.State);
+        }
+
+        /// <remarks>
+        /// The other half of the one above, and the reason it is not simply
+        /// "forgive any tick that follows a long gap": traffic during the gap
+        /// RESTARTS the silence clock, it does not switch it off. A host that
+        /// spoke once and then died is still faulted a timeout later.
+        /// </remarks>
+        [Fact]
+        public void Tick_AfterAFrameGapTheHostSpokeDuring_RestartsTheClockRatherThanDisablingIt()
+        {
+            var client = Welcomed();
+            client.Handle(new TickEvent(1000));
+            client.HandleMessage(ClientSession.HostConnectionId, new PingMessage(1));
+            client.Handle(new TickEvent(1030));
+            Assert.Equal(ClientSessionState.Planning, client.State);
+
+            // Nothing since. The clock now runs from 1030, not from 1000.
+            Assert.Equal(ClientSessionState.Planning,
+                Silent(client, 1030 + PbjProtocol.HostTimeoutSeconds - 1));
+            Assert.Equal(ClientSessionState.Faulted,
+                Silent(client, 1030 + PbjProtocol.HostTimeoutSeconds));
+
+            static ClientSessionState Silent(ClientSession session, double at)
+            {
+                session.Handle(new TickEvent(at));
+                return session.State;
+            }
+        }
+
         [Fact]
         public void HostTimeout_IsLongerThanThePeerTimeout()
         {

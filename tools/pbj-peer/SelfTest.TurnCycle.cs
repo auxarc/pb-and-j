@@ -362,10 +362,31 @@ namespace PBAndJ.Peer
 
                 // Now stop answering: with the client's pump frozen, the host
                 // must reap it rather than wait forever.
-                var frozenAt = Now();
+                //
+                // The clock ADVANCES on every attempt rather than every attempt
+                // re-pumping one fixed instant. Two reasons, and the first is
+                // the load-bearing one:
+                //
+                // The client's last Pong is sent from the last PumpBoth above,
+                // which pumps the host FIRST — so that Pong is always still in
+                // the host's mailbox when the reaping pump drains it. A session
+                // credits drained traffic to the tick that closes the pump it
+                // was drained in (HostSession.HandleTick), so that final Pong
+                // correctly restarts this peer's clock at the instant it was
+                // read, and the reap falls one whole PeerTimeoutSeconds AFTER
+                // that instant. A clock that never moves can therefore never
+                // reach it. Before the frame-gap fix this scenario passed for a
+                // reason that was itself the bug: the drained Pong was stamped
+                // with the PREVIOUS tick's clock, back-dating a live peer's
+                // proof of life by the whole gap.
+                //
+                // Second: PbjRuntime throttles ticks to TickIntervalSeconds, so
+                // repeated pumps at one instant tick exactly once no matter how
+                // many times they are called.
                 bool HostAloneAgain()
                 {
-                    host.Pump(frozenAt + PbjProtocol.PeerTimeoutSeconds + 1);
+                    skew += PbjProtocol.PeerTimeoutSeconds + 1;
+                    host.Pump(Now());
                     return hostSession.Peers.Count == 0;
                 }
 

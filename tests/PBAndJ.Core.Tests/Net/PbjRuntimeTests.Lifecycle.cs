@@ -49,6 +49,52 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Contains(transport.MessagesTo(1), m => m is PingMessage);
         }
 
+        /// <remarks>
+        /// The ordering the two sessions' keepalive tests stand in for, run
+        /// through the real pump and the real byte path. <see cref="PbjRuntime.Pump"/>
+        /// drains the mailbox and ticks afterwards, so this peer's Pong is in
+        /// hand before the tick that judges it — and the whole 20s frame gap
+        /// must not be charged to it.
+        /// </remarks>
+        [Fact]
+        public void Pump_AfterAFrameGap_KeepsThePeerWhoseTrafficItJustDrained()
+        {
+            var runtime = WithHandshakenPeer();
+            mailbox.Post(new PeerBytesEvent(1, Frame(new PongMessage(0))));
+
+            runtime.Pump(PbjProtocol.PeerTimeoutSeconds);
+
+            Assert.DoesNotContain(log.Lines, l => l.Contains("silent for"));
+            Assert.Single(host.Peers);
+        }
+
+        /// <remarks>
+        /// The client half of the same ordering. A single 30s frame gap on this
+        /// side used to fault a host that had answered inside it.
+        /// </remarks>
+        [Fact]
+        public void Pump_AfterAFrameGap_KeepsTheHostWhoseTrafficItJustDrained()
+        {
+            var session = new ClientSession("ally", "0.2.0", bridge);
+            var runtime = new PbjRuntime(transport, bridge, log, mailbox, session);
+            mailbox.Post(new PeerConnectedEvent(ClientSession.HostConnectionId, "127.0.0.1:7777"));
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId, Frame(new WelcomeMessage(
+                PbjProtocol.Version, "7f3a91", 1, "host", new[] { new PeerInfo(0, "host") }, 0, "tok"))));
+            runtime.Pump(0);
+            // Planning, not Lobby: the shared fixture's bridge reports InCombat,
+            // and HandleWelcome seeds a client's state from this machine's own
+            // combat flag. Asserted rather than assumed so a fixture change
+            // cannot quietly turn the frame-gap assertions below into a test
+            // that fails before it ever reaches them.
+            Assert.Equal(ClientSessionState.Planning, session.State);
+
+            mailbox.Post(new PeerBytesEvent(ClientSession.HostConnectionId, Frame(new PingMessage(4))));
+            runtime.Pump(PbjProtocol.HostTimeoutSeconds);
+
+            Assert.DoesNotContain(log.Lines, l => l.Contains("silent for"));
+            Assert.NotEqual(ClientSessionState.Faulted, session.State);
+        }
+
         // --- failure isolation ---
 
         [Fact]
