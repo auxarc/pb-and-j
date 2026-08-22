@@ -267,7 +267,17 @@ namespace PBAndJ.Core.Tests.Net
             // build they are watching a fight on, and check-wire-surface is
             // satisfied by the hash being unchanged rather than by the version
             // standing still.
-            Assert.Equal("0.22.0", PbjProtocol.ModVersion);
+            // 0.23.0 for M12c stages A-C — the reserved checkpoint slot, the
+            // effect, and the write. PbjProtocol.Version does NOT move: no
+            // message type was added and no layout changed, and the checkpoint
+            // never crosses the wire at all. What moved is IPbjGameBridge, which
+            // is hashed as part of the wire surface because OrderApplyResult
+            // crosses it as a raw int cast — the same reason 0.12.0 moved. So
+            // this is the second bump made for the shape of the seam rather than
+            // for the shape of a message, and the honest reading is that two
+            // peers across it interoperate byte for byte while the handshake
+            // refuses them anyway, which is the safe direction.
+            Assert.Equal("0.23.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

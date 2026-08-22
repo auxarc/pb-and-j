@@ -172,6 +172,30 @@ namespace PBAndJ.Core.Net
             }
 
             effects.Add(new LogEffect(NetLog.OrdersApplied(applied, refused)));
+
+            // M12c: THE MOMENT. Every peer's order is in this host's ECS and the
+            // turn has not advanced, so this is the only instant at which a save
+            // holds a complete, not-yet-executed plan.
+            //
+            // Ordering is by construction rather than by frame timing. PbjRuntime
+            // .Run is a queue and effects an effect produces go to the BACK, so
+            // every ApplyOrderEffect above is carried out before this is dequeued;
+            // HandleOrderApplied returns no effects, so nothing an apply produces
+            // can land between here and the commit below.
+            //
+            // Deliberately NOT after CommitTurnEffect, although CanSave would
+            // still say yes there: Simulating flips a frame later, but
+            // ConfirmExecution has already run ReplaceCurrentTurn, so a save taken
+            // then is stamped with the next turn while holding this turn's plan.
+            //
+            // Host-only, and that falls out of where this line sits: TryCommit is
+            // the host's. A client's ECS never receives a peer's orders, so its
+            // own checkpoint would reload into a half-planned turn.
+            if (barrier.Turn % checkpointEveryNTurns == 0)
+            {
+                effects.Add(new WriteCheckpointEffect(barrier.Turn));
+            }
+
             committedTurn = barrier.Turn;
             effects.Add(new CommitTurnEffect(committedTurn));
         }

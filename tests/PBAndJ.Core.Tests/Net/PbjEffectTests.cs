@@ -199,6 +199,18 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void WriteCheckpointEffect_CarriesTheTurnItsPlanBelongsTo()
+        {
+            // The turn about to be committed, not the one the ECS holds after the
+            // commit. Carrying the wrong one would stamp a checkpoint with a turn
+            // number its plan does not belong to -- a save that passes every guard
+            // and records an inconsistent pair.
+            var effect = new WriteCheckpointEffect(7);
+            Assert.Equal(PbjEffectKind.WriteCheckpoint, effect.Kind);
+            Assert.Equal(7, effect.Turn);
+        }
+
+        [Fact]
         public void MirrorBase_CarriesTwoCoordinatesAndNoHeight()
         {
             // The absent Y is the design, not an omission: the receiving machine

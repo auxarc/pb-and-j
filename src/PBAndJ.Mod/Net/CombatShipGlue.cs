@@ -262,6 +262,14 @@ namespace PBAndJ.Mod.Net
         /// is holding it.
         /// </summary>
         /// <remarks>
+        /// <c>internal</c> rather than private because <see cref="CheckpointGlue"/>
+        /// needs the same answer at a different moment. Shared rather than copied
+        /// deliberately: this walks <c>CanSave</c>'s refusals in <c>CanSave</c>'s
+        /// own order, and a second copy would drift out of that order silently and
+        /// start naming a condition that is merely true rather than the one that
+        /// actually returned false.
+        /// </remarks>
+        /// <remarks>
         /// Checked in <c>CanSave</c>'s own order (<c>DataManagerSave.cs:95-149</c>)
         /// so the answer names the condition that actually returned false rather
         /// than the first one that happens to be true.
@@ -271,7 +279,7 @@ namespace PBAndJ.Mod.Net
         /// else resolves on its own in a bounded time or never.
         /// </para>
         /// </remarks>
-        private static string Blocker(out bool playerPaced)
+        internal static string Blocker(out bool playerPaced)
         {
             var game = Contexts.sharedInstance.game;
             var combat = Contexts.sharedInstance.combat;

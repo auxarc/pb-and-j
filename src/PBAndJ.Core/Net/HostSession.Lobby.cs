@@ -85,7 +85,7 @@ namespace PBAndJ.Core.Net
         private void OfferSelectedSave(List<PbjEffect> effects)
         {
             if (!selection.HasSave
-                || string.Equals(selection.SaveKey, LobbySaveNames.ScenarioSlot, StringComparison.OrdinalIgnoreCase))
+                || LobbySaveNames.IsNonCampaignSlot(selection.SaveKey))
             {
                 return;
             }

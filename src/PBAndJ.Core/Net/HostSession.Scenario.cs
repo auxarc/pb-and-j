@@ -38,7 +38,7 @@ namespace PBAndJ.Core.Net
             // sit there fully connected and never start.
             var selected = selection.SaveKey;
             if (!string.IsNullOrEmpty(selected)
-                && !string.Equals(selected, LobbySaveNames.ScenarioSlot, StringComparison.OrdinalIgnoreCase))
+                && !LobbySaveNames.IsNonCampaignSlot(selected))
             {
                 OfferSave(peerId, selected, effects);
             }
@@ -141,7 +141,7 @@ namespace PBAndJ.Core.Net
 
             var selected = selection.SaveKey;
             if (string.IsNullOrEmpty(selected)
-                || string.Equals(selected, LobbySaveNames.ScenarioSlot, StringComparison.OrdinalIgnoreCase))
+                || LobbySaveNames.IsNonCampaignSlot(selected))
             {
                 return slot;
             }

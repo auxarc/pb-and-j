@@ -222,8 +222,20 @@ namespace PBAndJ.Core.Net
         /// semantic break with an identical layout, which is precisely what a mod
         /// version is for and what a protocol version cannot express.
         /// </para>
+        /// <para>
+        /// <b>0.23.0 moves this constant without moving <see cref="Version"/>
+        /// either, and for a third reason again.</b> M12c added
+        /// <c>IPbjGameBridge.WriteCheckpoint</c>, and <c>Seams.cs</c> is a
+        /// <c>WIRE_FILE</c> — not because a checkpoint crosses the wire (none
+        /// does; no message type was added and no layout changed) but because
+        /// <c>OrderApplyResult</c> lives in that file and crosses as a raw int
+        /// cast, so the whole file is hashed. The bump is therefore honest
+        /// bookkeeping rather than a compatibility claim: two peers on either
+        /// side of it interoperate byte for byte, and the handshake refuses them
+        /// anyway, which is the conservative direction.
+        /// </para>
         /// </remarks>
-        public const string ModVersion = "0.22.0";
+        public const string ModVersion = "0.23.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.

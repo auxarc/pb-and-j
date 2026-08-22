@@ -8,7 +8,7 @@
 # Re-record only when you have DECIDED the placement is the one you
 # want:  make record-split-grouping
 #
-# families: 15   part files: 145   members: 1541
+# families: 15   part files: 145   members: 1556
 
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.ClientSession	2
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.ConnectedPeerIds	1
@@ -81,6 +81,7 @@ src/PBAndJ.Core/Net	ClientSession	ClientSession.Turn.cs	ClientSession.HandleTurn
 src/PBAndJ.Core/Net	ClientSession	ClientSession.Turn.cs	ClientSession.HandleTurnComplete	1
 src/PBAndJ.Core/Net	ClientSession	ClientSession.Turn.cs	ClientSession.OnlyOursOf	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.Assignments	1
+src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.CheckpointEveryNTurns	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.ConnectedPeerIds	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.DepartedPeer	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.HostName	1
@@ -102,6 +103,7 @@ src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.admitted	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.assignments	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.barrier	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.bridge	1
+src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.checkpointEveryNTurns	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.combatEntry	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.committedTurn	1
 src/PBAndJ.Core/Net	HostSession	HostSession.cs	HostSession.departed	1
@@ -324,6 +326,7 @@ src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Assets.cs	CombatGameBridge.
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Handoff.cs	CombatGameBridge.BeginCombatLoad	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Handoff.cs	CombatGameBridge.BeginLoad	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Handoff.cs	CombatGameBridge.ShipCombat	1
+src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Handoff.cs	CombatGameBridge.WriteCheckpoint	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Keyframes.cs	CombatGameBridge.AssetMeleesDropped	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Keyframes.cs	CombatGameBridge.AssetMeleesSent	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Keyframes.cs	CombatGameBridge.AssetReactionsSent	1
@@ -823,9 +826,11 @@ tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Compatibility.cs	H
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Compatibility.cs	HostSessionTests.Rejoin_WithoutTheRequiredPassphrase_IsRejected	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Compatibility.cs	HostSessionTests.SnapshotApplied_IsIgnoredOnTheHost	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Construction.cs	HostSessionTests.Constructor_CountsTheHostAsAParticipant	1
+tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Construction.cs	HostSessionTests.Constructor_DefaultsToACheckpointEveryTurn	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Construction.cs	HostSessionTests.Constructor_StartsInLobbyWhenNotInCombat	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Construction.cs	HostSessionTests.Constructor_StartsInPlanningWhenAlreadyInCombat	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Construction.cs	HostSessionTests.Constructor_TakesTheCurrentTurnFromTheBridge	1
+tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Construction.cs	HostSessionTests.Constructor_WithACheckpointCadenceBelowOne_Throws	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Construction.cs	HostSessionTests.Constructor_WithBlankHostName_Throws	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Construction.cs	HostSessionTests.Constructor_WithBlankSessionId_Throws	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.Construction.cs	HostSessionTests.Constructor_WithNullBridge_Throws	1
@@ -1011,6 +1016,7 @@ tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostS
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.HandleMessage_Ready_WithOrderForUnownedUnit_DropsThatOrder	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.Handle_CommitOutcome_WhenCommitted_BroadcastsTurnCommitAndLocks	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.Handle_CommitOutcome_WhenRefused_UnlocksPeersAndStaysInPlanning	1
+tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.Handle_CommitOutcome_WhenRefused_WritesNoCheckpoint	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.Handle_LocalReady_WhenAllReady_AppliesOrdersThenCommits	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.Handle_LocalReady_WhenNoClientsReady_DoesNotCommit	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.Handle_LocalReady_WhenNotPlanning_ProducesNoEffects	1
@@ -1022,6 +1028,10 @@ tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostS
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.LocalUnready_StopsATurnThatWouldOtherwiseHaveCommitted	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.LocalUnready_WhenTheHostWasNotReady_IsANoOp	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.LocalUnready_WhileExecuting_IsIgnored	1
+tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.TryCommit_PutsTheCheckpointAfterEveryApplyAndBeforeTheCommit	1
+tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.TryCommit_WithACadenceOfTwo_SkipsTheOddTurnAndKeepsCommitting	1
+tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.TryCommit_WithACadenceOfTwo_WritesOnTheEvenTurn	1
+tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.TryCommit_WithTheBarrierUnfilled_WritesNoCheckpoint	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.Unready_AfterReady_ClearsThatPeersReadiness	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.Unready_DiscardsTheSubmittedBatchSoItIsNotCommittedLater	1
 tests/PBAndJ.Core.Tests/Net	HostSessionTests	HostSessionTests.TurnCycle.cs	HostSessionTests.Unready_ForAnotherTurn_IsIgnored	1
@@ -1374,6 +1384,8 @@ tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Effects.cs	PbjRuntim
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Effects.cs	PbjRuntimeTests.Pump_LogEffect_WritesToLog	1
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Effects.cs	PbjRuntimeTests.Pump_SendEffect_WritesAnEncodedFrame	1
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Effects.cs	PbjRuntimeTests.Pump_SetExecutionLockEffect_CallsGameBridge	1
+tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Effects.cs	PbjRuntimeTests.Pump_WriteCheckpointEffect_AsksTheBridgeForTheCommittingTurn	1
+tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Effects.cs	PbjRuntimeTests.Pump_WriteCheckpointEffect_LandsAfterEveryOrderAndBeforeTheCommit	1
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Lifecycle.cs	PbjRuntimeTests.Post_QueuesALocalEvent	1
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Lifecycle.cs	PbjRuntimeTests.Pump_AfterStop_DoesNothing	1
 tests/PBAndJ.Core.Tests/Net	PbjRuntimeTests	PbjRuntimeTests.Lifecycle.cs	PbjRuntimeTests.Pump_PingsAndTheClientPongs	1
@@ -1506,18 +1518,21 @@ tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_IgnoresARequestFromAnUnregisteredPeer	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_OffersToARejoiningPeerToo	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_OnRequestMatchingNeitherSave_ServesTheLobbysCampaign	1
+tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_OnRequestMatchingNeitherSave_WithTheCheckpointSelected_ServesTheScenarioSlot	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_OnRequestMatchingTheCampaignDigest_ServesTheCampaign	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_OnRequestWithAnUnusableSave_RefusesRatherThanSending	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_OnRequestWithNoSave_SaysSoRatherThanSendingAnEmptyOne	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_OnRequest_SendsEveryFile	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_OnSelectingACampaignSave_OffersItToEveryone	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_OnSelectingASaveItCannotSend_SaysSoRatherThanGoingQuiet	1
+tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_OnSelectingTheCheckpointSlot_DoesNotOfferIt	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_OnSelectingTheScenarioSlot_DoesNotOfferItTwice	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_ThatReSavedBetweenOfferAndRequest_SendsTheCurrentSaveAndSaysSo	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_WithASave_OffersItOnHandshake	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_WithAnUnusableSave_WarnsRatherThanOffering	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_WithNoCombatSaveAtAll_StillServesTheLobbysCampaign	1
 tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_WithNoSave_OffersNothingAndSaysNothing	1
+tests/PBAndJ.Core.Tests/Net	ScenarioTransferTests	ScenarioTransferTests.Host.cs	ScenarioTransferTests.Host_WithTheCheckpointSlotSelected_DoesNotOfferItToAJoiningPeer	1
 tools/pbj-peer	SelfTest	SelfTest.cs	SelfTest.PrefixedLog	1
 tools/pbj-peer	SelfTest	SelfTest.cs	SelfTest.Run	1
 tools/pbj-peer	SelfTest	SelfTest.cs	SelfTest.TimeoutSeconds	1

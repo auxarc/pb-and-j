@@ -26,6 +26,40 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void Pump_WriteCheckpointEffect_AsksTheBridgeForTheCommittingTurn()
+        {
+            // Driven through the real byte path, so the arm is reached the way the
+            // game reaches it -- a session that produced the effect, a queue that
+            // dequeued it, and the runner's TYPE-pattern switch that dispatched it.
+            var runtime = WithHandshakenPeer();
+            mailbox.Post(new PeerBytesEvent(1, Frame(new ReadyMessage(3,
+                new[] { new OrderPayload("move_run", "unit_b", 0f, 2f) }))));
+            mailbox.Post(new LocalReadyEvent());
+            runtime.Pump(0);
+
+            Assert.Equal(new[] { 3 }, bridge.Checkpoints);
+        }
+
+        [Fact]
+        public void Pump_WriteCheckpointEffect_LandsAfterEveryOrderAndBeforeTheCommit()
+        {
+            // The queue is what makes the ordering true, not frame timing: an
+            // order-apply feeds its result straight back into the session, and if
+            // that could produce effects they would land between the checkpoint and
+            // the commit. This asserts what the runner actually did, in order.
+            var runtime = WithHandshakenPeer();
+            mailbox.Post(new PeerBytesEvent(1, Frame(new ReadyMessage(3,
+                new[] { new OrderPayload("move_run", "unit_b", 0f, 2f) }))));
+            mailbox.Post(new LocalReadyEvent());
+            runtime.Pump(0);
+
+            Assert.Single(bridge.Applied);
+            Assert.Single(bridge.Checkpoints);
+            Assert.Equal(1, bridge.CommitCalls);
+            Assert.Equal(new[] { "apply", "checkpoint", "commit" }, bridge.CallOrder);
+        }
+
+        [Fact]
         public void Pump_BroadcastEffect_WritesToEveryPeerExceptTheExcluded()
         {
             var runtime = HostRuntime();

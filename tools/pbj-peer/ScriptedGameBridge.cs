@@ -312,6 +312,20 @@ namespace PBAndJ.Peer
             ShipCombatRequested = true;
         }
 
+        /// <summary>Every turn a checkpoint was asked for, in order. M12c.</summary>
+        /// <remarks>
+        /// Recorded rather than no-opped so a selftest leg can assert the ORDER of
+        /// the ask against the commit, which is the property M12c's moment is
+        /// about. Nothing is written: the harness has no save folder and the
+        /// protocol carries no byte of this.
+        /// </remarks>
+        public List<int> Checkpoints { get; } = new List<int>();
+
+        public void WriteCheckpoint(int turn)
+        {
+            Checkpoints.Add(turn);
+        }
+
         /// <summary>
         /// The combat save this peer "holds". In-memory rather than on disk: the
         /// harness must be runnable anywhere, and the protocol does not care

@@ -28,6 +28,46 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void CheckpointSlot_IsInsideThePrefix()
+        {
+            // M12c's checkpoint carries the scenario slot's trap once per TURN
+            // rather than once per fight: the catalogue would offer it as a
+            // campaign while the next Execute rewrites it underneath.
+            Assert.True(LobbySaveNames.IsMultiplayerKey(LobbySaveNames.CheckpointSlot));
+        }
+
+        [Fact]
+        public void CheckpointSlot_IsNotTheScenarioSlot()
+        {
+            // Two directories, two lifetimes. Naming them the same would have the
+            // per-turn checkpoint destroy the fight a joining peer is still
+            // fetching, which is the one failure a single constant would hide.
+            Assert.NotEqual(LobbySaveNames.ScenarioSlot, LobbySaveNames.CheckpointSlot);
+        }
+
+        [Fact]
+        public void IsNonCampaignSlot_RecognisesBothSlots()
+        {
+            Assert.True(LobbySaveNames.IsNonCampaignSlot(LobbySaveNames.ScenarioSlot));
+            Assert.True(LobbySaveNames.IsNonCampaignSlot(LobbySaveNames.CheckpointSlot));
+        }
+
+        [Fact]
+        public void IsNonCampaignSlot_IgnoresCase()
+        {
+            Assert.True(LobbySaveNames.IsNonCampaignSlot("PBJ_COMBAT_TEST"));
+            Assert.True(LobbySaveNames.IsNonCampaignSlot("PBJ_Combat_Turn"));
+        }
+
+        [Fact]
+        public void IsNonCampaignSlot_ForACampaignOrNull_ReturnsFalse()
+        {
+            Assert.False(LobbySaveNames.IsNonCampaignSlot("pbj_firstrun"));
+            Assert.False(LobbySaveNames.IsNonCampaignSlot("TWICE SHY"));
+            Assert.False(LobbySaveNames.IsNonCampaignSlot(null));
+        }
+
+        [Fact]
         public void KeyFor_PrependsThePrefix()
         {
             Assert.Equal("pbj_firstrun", LobbySaveNames.KeyFor("firstrun"));
@@ -212,6 +252,24 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void CheckNewName_ForTheCheckpointSlot_IsReserved()
+        {
+            // The M11b trap, verbatim and re-paid: reserve the UNPREFIXED name.
+            // CheckNewName takes a display name and AlreadyPrefixed refuses
+            // "pbj_combat_turn" three checks earlier, so a guard written against
+            // the prefixed constant is an arm nothing can reach — it breaks the
+            // 100% gate AND lets "combat_turn" through into the directory the
+            // next Execute overwrites.
+            Assert.Equal(LobbySaveProblem.Reserved, LobbySaveRules.CheckNewName("combat_turn", NoSaves));
+        }
+
+        [Fact]
+        public void CheckNewName_ForTheCheckpointSlot_IgnoresCase()
+        {
+            Assert.Equal(LobbySaveProblem.Reserved, LobbySaveRules.CheckNewName("Combat_Turn", NoSaves));
+        }
+
+        [Fact]
         public void CheckNewName_ForAnExistingKey_IsDuplicate()
         {
             var existing = new[] { "pbj_firstrun" };
@@ -313,6 +371,15 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void Multiplayer_ExcludesTheCheckpointSlot()
+        {
+            // A lobby readying onto the checkpoint would be readying onto bytes
+            // the host replaces at the next turn boundary.
+            var all = new[] { Entry(LobbySaveNames.CheckpointSlot), Entry("pbj_firstrun") };
+            Assert.Equal(new[] { "pbj_firstrun" }, LobbyCatalogue.Multiplayer(all).Select(e => e.Key));
+        }
+
+        [Fact]
         public void Multiplayer_SortsNewestFirst()
         {
             // Mirrors the game's own load grid, which sorts by timeInSystem
@@ -358,6 +425,15 @@ namespace PBAndJ.Core.Tests.Net
             // so the console is where the guard has to live.
             var all = new[] { Entry(LobbySaveNames.ScenarioSlot), Entry("pbj_firstrun") };
             Assert.False(LobbyCatalogue.Contains(all, LobbySaveNames.ScenarioSlot));
+        }
+
+        [Fact]
+        public void Contains_ForTheCheckpointSlot_ReturnsFalse()
+        {
+            // What makes `pbj.lobby-select pbj_combat_turn` refusable at the
+            // console, which is the only edge that can see what is on disk.
+            var all = new[] { Entry(LobbySaveNames.CheckpointSlot), Entry("pbj_firstrun") };
+            Assert.False(LobbyCatalogue.Contains(all, LobbySaveNames.CheckpointSlot));
         }
 
         [Fact]

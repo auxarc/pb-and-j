@@ -50,8 +50,97 @@ namespace PBAndJ.Core.Tests.Net
                 e => Assert.Contains("committing turn 3", Assert.IsType<LogEffect>(e).Line),
                 e => Assert.Equal("unit_b", Assert.IsType<ApplyOrderEffect>(e).Order.OwnerName),
                 e => Assert.Contains("applied 1 remote order", Assert.IsType<LogEffect>(e).Line),
+                e => Assert.Equal(3, Assert.IsType<WriteCheckpointEffect>(e).Turn),
                 e => Assert.Equal(3, Assert.IsType<CommitTurnEffect>(e).Turn));
             Assert.Empty(All<BroadcastEffect>(effects));
+        }
+
+        // --- the combat checkpoint (M12c) ---
+
+        [Fact]
+        public void TryCommit_PutsTheCheckpointAfterEveryApplyAndBeforeTheCommit()
+        {
+            // THE correctness property of M12c, and the reason this is an ORDERING
+            // assertion rather than an existence one. A checkpoint written before
+            // the last apply holds a half-planned turn; one written after the
+            // commit is stamped with the NEXT turn, because ConfirmExecution has
+            // already run ReplaceCurrentTurn. Both would pass "the effect is
+            // there".
+            var host = WithPeer(maxPeers: 3);
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            host.HandleMessage(2, GoodHello("second"));
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b") }));
+            host.HandleMessage(2, new ReadyMessage(3, new[] { Order("unit_c") }));
+
+            var effects = host.Handle(new LocalReadyEvent());
+
+            var lastApply = effects.ToList().FindLastIndex(e => e is ApplyOrderEffect);
+            var checkpoint = effects.ToList().FindIndex(e => e is WriteCheckpointEffect);
+            var commit = effects.ToList().FindIndex(e => e is CommitTurnEffect);
+
+            Assert.Equal(2, All<ApplyOrderEffect>(effects).Count());
+            Assert.True(lastApply < checkpoint, "the checkpoint must follow every apply");
+            Assert.True(checkpoint < commit, "the checkpoint must precede the commit");
+            Assert.Equal(3, Single<WriteCheckpointEffect>(effects).Turn);
+        }
+
+        [Fact]
+        public void TryCommit_WithTheBarrierUnfilled_WritesNoCheckpoint()
+        {
+            // Nothing to checkpoint: the turn is still being planned, and a save
+            // taken here would reload into a plan the other peers never sent.
+            var host = WithPeer();
+            var effects = host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b") }));
+            Assert.Empty(All<WriteCheckpointEffect>(effects));
+        }
+
+        [Fact]
+        public void Handle_CommitOutcome_WhenRefused_WritesNoCheckpoint()
+        {
+            // Planning re-opens, and the checkpoint for this turn was already
+            // enqueued before the commit was tried. Emitting a second one on the
+            // way back out would write the same turn twice per refusal.
+            var host = WithPeer();
+            host.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b") }));
+            host.Handle(new LocalReadyEvent());
+            var effects = host.Handle(new CommitOutcomeEvent(3, committed: false));
+            Assert.Empty(All<WriteCheckpointEffect>(effects));
+        }
+
+        [Fact]
+        public void TryCommit_WithACadenceOfTwo_SkipsTheOddTurnAndKeepsCommitting()
+        {
+            // The skip must not disturb anything else: the turn still commits, and
+            // the ONLY difference is the missing checkpoint.
+            bridge.CurrentTurn = 3;
+            var session = new HostSession("host", "7f3a91", 3, bridge, "secret",
+                SessionRequirements.None, checkpointEveryNTurns: 2);
+            session.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            session.HandleMessage(1, GoodHello());
+            session.HandleMessage(1, new ReadyMessage(3, new[] { Order("unit_b") }));
+
+            var effects = session.Handle(new LocalReadyEvent());
+
+            Assert.Empty(All<WriteCheckpointEffect>(effects));
+            Assert.Equal(3, Single<CommitTurnEffect>(effects).Turn);
+        }
+
+        [Fact]
+        public void TryCommit_WithACadenceOfTwo_WritesOnTheEvenTurn()
+        {
+            // The other half of the arithmetic, and it has to be a separate turn
+            // rather than the same one twice: a test that only ever saw the skip
+            // would pass against a cadence that never writes at all.
+            bridge.CurrentTurn = 4;
+            var session = new HostSession("host", "7f3a91", 3, bridge, "secret",
+                SessionRequirements.None, checkpointEveryNTurns: 2);
+            session.Handle(new PeerConnectedEvent(1, "127.0.0.1:1"));
+            session.HandleMessage(1, GoodHello());
+            session.HandleMessage(1, new ReadyMessage(4, new[] { Order("unit_b") }));
+
+            var effects = session.Handle(new LocalReadyEvent());
+
+            Assert.Equal(4, Single<WriteCheckpointEffect>(effects).Turn);
         }
 
         [Fact]

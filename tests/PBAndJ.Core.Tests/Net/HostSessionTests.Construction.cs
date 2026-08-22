@@ -42,6 +42,27 @@ namespace PBAndJ.Core.Tests.Net
             Assert.Equal(9, Host().Turn);
         }
 
+        [Fact]
+        public void Constructor_DefaultsToACheckpointEveryTurn()
+        {
+            // M12c's cadence. Every turn is the behaviour the milestone is
+            // specified in terms of; the number that would move it is the
+            // main-thread cost of the save, which nobody has measured.
+            Assert.Equal(1, Host().CheckpointEveryNTurns);
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(-1)]
+        public void Constructor_WithACheckpointCadenceBelowOne_Throws(int cadence)
+        {
+            // Zero is a division by zero inside TryCommit and negative is a
+            // cadence with no meaning. Refused rather than clamped: either is a
+            // caller that has mistaken this argument for something else.
+            Assert.Throws<ArgumentOutOfRangeException>(() => new HostSession(
+                "host", "7f3a91", 3, bridge, "secret", SessionRequirements.None, cadence));
+        }
+
         [Theory]
         [InlineData(null)]
         [InlineData("  ")]

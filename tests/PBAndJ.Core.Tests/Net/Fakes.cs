@@ -18,6 +18,20 @@ namespace PBAndJ.Core.Tests.Net
             new Dictionary<string, OrderApplyResult>();
 
         public List<OrderPayload> Applied { get; } = new List<OrderPayload>();
+
+        /// <summary>
+        /// The three turn-boundary calls in the order the runner actually made
+        /// them: "apply", "checkpoint", "commit".
+        /// </summary>
+        /// <remarks>
+        /// M12c's correctness property is an ORDERING one, and the per-call lists
+        /// beside this cannot express it — each says how many and with what, never
+        /// which came first. Cross-checked against those lists in the test that
+        /// reads it, so an empty CallOrder cannot pass as agreement: it is asserted
+        /// element by element against a literal, and a bridge that recorded nothing
+        /// fails on the first element rather than reading as "no disagreement".
+        /// </remarks>
+        public List<string> CallOrder { get; } = new List<string>();
         public List<bool> LockCalls { get; } = new List<bool>();
         public int CommitCalls { get; private set; }
 
@@ -33,12 +47,14 @@ namespace PBAndJ.Core.Tests.Net
         public OrderApplyResult ApplyOrder(OrderPayload order)
         {
             Applied.Add(order);
+            CallOrder.Add("apply");
             return ApplyResults.TryGetValue(order.OwnerName, out var result) ? result : OrderApplyResult.Applied;
         }
 
         public bool CommitTurn()
         {
             CommitCalls++;
+            CallOrder.Add("commit");
             if (CommitSucceeds)
             {
                 CurrentTurn++;
@@ -102,6 +118,15 @@ namespace PBAndJ.Core.Tests.Net
         public int ShipCombatCalls { get; private set; }
 
         public void ShipCombat() => ShipCombatCalls++;
+
+        /// <summary>Every turn a checkpoint was asked for, in order. M12c.</summary>
+        public List<int> Checkpoints { get; } = new List<int>();
+
+        public void WriteCheckpoint(int turn)
+        {
+            Checkpoints.Add(turn);
+            CallOrder.Add("checkpoint");
+        }
 
         /// <summary>What a combat load should answer, or null to "it started".</summary>
         public LoadOutcome? CombatLoadRefusal { get; set; }
