@@ -174,8 +174,12 @@ is the least important:
    `!IsFeatureUnlocked("feature_base_standalone_ops_unlocked")` branch** (`:398-410`). The 44→47
    measurement records that save's flag state. A save written after the flag is set already carries
    the `scenario_gen_contract_*.yaml` files and will not re-roll them at load.
-2. `OverworldPointUtility.cs:451` — **after every combat**, on each machine, with unsynced
+2. `OverworldPointUtility.cs:449` — **after every combat**, on each machine, with unsynced
    `UnityEngine.Random`. Both machines re-roll divergently after every co-op mission.
+   ⚠️ **Corrected 2026-08-21 (L2): this used to say `:451`. The call is at `:449`**, inside
+   `OnCombatCompletionLate` (`decompiled/PhantomBrigade.Data/OverworldPointUtility.cs:422` declares
+   the method, `:449` is the call). Read today; believe the code. See the dated verdict section at
+   the end of this file for what reaches `:449` and what does not.
 3. `CIViewOverworldRoster.cs:1830` — after every sim-lock exit (camp, retreat, skip). See M12a.
 4. `ConsoleCommandsBasecrawler.cs:100` — console.
 
@@ -525,6 +529,29 @@ chain, all read 2026-08-08:
 **So M12b subsumes this: replicate the contract and the loot comes with it.** One mechanism, both
 problems — which also removes the reason to treat M12d's reward set as separate work.
 
+🔴 **CORRECTED 2026-08-21 (L2) — this is true of the REWARD GROUPS and false of the salvage list
+the screen is actually about.** The paragraph above was written having read
+`TriggerPostCombatRewards` and not its neighbour five lines earlier. Both halves of the salvage
+screen are built inside one method, `OverworldCombatOutcomeProcessingSystem.Execute`:
+
+- `:230` `EquipmentUtility.TriggerPostCombatRewards` — the **free** reward-group half. This one
+  ✅ *is* covered by `savedOutput`, exactly as described above. Verified today.
+- `:225` `EquipmentUtility.PrepareUnitForSalvage` — the **priced, unit-mounted** half, i.e. the
+  parts stripped off the mechs, i.e. **the only half that spends the budget**. It is not covered by
+  anything. `PreparePartForSalvage` decides per part with a live
+  `UnityEngine.Random.Range(0f, 1f)` draw against the `combat_salvage_drop_chance` difficulty
+  multiplier (`decompiled/EquipmentUtility.cs:2763`, inside the
+  `!OverworldUtility.AreFeaturesChecked() && !CombatUIUtility.IsUnitFriendly(unit)` branch at
+  `:2758-2767`), and its other inputs (`part.isWrecked`, `unitEscapes` from
+  `ScenarioUtility.IsUnitActive`) are **local end-of-combat ECS state**, which M16 measured
+  diverging between machines.
+
+⇒ **M12b's mission-generation authority would not fix this and could not.** Replicating
+`CombatGeneratorKey` / `CombatUnitLevel` / `FactionBranch` / `CombatEscalationLevel` /
+`UpdateCombatDescription` output happens at scenario *generation*; the draw at
+`EquipmentUtility.cs:2763` happens *after combat*, downstream of everything M12b would replicate.
+Host-authoritative salvage-list replication is **M12d's own work**, not an M12b prerequisite.
+
 **⚠️ The one gap: `savedOutput` carries no serial.** `CombatRewardSavedPart` is `{level, rating,
 preset}` and `CombatRewardSavedSubsystem` is `{blueprint}`, and `PrepareRewardsFromSavedOutput` calls
 `CreatePartEntityFromPreset(...)` / `CreateSubsystemEntity(blueprint)` **with no serial override**
@@ -571,7 +598,7 @@ generated reward is auto-selected at creation (`ReplaceSalvageSelection(newDisma
 the flag destroys only items whose selection was explicitly removed by the UI's skip. Unselected
 wreck parts are lost later via `FreeOrDestroyCombatParticipants`, a different mechanism. **"Silence
 destroys loot" is wrong.** The rollback principle still stands, but the real disconnect hazard is
-different and simpler: `FinishDebriefing` is click-driven, so **a machine that never clicks never
+different and simpler: `SalvageFinish` is click-driven, so **a machine that never clicks never
 commits at all.**
 
 **The commit is per-machine**, and the single funnel is real (one call site,
@@ -632,12 +659,12 @@ must not silently satisfy it, and the trigger must be an **edge, not a level**.
 **On a disconnect:** roll back per the principle. Never forfeit, never redistribute, never
 auto-recover. ⚠️ **REVIEW: the justification changes, the conclusion does not.** The concrete hazard
 is not that silence destroys loot — silence *transfers* free site loot and leaves priced salvage to a
-later, different mechanism. It is that `FinishDebriefing` is click-driven, so **a machine that never
+later, different mechanism. It is that `SalvageFinish` is click-driven, so **a machine that never
 clicks never commits**, and the barrier's real failure mode is a stall. Rollback to M12c's last
 planning-phase save is what makes that stall survivable.
 
-**Divergence does not stop at the commit.** `FinishDebriefing` then runs `customExitBehaviour`
-functions, `ClearActionsAfterCombat`, `TryToDestroySite` and a province-ownership refresh, per machine
+**Divergence does not stop at the commit.** `SalvageFinish` then runs `customExitBehaviour`
+functions, `ClearActionsAfterCombat`, `TryToDestroyCombatSite` and a province-ownership refresh, per machine
 (`CIViewOverworldDebriefing.cs:2780+`). Even perfectly merged selections diverge afterwards unless
 each of those is deterministic given synced inputs. **Unmeasured — check before declaring M12d done.**
 
@@ -651,8 +678,15 @@ each of those is deterministic given synced inputs. **Unmeasured — check befor
 what stops a client re-rolling every contract, so **M12a is a prerequisite for M12b holding**, not
 merely parallel to it.
 
-**`M12b` gates `M12d`**, and by more than the budget: the salvage *item set itself* is rolled per
-machine, so M12d needs replicated reward generation on top of replicated contracts.
+~~**`M12b` gates `M12d`**, and by more than the budget: the salvage *item set itself* is rolled per
+machine, so M12d needs replicated reward generation on top of replicated contracts.~~
+
+🔴 **STALE, struck 2026-08-21 by lane L2. Verdict (b): M12b's unbuilt mission-generation-authority
+half does NOT gate M12d.** The sentence above was written 2026-08-08, before M12b·2 shipped
+ship-the-fight on 2026-08-09, and it was never revisited. Its second clause is also wrong on its own
+terms — replicated reward generation is not what the salvage item set needs. The full evidence,
+including the call graph and the greps that were proven able to match before their zeroes were
+believed, is in the dated verdict section at the end of this file. Read that, not this sentence.
 
 `M12c` is code-independent of both, but its acceptance test — two machines resuming the same campaign
 combat turn — needs shared combat entry, which is M12b's unbuilt transition. Until then M12c is
@@ -662,6 +696,12 @@ verifiable only through the M9 console flow. It should still land before `M12d`.
 end to end. It shrank twice over on 2026-08-08: `savedOutput` folds the reward-set problem into
 M12b's contract replication, and the riders/standalone split means most subsystem ownership is
 inherited from parts rather than stored.
+
+⚠️ **Half-corrected 2026-08-21 (L2).** The riders/standalone half stands — re-verified against
+the decompile today, citation by citation (see the verdict section). The `savedOutput` half is
+**overstated**: it folds the *reward-group* set into the shipped bytes and does nothing for the
+priced unit-mounted salvage list, which is rolled per machine at `EquipmentUtility.cs:2763`. M12d
+grew back by exactly that much.
 
 ## The rig, for whoever picks this up
 
@@ -708,5 +748,214 @@ design doc would take a live instrument with it.
    given that `PopUntilState` clears pending collectors (M12a).
 6. **New:** what a per-turn save actually costs in main-thread stall, given `RefreshSaveHeaders`
    re-parses every save's metadata (M12c).
-7. **New:** whether `FinishDebriefing`'s post-commit work is deterministic given synced inputs
+7. **New:** whether `SalvageFinish`'s post-commit work is deterministic given synced inputs
+   ⚠️ **CORRECTED 2026-08-21:** this question was written naming `FinishDebriefing`, **which does not
+   exist anywhere in the decompile** (pattern proven non-vacuous — the same grep bites `SalvageFinish`).
+   As written the question was unanswerable. The real method is `SalvageFinish`
+   (`CIViewOverworldDebriefing.cs:2772`). ⚠️ And per the 2026-08-21 cross-lane review it is **not
+   closable before M12d stage D5**, because it needs both machines to commit — see
+   `road-to-1-0-review.md` §3.
    (M12d).
+
+---
+
+# ✅ VERDICT 2026-08-21 — the M12b→M12d gate is (b) STALE PROSE
+
+Written by lane L2 at `main` = `1708a0b`, tree otherwise clean. Every `file:line` below was opened
+today in this working tree. Anything I did not personally read is marked **UNVERIFIED**. Where this
+document and the code disagreed, the code won and the disagreement is named above, in place.
+
+## The sentence under test
+
+> **`M12b` gates `M12d`**, and by more than the budget: the salvage *item set itself* is rolled per
+> machine, so M12d needs replicated reward generation on top of replicated contracts.
+
+(§Sequencing, written 2026-08-08, one day before M12b·2 shipped ship-the-fight.)
+
+## Verdict
+
+**(b) — the sentence is stale, and its second clause is wrong on its own terms.** M12b's unbuilt
+mission-generation-authority half (`:159-191`) is **not** a prerequisite for M12d. But the
+replacement is *not* "M12d is free": the salvage item set really is rolled per machine, and
+**replicated reward generation would not have fixed it either.** M12d owns that problem.
+
+## What is not built, and the grep that says so
+
+`grep -rn 'RefreshStandaloneGeneratorEncounters\|CombatGeneratorKey\|scenario_gen' src/ --include=*.cs`
+returns **one** hit: `src/PBAndJ.Core/Net/PassengerRules.cs:47`, a doc comment. Re-run 2026-08-21.
+
+⚠️ **That zero is a claim about the pattern until the pattern is shown to bite.** The identical
+pattern run over `decompiled/` returns **five** lines
+(`DataHelperLoading.cs:408`, `CIViewOverworldRoster.cs:1830`,
+`PhantomBrigade.DebugConsole/ConsoleCommandsBasecrawler.cs:100`,
+`PhantomBrigade.Overworld/OverworldUtility.cs:163` (the declaration),
+`PhantomBrigade.Data/OverworldPointUtility.cs:449`). The pattern works; the mod genuinely contains
+no generation-authority code. What shipped as M12b is M12b·1/·2, ship-the-fight.
+
+## The call graph, stated as wiring
+
+Everything post-combat funnels through **one Entitas system**, and this is the load-bearing fact:
+
+```
+ScenarioUtility.EndCombatWithOutcome            ScenarioUtility.cs:3574
+  └─ persistent.ReplaceCombatResolved(...)      ScenarioUtility.cs:3586   ← SOLE producer
+       └─ OverworldCombatCompletionSystem.Execute                         OverworldCombatCompletionSystem.cs:19-28
+            requires persistent.hasCombatResolved AND game state == "overworld"
+            └─ persistent.ReplaceCombatOutcomeProcessing(...)             :26   ← SOLE producer
+                 └─ OverworldCombatOutcomeProcessingSystem  (ReactiveSystem, trigger
+                    PersistentMatcher.CombatOutcomeProcessing.Added(),    :38)
+                    ├─ :225  EquipmentUtility.PrepareUnitForSalvage       ← the PRICED salvage list
+                    ├─ :230  EquipmentUtility.TriggerPostCombatRewards    ← the FREE reward groups
+                    ├─ :346  CIViewOverworldDebriefing.EnterAfterCombat   (debriefingUsed == true)
+                    │         └─ … → OnSalvageFinish → SalvageFinish
+                    │              ├─ :2818 OverworldPointUtility.OnCombatCompletionLate
+                    │              └─ :2825 EquipmentUtility.ProcessSalvageSelections
+                    └─ :353  OverworldPointUtility.OnCombatCompletionLate (debriefingUsed == false)
+                                └─ :449 OverworldUtility.RefreshStandaloneGeneratorEncounters
+```
+
+Sole-caller facts, each from a whole-tree grep over `decompiled/` today:
+
+| callee | callers | verified |
+|---|---|---|
+| `ReplaceCombatResolved` | **1** — `ScenarioUtility.cs:3586` | grep, whole tree, generated Entitas files excluded by hand |
+| `ReplaceCombatOutcomeProcessing` | **1** — `OverworldCombatCompletionSystem.cs:26` | same |
+| `CIViewOverworldDebriefing.EnterAfterCombat` | **1** — `OverworldCombatOutcomeProcessingSystem.cs:346` | same |
+| `EquipmentUtility.TriggerPostCombatRewards` | **1** — `OverworldCombatOutcomeProcessingSystem.cs:230` | same |
+| `EquipmentUtility.PrepareUnitForSalvage` | **1** — `OverworldCombatOutcomeProcessingSystem.cs:225` | same |
+| `OverworldPointUtility.OnCombatCompletionLate` | **3** — `CIViewOverworldDebriefing.cs:2818`, `OverworldCombatOutcomeProcessingSystem.cs:353`, `ConsoleCommandsOverworld.cs:964` (console) | same |
+
+**So the debriefing, the salvage list and the contract re-roll are not three things that might
+happen on different machines. They are one `Execute` on whichever machine resolved its own combat.**
+
+## 🔴 The claim I was handed, and could not confirm — "a client never runs this"
+
+The starting evidence for this lane was that a client reaches neither non-console caller of
+`OnCombatCompletionLate`. **I could not verify that and the wiring points the other way.** Recorded
+here rather than quietly dropped, because it is the premise a later reader would otherwise inherit:
+
+1. **Nothing in the mod suppresses any link of that chain.** Grepped `src/**/*.cs` for
+   `OverworldCombatOutcomeProcessingSystem`, `OverworldCombatCompletionSystem`,
+   `EndCombatWithOutcome`, `OnCombatCompletionLate`, `PrepareUnitForSalvage`,
+   `TriggerPostCombatRewards`, `CombatExecutionEndSystem` — **0 hits each**. The only mod references
+   to `CIViewOverworldDebriefing` (22) and `ProcessSalvageSelections` (1) are read-only probe and
+   console-driver code in `ManagementProbeGlue.cs` and one `IsEntered()` save-blocker check in
+   `CombatShipGlue.cs:326`. ⚠️ *That set of zeroes is proven non-vacuous by the same grep returning
+   4 for `OverworldSkySystem` and 4 for `CombatExecutionEndLateSystem`, both of which the mod does
+   patch.* M12a's suppression set is `OrderMovementToPosition`, `OnCampInitiated`,
+   `TryRetreatToResupplyBase`, `EnterCombat` (`PassengerGlue.cs:115,143,163,181`) — all *pre*-combat.
+2. **The paraphrase in `road-to-1-0.md` §7 — "`CombatScenarioStateSystem.cs:365` gates on a bit only
+   the host produces" — does not survive reading `:365`.** That line is `if (!(flag3 && flag))`,
+   where `flag3 = (4 & contexts) != 0` (`:228`) i.e. `ScenarioStateRefreshContext.OnExecutionEnd`,
+   and `flag = stepCurrent.core.allowOutcomeVictory` (`:226`, scenario data, identical on both
+   machines). Bit 4 is raised by `CombatExecutionEndSystem.cs:59`, a `ReactiveSystem` on
+   `CombatMatcher.Simulating.Removed()` — **anything that finishes simulating a turn raises it**,
+   and the mod's own `Patch_CombatExecutionEndLateSystem_Execute`
+   (`src/PBAndJ.Mod/Net/ExecutionPatches.cs:111-125`) exists precisely because a *client* reaches
+   the execution-end systems: that is where it posts `LocalTurnComplete`.
+   ⇒ **I am not overturning M17's conclusion — that is lane L3's file and I did not read its
+   evidence. I am reporting that the mechanism as written in `road-to-1-0.md` is not what `:365`
+   does, and that this note should not be cited as proof a client cannot end its own combat.**
+3. What actually holds a client back is **roster divergence, not a gate**: M16 measured the host at
+   VICTORY while the client was still fighting. Divergence is a race, not a refusal, and a client
+   that loses its own units reaches `EndCombatWithOutcome(Defeat, early: false)`
+   (`CombatScenarioStateSystem.cs:268`) with no host involvement at all.
+   🔴 **REFUTED 2026-08-21 by the cross-lane review — this item was NOT hedged and it is wrong.**
+   The defeat branch at `:268` sits inside the *same* `if (flag3)` gate at `:229` as the victory
+   branch. **A client cannot self-defeat on the ordinary path either**, for exactly the reason
+   item 2 above declined to assert about victory. What survives: a client CAN be driven to an
+   outcome by **content-driven** routes (a second producer of context bit 4 exists at
+   `CombatScenarioTransitionSystem.cs:68`), which is why M17 stage 2's `EndCombatWithOutcome`
+   prefix is **required rather than defence-in-depth**. See `road-to-1-0-review.md` §C6.
+
+**⇒ Treat "a client opens its own debriefing" as LIVE and probably necessary.**
+🔴 **CORRECTED 2026-08-21: wrong on the shipped path, and this is the session's most expensive
+finding.** Nothing — shipped or planned — feeds a client's post-combat chain: it cannot produce
+the outcome (above), `CombatEndMessage` leaves it standing in the loaded fight with the execute
+lock deliberately held (`ClientSession.Dispatch.cs:228-246`), and any load out of combat is a
+campaign teardown that destroys the very entities the salvage flags live on. After M17 stage 2
+the accidental routes close too. ⇒ **M12d has an unbuildable client half until a stage D0
+designs that entry** — see `m12d-plan.md` §D0 and `road-to-1-0-review.md` §3. M12d's own design
+requires it — "each machine runs its own `SalvageFinish` over its own local entities" (§M12d) — so
+the milestone needs the client in that screen, not out of it.
+
+## Why the verdict is still (b), by a route that does not need that premise
+
+The gate question does not depend on which machine runs the system, because **both answers give the
+same verdict**:
+
+- **If the client runs it**, its reward-group items come from `savedOutput` in the *host's* shipped
+  bytes (chain below), so no replicated *generation* is needed; and its own contract re-roll at
+  `:449` is a divergent-but-frozen relic it cannot act on, because M12a suppresses `EngageSite` and
+  M12b·2 means the next fight arrives as host bytes rather than as a client-selected mission.
+- **If the client does not run it**, there is no client-side roll to replicate in the first place.
+
+The `savedOutput` chain, re-read today end to end:
+
+1. `ScenarioSetupUtility.UpdateCombatDescription` (`:161`) calls `GenerateRewardOutputs` for every
+   reward group at `:368-375`; `GenerateRewardOutputs` (`:718`) assigns
+   `group.savedOutput = new CombatRewardGroupSavedOutput()` at **`:724`** before anything can fail,
+   so after scenario setup `savedOutput` is non-null for every group in `rewardGroupsCollapsed`.
+2. The whole `CombatDescription` is cloned through YAML into the save at
+   `DataHelperSaveSerialization.cs:1219-1222`, inside `SaveFromECS` (`:31`) — one method covering
+   the whole ECS, so a **combat-time** save carries the overworld entities too. Ship-the-fight is
+   exactly such a save: `CombatShipGlue.Write` calls
+   `DataManagerSave.DoSave(LobbySaveNames.ScenarioSlot, SaveLocation.Normal, null, -1, false)`
+   (`src/PBAndJ.Mod/Net/CombatShipGlue.cs:206-207`).
+3. On load it is restored onto the overworld entity: `DataManagerSave.cs:2554-2558`,
+   `overworldEntity8.ReplaceCombatDescriptionLink(combatDescription)`.
+4. Post-combat, `TriggerPostCombatRewards` reads `entityOverworld.combatDescriptionLink.s` and
+   routes to `PrepareRewardsFromSavedOutput` **whenever `savedOutput != null`**, skipping generation
+   (`EquipmentUtility.cs:1153-1156`). The rolling branch, `PrepareRewardsFromCollapsedGroup` →
+   `PrepareRewardsForSalvage` (`:1269`, `:1381`), is the one with `GetRandomEntry` / `Random.Range`
+   / `RollRandomQuality` — and by (1) it is unreachable for any fight that went through scenario
+   setup.
+
+## 🔴 The half `savedOutput` does not cover, which is the half M12d is about
+
+Five lines earlier in the same `Execute`, `PrepareUnitForSalvage` (`:225`) builds the **priced**
+list — the parts on the wrecked mechs, the only items that spend the budget
+(`ProcessSalvageOfEntity(..., costMultiplier: 1f, ...)` at `EquipmentUtility.cs:1891, :1898`;
+the inventory loops at `:1844, :1862` pass `0f`). `PreparePartForSalvage` (`:2718`) decides
+membership **per part** from:
+
+- `UnityEngine.Random.Range(0f, 1f)` against `combat_salvage_drop_chance`
+  (`EquipmentUtility.cs:2758-2767`) — reached only when
+  `!OverworldUtility.AreFeaturesChecked() && !CombatUIUtility.IsUnitFriendly(unit)`;
+- `part.isWrecked`, `unitPersistent.isUnitSalvageExempted`, and `unitEscapes` — which
+  `OverworldCombatOutcomeProcessingSystem:217` derives from `ScenarioUtility.IsUnitActive`, i.e.
+  **local end-of-combat ECS state**.
+
+Both inputs are per-machine. Neither is downstream of anything M12b would have replicated.
+⇒ **M12b is neither necessary nor sufficient for M12d's item set.** The gate is not real; the
+problem is, and it belongs to M12d. Scoped in `docs/design/m12d-plan.md` (2026-08-21).
+
+## Citations re-verified today while settling this (M12d's own §)
+
+| claim in §M12d | today's reading |
+|---|---|
+| `DataBlockSavedSubsystem` has no `customTags`; eight fields | ✅ exactly `serial, blueprint, livery, destroyed, fused, salvageable, inventoryAdded, favorite`. Positive control: `DataBlockSavedPart` **does** have `customTags`, written at `DataHelperSaveSerialization.cs:1313-1324`, restored at `DataManagerSave.cs:2744-2746`. `CreateSavedSubsystem` (`:1328-1346`) never reads tags. |
+| riders follow the part; the `continue` | ✅ `EquipmentUtility.cs:1887-1901`, verbatim as quoted |
+| standalone drops price at `0f` | ✅ `:1844`, `:1862` |
+| the vanilla backstop is a `LogWarning` | ✅ `:1903-1906` |
+| UI gate `salvageCostValid` | ✅ `CIViewOverworldDebriefing.cs:2368-2370` |
+| budget computed once at screen open, two consumables removed | ✅ `:2117-2210`; `RemoveMemoryFloat` at `:2168` and `:2183` |
+| `serial` survives the round trip for subsystems | ✅ `DataManagerSave.cs:1905` `CreateSubsystemEntity(blueprint, livery, inventoryAdded, serial)` |
+| a stale-version part is rebuilt with a fresh serial | ✅ `DataManagerSave.cs:2717-2725` |
+| two serial counters | ✅ `DataHelperStats.cs:14,16` (`serialPartLast`, `serialSubsystemLast`) |
+| `savedOutput` mints with no serial override | ✅ `EquipmentUtility.cs:1214` and `:1236` (the doc said `:1216`; it is `:1214`) |
+| rewards auto-selected at creation | ✅ `ReplaceSalvageSelection(newDismantle: false)` at `:1217, :1239, :1527, :1605` |
+| `GetSalvageCost` applies the multiplier only when `< 1f`, returns 0 when `<= 0f` | ✅ `:1616-1645` |
+
+**New, and not in §M12d:** installed subsystems are serialised **inside** their part, as
+`DataBlockSavedPart.systems : Dictionary<hardpoint, DataBlockSavedSubsystem>`
+(`DataBlockSavedPart.cs`, written at `DataHelperSaveSerialization.cs:1306-1312`, restored via
+`UnitUtilities.CreateSubsystemsFromSave` at `DataManagerSave.cs:2733`). So the "inherit the parent
+part's owner" option is not merely semantically available — it is the shape the save file already
+has, and it needs no new storage.
+
+**Also new, and a reason never to recompute the budget:** `CIViewOverworldDebriefing.cs:2161-2168`
+computes the *consumable* multiplier's contribution from `value` — the **non-consumable** memory's
+out-var — while discarding the consumable's own (`out var _` at `:2162`). Whatever that is, it is
+what shipped; a mod-side reimplementation would disagree with the game. Host-computes-once and
+broadcasts is the only safe rule.
