@@ -181,6 +181,75 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void Host_OnSelectingTheCheckpointSlot_DoesNotOfferIt()
+        {
+            // The fake bridge starts in combat, and a host in combat is not in
+            // its lobby -- LocalLobbySelect would be ignored outright.
+            bridge.InCombat = false;
+            // M12c's checkpoint is not a campaign. Offering it as one would send a
+            // peer bytes the next Execute replaces, and have it ready onto them.
+            bridge.Scenario = Save();
+            bridge.ScenariosByKey[LobbySaveNames.CheckpointSlot] =
+                Save(LobbySaveNames.CheckpointSlot, "turn-bytes");
+            var host = Host();
+            Handshake(host);
+
+            var effects = host.Handle(new LocalLobbySelectEvent(
+                LobbySaveNames.CheckpointSlot,
+                Save(LobbySaveNames.CheckpointSlot, "turn-bytes").Digest));
+
+            Assert.DoesNotContain(All<BroadcastEffect>(effects), b => b.Message is ScenarioOfferMessage);
+        }
+
+        [Fact]
+        public void Host_WithTheCheckpointSlotSelected_DoesNotOfferItToAJoiningPeer()
+        {
+            // The handshake path is a SECOND site, not the same one: OfferScenario
+            // re-offers whatever the lobby selected to every peer that arrives
+            // later, so a checkpoint that got into the selection would be handed
+            // out again on every join even though the select-time offer refused it.
+            bridge.InCombat = false;
+            bridge.Scenario = Save();
+            bridge.ScenariosByKey[LobbySaveNames.CheckpointSlot] =
+                Save(LobbySaveNames.CheckpointSlot, "turn-bytes");
+            var host = Host();
+            Handshake(host);
+            host.Handle(new LocalLobbySelectEvent(
+                LobbySaveNames.CheckpointSlot,
+                Save(LobbySaveNames.CheckpointSlot, "turn-bytes").Digest));
+
+            host.Handle(new PeerConnectedEvent(2, "127.0.0.1:2"));
+            var offers = Messages<ScenarioOfferMessage>(
+                host.HandleMessage(2, GoodHello("second"))).ToList();
+
+            Assert.Equal(new[] { LobbySaveNames.ScenarioSlot }, offers.Select(o => o.SaveName));
+        }
+
+        [Fact]
+        public void Host_OnRequestMatchingNeitherSave_WithTheCheckpointSelected_ServesTheScenarioSlot()
+        {
+            // ResolveRequested's last arm. A peer's digest decides what the host
+            // reads off its own disk, and "nothing matched, so serve the lobby's
+            // campaign" must not resolve to a directory the host is rewriting once
+            // a turn -- the bytes would be stale before they finished sending.
+            bridge.InCombat = false;
+            bridge.Scenario = Save();
+            bridge.ScenariosByKey[LobbySaveNames.CheckpointSlot] =
+                Save(LobbySaveNames.CheckpointSlot, "turn-bytes");
+            var host = Host();
+            Handshake(host);
+            host.Handle(new LocalLobbySelectEvent(
+                LobbySaveNames.CheckpointSlot,
+                Save(LobbySaveNames.CheckpointSlot, "turn-bytes").Digest));
+
+            var effects = host.HandleMessage(1, new ScenarioRequestMessage("deadbeef"));
+
+            var sent = Assert.IsType<ScenarioMessage>(Single<SendEffect>(
+                All<SendEffect>(effects).Where(s => s.Message is ScenarioMessage)).Message);
+            Assert.Equal(LobbySaveNames.ScenarioSlot, sent.SaveName);
+        }
+
+        [Fact]
         public void Host_OnRequestMatchingNeitherSave_ServesTheLobbysCampaign()
         {
             // The fake bridge starts in combat, and a host in combat is not in

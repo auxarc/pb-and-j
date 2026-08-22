@@ -48,6 +48,14 @@ namespace PBAndJ.Mod.Net
                 new Type[0], "pbj.lobby");
             AddFrom(typeof(CombatShipGlue), nameof(CombatShipGlue.ShipFight),
                 new Type[0], "pbj.ship-fight");
+            AddFrom(typeof(CheckpointGlue), nameof(CheckpointGlue.CheckpointStat),
+                new Type[0], "pbj.checkpoint-stat");
+            // The read side of the same slot, and its own command rather than an
+            // optional argument on pbj.combat-load: an argument would leave a bare
+            // `pbj.combat-load` still meaning pbj_combat_test while looking as
+            // though it might not, and the R0 runbook already names this one.
+            AddFrom(typeof(CheckpointGlue), nameof(CheckpointGlue.CheckpointLoad),
+                new Type[0], "pbj.checkpoint-load");
         }
 
         private static void AddFrom(Type owner, string methodName, Type[] parameters, string command)

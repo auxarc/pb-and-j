@@ -34,6 +34,9 @@ namespace PBAndJ.Core.Net
         private static readonly UnitPoseTrack[] NoPoses = new UnitPoseTrack[0];
 
         private readonly IPbjGameBridge bridge;
+
+        /// <summary>M12c's checkpoint cadence, in turns. Never below one.</summary>
+        private readonly int checkpointEveryNTurns;
         private readonly PbjPeerRegistry registry;
         private readonly TurnBarrier barrier;
 
@@ -156,13 +159,30 @@ namespace PBAndJ.Core.Net
         /// keeps the session a deterministic pure machine (tests pass a fixed
         /// one) without needing a randomness seam.
         /// </param>
+        /// <param name="checkpointEveryNTurns">
+        /// How often M12c writes a combat checkpoint: 1 is every turn, 2 is every
+        /// other, and so on. The cadence lives HERE rather than in the glue for
+        /// two reasons — it is a pure decision over the turn number, so Core keeps
+        /// it under the coverage gate; and every machine computes the same answer
+        /// from the same number, so nobody has to agree about it on the wire.
+        /// <para>
+        /// Default 1. The number that would move it is the main-thread cost of
+        /// <c>DataManagerSave.SaveData</c>, which ends in an unconditional
+        /// <c>RefreshSaveHeaders</c> that YAML-parses every save in two folders —
+        /// a cost that scales with the player's lifetime save count rather than
+        /// with this save, and which nobody has ever measured. Until that reading
+        /// exists, every turn is the honest default: it is the behaviour the
+        /// milestone is specified in terms of.
+        /// </para>
+        /// </param>
         public HostSession(
             string hostName,
             string sessionId,
             int maxPeers,
             IPbjGameBridge bridge,
             string sessionSecret,
-            SessionRequirements requirements)
+            SessionRequirements requirements,
+            int checkpointEveryNTurns = 1)
         {
             if (string.IsNullOrWhiteSpace(hostName))
             {
@@ -176,9 +196,21 @@ namespace PBAndJ.Core.Net
             {
                 throw new ArgumentException("Session secret must be a non-empty string.", nameof(sessionSecret));
             }
+            if (checkpointEveryNTurns < 1)
+            {
+                // Refused rather than clamped. Zero is a division by zero in
+                // TryCommit and negative is a cadence nobody can state a meaning
+                // for; either is a caller that has mistaken this argument for
+                // something else, and silently curing it would hide that.
+                throw new ArgumentOutOfRangeException(
+                    nameof(checkpointEveryNTurns),
+                    "Checkpoint cadence must be at least one turn.");
+            }
             this.bridge = bridge ?? throw new ArgumentNullException(nameof(bridge));
             this.sessionSecret = sessionSecret;
             this.requirements = requirements ?? throw new ArgumentNullException(nameof(requirements));
+
+            this.checkpointEveryNTurns = checkpointEveryNTurns;
 
             HostName = hostName;
             SessionId = sessionId;
@@ -191,6 +223,9 @@ namespace PBAndJ.Core.Net
 
         public string HostName { get; }
         public string SessionId { get; }
+
+        /// <summary>How often a combat checkpoint is written, in turns. M12c.</summary>
+        public int CheckpointEveryNTurns => checkpointEveryNTurns;
         public HostSessionState State { get; private set; }
         public int Turn => barrier.Turn;
         public int ParticipantCount => barrier.ParticipantCount;

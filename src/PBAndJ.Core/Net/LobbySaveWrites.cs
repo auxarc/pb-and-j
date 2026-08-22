@@ -101,9 +101,11 @@ namespace PBAndJ.Core.Net
         /// <paramref name="key"/>.
         /// </summary>
         /// <remarks>
-        /// Two rules in one answer. <see cref="LobbySaveNames.ScenarioSlot"/> is
-        /// always refused: M9's transfer deletes and rewrites that directory
-        /// wholesale, so it is inside the prefix without being a campaign. Every
+        /// Two rules in one answer. Neither non-campaign slot may ever be
+        /// written: M9's transfer deletes and rewrites
+        /// <see cref="LobbySaveNames.ScenarioSlot"/> wholesale and M12c rewrites
+        /// <see cref="LobbySaveNames.CheckpointSlot"/> at every turn boundary, so
+        /// both are inside the prefix without being campaigns. Every
         /// other multiplayer save is refused only from <em>outside</em> a co-op
         /// campaign — inside one, the namespace is the player's own, and refusing
         /// it there would leave retyping the name as the only overwrite route,
@@ -116,7 +118,7 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public static bool IsProtectedFromOverwrite(string? key, bool multiplayerCampaign)
         {
-            if (string.Equals(key, LobbySaveNames.ScenarioSlot, StringComparison.OrdinalIgnoreCase))
+            if (LobbySaveNames.IsNonCampaignSlot(key))
             {
                 return true;
             }

@@ -311,6 +311,16 @@ namespace PBAndJ.Core.Net
                     bridge.ShipCombat();
                     break;
 
+                case WriteCheckpointEffect checkpoint:
+                    // Nothing comes back, and unlike ShipCombat nothing reports
+                    // later either. The session asks at an instant where every
+                    // CanSave refusal is already known false, so a refusal is an
+                    // anomaly for the glue to log once -- and no session state
+                    // waits on the write, so a checkpoint that could not be taken
+                    // must not stop the fight it was taken during.
+                    bridge.WriteCheckpoint(checkpoint.Turn);
+                    break;
+
                 case MirrorBaseEffect mirror:
                     // Nothing comes back, for the same reason keyframes report
                     // nothing: the mirror is presentation and makes no

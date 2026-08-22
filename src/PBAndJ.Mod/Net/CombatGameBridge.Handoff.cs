@@ -9,14 +9,16 @@ using UnityEngine;
 
 namespace PBAndJ.Mod.Net
 {
-    // Handing a save between machines. Three one-line delegations, and the name is
+    // Handing a save between machines. Four one-line delegations, and the name is
     // Handoff rather than Load because only two of them load: BeginLoad takes a
     // campaign save (M11d), BeginCombatLoad takes the fight a host shipped (M12b),
-    // and ShipCombat goes the other way -- it arms the write that PRODUCES the save
-    // a host offers.
+    // and ShipCombat and WriteCheckpoint go the other way -- they PRODUCE the saves
+    // a host offers, at combat entry (M12b) and at every turn boundary (M12c).
     //
-    // ShipCombat only arms it; the save itself is CombatShipGlue's, which polls
-    // until the game will accept one. All three bodies are a single call.
+    // ShipCombat only arms its write, because the game refuses a save in the tick
+    // it is asked; WriteCheckpoint is asked at an instant where every refusal is
+    // already false, so it writes there and then. The saves themselves belong to
+    // CombatShipGlue and CheckpointGlue. All four bodies are a single call.
     //
     // One part of CombatGameBridge, a single class split across files. The
     // class-level prose, the ECS state queries and the interface declaration
@@ -53,6 +55,21 @@ namespace PBAndJ.Mod.Net
         public void ShipCombat()
         {
             CombatShipGlue.Arm();
+        }
+
+        /// <summary>
+        /// Writes the combat checkpoint for the turn about to be committed. M12c.
+        /// </summary>
+        /// <remarks>
+        /// Unlike <see cref="ShipCombat"/> this does the write rather than arming
+        /// one, because the moment it is called at is already the moment: the
+        /// session asks inside <c>TryCommit</c>'s gap, where every
+        /// <c>CanSave(false)</c> refusal is known false. <see cref="CheckpointGlue"/>
+        /// owns the write, the refusal log and the stall measurement.
+        /// </remarks>
+        public void WriteCheckpoint(int turn)
+        {
+            CheckpointGlue.Write(turn);
         }
 
         /// <summary>

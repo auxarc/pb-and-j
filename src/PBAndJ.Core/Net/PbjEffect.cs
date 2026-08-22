@@ -22,8 +22,56 @@ namespace PBAndJ.Core.Net
         MirrorBase = 14,
         BeginCombatLoad = 15,
         ShipCombat = 16,
+        WriteCheckpoint = 17,
 
-        // 17+ unallocated.
+        // 18+ unallocated.
+    }
+
+    /// <summary>
+    /// Write the combat checkpoint for the turn about to be committed. Hosts
+    /// only. M12c.
+    /// </summary>
+    /// <remarks>
+    /// <b>Only the host emits one, and that is a claim about CONTENT rather than
+    /// about timing.</b> At the moment this is enqueued the host's ECS holds every
+    /// peer's orders, because <c>TryCommit</c> has just turned each of them into an
+    /// <see cref="ApplyOrderEffect"/>. A client's ECS holds only its own — nothing
+    /// ever applies a peer's orders on a client — so a checkpoint taken there would
+    /// reload into a half-planned turn. The re-executable property this save exists
+    /// for belongs to the host's copy, and a resume ships those bytes through the
+    /// transfer that already exists.
+    /// <para>
+    /// <b>The gap it sits in is the correctness property.</b> It is enqueued after
+    /// the last <see cref="ApplyOrderEffect"/> and before
+    /// <see cref="CommitTurnEffect"/>, and that ordering is by construction rather
+    /// than by luck: <c>PbjRuntime.Run</c> is a queue, and <c>HandleOrderApplied</c>
+    /// returns no effects, so nothing an order-apply produces can land between the
+    /// two. Saving after the commit instead would pass every <c>CanSave</c> guard
+    /// and still be wrong — <c>ConfirmExecution</c> has already run
+    /// <c>ReplaceCurrentTurn</c>, so the save would be stamped with the NEXT turn
+    /// while holding the previous turn's plan.
+    /// </para>
+    /// <para>
+    /// Nothing comes back. Which save to write is a constant both sides know
+    /// (<see cref="LobbySaveNames.CheckpointSlot"/>), and no session state waits on
+    /// the write — a checkpoint that could not be taken must never block the fight
+    /// it was taken during.
+    /// </para>
+    /// </remarks>
+    public sealed class WriteCheckpointEffect : PbjEffect
+    {
+        public WriteCheckpointEffect(int turn)
+        {
+            Turn = turn;
+        }
+
+        public override PbjEffectKind Kind => PbjEffectKind.WriteCheckpoint;
+
+        /// <summary>
+        /// The turn whose plan the checkpoint holds — the one about to be
+        /// committed, not the one the ECS will hold once it has been.
+        /// </summary>
+        public int Turn { get; }
     }
 
     /// <summary>

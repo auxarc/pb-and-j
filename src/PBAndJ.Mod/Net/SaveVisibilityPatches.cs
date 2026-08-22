@@ -157,11 +157,11 @@ namespace PBAndJ.Mod.Net
                 {
                     var multiplayer = LobbySaveNames.IsMultiplayerKey(pair.Key);
 
-                    // The scenario slot is inside the prefix but it is not a
-                    // campaign: hidden from the singleplayer grid AND from the
-                    // picker, so it can be selected in neither.
-                    var slot = string.Equals(
-                        pair.Key, LobbySaveNames.ScenarioSlot, StringComparison.OrdinalIgnoreCase);
+                    // The scenario slot and M12c's checkpoint are inside the
+                    // prefix but neither is a campaign: hidden from the
+                    // singleplayer grid AND from the picker, so they can be
+                    // selected in neither.
+                    var slot = LobbySaveNames.IsNonCampaignSlot(pair.Key);
 
                     if (multiplayer == want && !slot)
                     {

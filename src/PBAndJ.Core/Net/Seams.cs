@@ -321,5 +321,29 @@ namespace PBAndJ.Core.Net
         /// </para>
         /// </remarks>
         LoadOutcome? BeginLoad(string? saveKey, int selectionVersion, string? saveDigest);
+
+        /// <summary>
+        /// Write the combat checkpoint for <paramref name="turn"/>. Hosts only.
+        /// M12c.
+        /// </summary>
+        /// <remarks>
+        /// Returns nothing, and unlike <see cref="ShipCombat"/> it reports nothing
+        /// later either. The session asks at a moment where every
+        /// <c>CanSave(false)</c> refusal is already known to be false, so a refusal
+        /// here is an anomaly to be logged once rather than a state to be polled
+        /// out of — and nothing in the protocol waits on the write, so there is no
+        /// session state for an answer to advance.
+        /// <para>
+        /// <b>Synchronous, deliberately.</b> An implementation must not defer the
+        /// write: the instant is what gives the save its whole value, and a
+        /// checkpoint taken a few frames later holds a turn that has already begun
+        /// simulating.
+        /// </para>
+        /// <para>
+        /// A no-op is a legitimate implementation for anything with no game behind
+        /// it; the harness stands in for the write exactly that way.
+        /// </para>
+        /// </remarks>
+        void WriteCheckpoint(int turn);
     }
 }

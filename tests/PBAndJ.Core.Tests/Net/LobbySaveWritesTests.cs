@@ -203,6 +203,34 @@ namespace PBAndJ.Core.Tests.Net
         }
 
         [Fact]
+        public void IsProtectedFromOverwrite_TheCheckpointSlot_AlwaysIsEvenInACoopCampaign()
+        {
+            // The host rewrites this directory at every turn boundary. Letting the
+            // save screen write a campaign there inside a co-op campaign would put
+            // a player's typed save where the next Execute lands.
+            Assert.True(LobbySaveWrites.IsProtectedFromOverwrite(LobbySaveNames.CheckpointSlot, true));
+            Assert.True(LobbySaveWrites.IsProtectedFromOverwrite(LobbySaveNames.CheckpointSlot, false));
+        }
+
+        [Fact]
+        public void IsProtectedFromOverwrite_TheCheckpointSlot_IgnoresCase()
+        {
+            Assert.True(LobbySaveWrites.IsProtectedFromOverwrite("PBJ_COMBAT_TURN", true));
+        }
+
+        [Fact]
+        public void NameForRead_DoesNotRedirectTheCheckpointSlotsUnprefixedName()
+        {
+            // combat_turn is M12c's, not a name the game generates for itself, so
+            // NameForRead's IsGameGeneratedSaveName clause leaves it alone. This is
+            // the whole of the §9.7 interaction: DoSave reassigning the global
+            // DataManagerSave.saveName once per turn cannot steer a later load,
+            // because LoadingStart calls SetSaveName(key) before LoadData and the
+            // key is what the redirect rewrites.
+            Assert.Equal("combat_turn", LobbySaveWrites.NameForRead("combat_turn", true, true));
+        }
+
+        [Fact]
         public void IsProtectedFromOverwrite_AMultiplayerSave_IsProtectedFromSingleplayer()
         {
             // M11b's rule, unchanged: multiplayer saves stay visible in the

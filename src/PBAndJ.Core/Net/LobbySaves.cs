@@ -54,11 +54,54 @@ namespace PBAndJ.Core.Net
         public const string ScenarioSlot = Prefix + "combat_test";
 
         /// <summary>
+        /// M12c's per-turn combat checkpoint, which is inside <see cref="Prefix"/>
+        /// and is <b>not</b> a campaign.
+        /// </summary>
+        /// <remarks>
+        /// The host rewrites this directory at every turn boundary, so a lobby
+        /// that selected it would have peers ready onto a save the next Execute
+        /// destroys — the same hazard <see cref="ScenarioSlot"/> carries, arriving
+        /// once per turn instead of once per fight. It is therefore reserved and
+        /// excluded everywhere the scenario slot is, and
+        /// <see cref="IsNonCampaignSlot"/> is what every one of those sites asks.
+        /// <para>
+        /// <b>Only the host writes one.</b> A client's ECS never receives its
+        /// peers' orders — <c>ApplyOrderEffect</c> is emitted by
+        /// <c>HostSession.TryCommit</c> alone — so a client's own checkpoint would
+        /// reload into a half-planned turn. The re-executable property this save
+        /// exists for belongs to the host's copy.
+        /// </para>
+        /// </remarks>
+        public const string CheckpointSlot = Prefix + "combat_turn";
+
+        /// <summary>
         /// Longest accepted display name. The game imposes no limit of its own —
         /// this exists so a pathological name cannot reach a log line or a screen,
         /// not because any real name approaches it.
         /// </summary>
         public const int MaxNameLength = 64;
+
+        /// <summary>
+        /// True if <paramref name="key"/> is one of the namespace's slots rather
+        /// than a campaign.
+        /// </summary>
+        /// <remarks>
+        /// One question, asked at every site that must keep a slot out of a
+        /// campaign list: the lobby catalogue, the reserved-name rule, the
+        /// singleplayer overwrite guard, the host's offer paths and the picker
+        /// grid. Written as a single predicate rather than repeated comparisons
+        /// because a second slot arriving (M12c's checkpoint was the second) must
+        /// not mean finding seven sites again and getting six of them.
+        /// <para>
+        /// Case-insensitive for the reason the whole class is: the filesystem
+        /// under Proton is case-sensitive and the game's own comparisons are not.
+        /// </para>
+        /// </remarks>
+        public static bool IsNonCampaignSlot(string? key)
+        {
+            return string.Equals(key, ScenarioSlot, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(key, CheckpointSlot, StringComparison.OrdinalIgnoreCase);
+        }
 
         /// <summary>True if <paramref name="key"/> names a multiplayer save.</summary>
         public static bool IsMultiplayerKey(string? key)
@@ -229,13 +272,18 @@ namespace PBAndJ.Core.Net
 
         private static bool IsReserved(string displayName)
         {
-            // The scenario slot is reserved without being the game's own: M9's
-            // WriteScenario deletes and rewrites it wholesale, so a campaign must
-            // never be created there.
-            return string.Equals(
-                       LobbySaveNames.KeyFor(displayName),
-                       LobbySaveNames.ScenarioSlot,
-                       StringComparison.OrdinalIgnoreCase)
+            // Both slots are reserved without being the game's own: M9's
+            // WriteScenario deletes and rewrites the scenario slot wholesale and
+            // M12c rewrites the checkpoint at every turn boundary, so a campaign
+            // must never be created in either.
+            //
+            // KeyFor first, deliberately. This takes a DISPLAY name and
+            // CheckNewName has already refused an already-prefixed one three
+            // checks earlier, so comparing the raw display name against the
+            // prefixed constant would be an arm nothing can reach — the M11b
+            // trap, which breaks the coverage gate and admits the colliding
+            // name in the same stroke.
+            return LobbySaveNames.IsNonCampaignSlot(LobbySaveNames.KeyFor(displayName))
                    || IsGameGeneratedSaveName(displayName);
         }
 
@@ -299,8 +347,9 @@ namespace PBAndJ.Core.Net
         /// <remarks>
         /// Sorted the way the game's own load grid sorts — <c>timeInSystem</c>
         /// descending — because a lobby list ordered differently from the screen
-        /// beside it reads as a bug. <see cref="LobbySaveNames.ScenarioSlot"/> is
-        /// excluded: it is inside the prefix but it is not a campaign.
+        /// beside it reads as a bug. <see cref="LobbySaveNames.ScenarioSlot"/> and
+        /// <see cref="LobbySaveNames.CheckpointSlot"/> are excluded: both are
+        /// inside the prefix and neither is a campaign.
         /// </remarks>
         public static IReadOnlyList<LobbySaveEntry> Multiplayer(IEnumerable<LobbySaveEntry>? all)
         {
@@ -351,7 +400,7 @@ namespace PBAndJ.Core.Net
         private static bool IsOffered(string? key)
         {
             return LobbySaveNames.IsMultiplayerKey(key)
-                && !string.Equals(key, LobbySaveNames.ScenarioSlot, StringComparison.OrdinalIgnoreCase);
+                && !LobbySaveNames.IsNonCampaignSlot(key);
         }
     }
 }
