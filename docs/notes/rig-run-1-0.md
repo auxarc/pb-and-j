@@ -317,6 +317,46 @@ acceptance. ⚠️ The roadmap names `pbj.status` here; **no such command exists
 the causes: pump-dead (`tickMoves=0`) from level-stuck (`tickMoves>0`, `lastInCombat` unchanged) from
 no-session (`runtime=null`) from never-armed (`frames=0`).
 
+**R1·10b — 🔴 THE q9 READING: can a client open a debriefing at all?** *(decides M12d stage D0;
+user's call, 2026-08-21: measure rather than choose)*
+
+⚠️ **THIS READING MUST BE TAKEN BEFORE M17 STAGE 2 MERGES (window W2).** The stage 2 prefix on
+`ScenarioUtility.EndCombatWithOutcome` closes the only route this reading uses, and the
+`pbj.force-end … bypassOnce` hatch that would re-open it **ships with that same PR**. Take it now,
+on today's `main`, or it costs a bypass that does not exist yet.
+
+⭐ **No new code is needed — the sketch in the decision was wrong about that.** `cm.force-victory`
+calls `ScenarioUtility.EndCombatWithOutcome(CombatOutcome.Victory, early: true)` **directly**
+(`decompiled/PhantomBrigade.DebugConsole/ConsoleCommandsCombat.cs:71-79`), so it does **not** pass
+through the `if (flag3)` bit-4 gate at `CombatScenarioStateSystem.cs:229` that makes a client unable
+to resolve its own combat on the ordinary path. Its only guard is
+`CombatStateCheck()` → `IDUtility.IsGameState("combat")` (`:31-39`), which a client in a shipped
+fight satisfies. Verified in the decompile 2026-08-21.
+
+⚠️ **Destructive on the client** — it ends that machine's fight. Take it LAST, after R1·10, and
+expect to restart the session afterwards.
+
+```
+tools/drive.sh 3 "pbj.debrief-probe"            # BEFORE: baseline, expect present=False
+tools/drive.sh 3 "cm.force-victory"             # on the CLIENT, not the host
+tools/drive.sh 3 "pbj.debrief-probe"            # AFTER: the whole reading
+tools/drive.sh 3 "pbj.net-status"
+```
+
+**What the answer means for M12d:**
+
+- `present=True entered=True` — the debriefing opened over the client's combat scene. **Shape A is
+  live**: drive the client into its own vanilla debriefing off a relayed outcome. M12d keeps the
+  game's salvage UX.
+- `present=True entered=False` — the view exists but will not take the client. **Shape B**: the host
+  becomes sole committer and the salvage UX is rebuilt mod-side.
+- `present=False` — the overworld scene never loaded at all. **Shape B**, decided harder.
+
+`ZERO:` a `present=False` on the AFTER line is a real answer, **not** a failed probe — but only if
+the BEFORE line was also taken, which is why it is in the block. If `cm.force-victory` prints
+`"Command only available from combat"` the client was not in the fight and **nothing was measured**;
+that is the one outcome that must not be read as Shape B.
+
 **R1·11 — 🧑 the M10 Leave-button swap**
 **Human reading.** *Exactly what to do:* with the session still up and **not in a fight**, click
 Multiplayer on the main menu and look at the buttons. *Expected:* Host/Join have been replaced by
