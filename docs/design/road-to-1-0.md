@@ -457,6 +457,42 @@ scratchpad.
 
 ---
 
+## 5b. 🆕 How the rest of this roadmap gets executed (adopted 2026-08-22)
+
+Everything below runs as a **planner/executor loop**, adapted from the sister project's and recorded
+in memory as `planner-executor-loop`. The shape, and the three ways ours differs:
+
+1. **A PERSISTENT Fable planner owns this file.** Not the conversation, not a scratchpad.
+2. **A Fable refutation pass sits between planner and executor.** Their loop has none; ours needs
+   one, because a plan that refutes none of its own premises is treated as unread here.
+   ⭐ **Ask the reviewer to BREAK it, not check it — and give them the thing, not the diff.**
+3. **Owner questions are batched BEFORE execution** and written back here as decisions, so later
+   executors read them rather than re-asking. (q9 is the worked example: §8 carries the decision.)
+4. **Opus executors run in PARALLEL, in isolated worktrees** — theirs are serial because they share
+   a tree. Scope is stated as an **exclusion list** naming which later PR owns each excluded thing,
+   and each executor's report ends in **NEW WORK DISCOVERED**.
+5. 🔴🔴 **Every report goes BACK to the SAME planner.** This is the invariant, and **the one this
+   roadmap's own first run broke** — the planner returned once and never saw a lane report, which is
+   why the client-debriefing gap (§8 q9), where four lanes each held a piece, surfaced only in final
+   review instead of at lane 2.
+6. **A cycle closes when the planner absorbs the report, not when the PR merges.** The merge is the
+   middle of the cycle.
+
+### 🆕 This plan is FINISHABLE WITH HOLES
+
+Some items here cannot be closed by any agent — they need the two-instance rig, a human's eyes, or a
+click. **A hole does not stall the plan.** Each is written with four fields: the measurement stated
+precisely enough that the taker need not interpret it; ⭐ **who can take it**; what each outcome
+changes; and **what may proceed under which assumption**. The open holes today are **R0**, **R1**
+(including R1·10b, the q9 decider), and the **post-reboot GPU ladder** in
+`docs/notes/gpu-wedge-forensics.md`.
+
+⭐⭐ **Budget them:** *reach for the offline rig first, and spend the scarce human-gated measurement
+on what the rig cannot see.* The sister project lost a play session to three readings that reached
+the code and **could not tell a fixed rule from the broken one it replaced**.
+
+---
+
 ## 6. Merge-window schedule
 
 🔴 **REPLACED 2026-08-21 by the review** (old table kept in git history; changes: PR-A and PR-C
@@ -469,10 +505,10 @@ which the old row omitted; M12d gains a D0 gate — §8 q9):
 | ✅ 1 | **MERGED as #51.** **PR-1: M12c stages A+B+C — WINDOW W1** (built, integration-verified) **+ absorbs R0 blockers B-1/B-2**: `pbj.checkpoint-load`, `beforeSave` armed by `CheckpointGlue.Write` | L1 | wire-surface hash moves (`Seams.cs`); ModVersion **0.23.0**; protocol stays v9 | `make record-wire-surface` + `record-split-grouping` same commit (both already done in the lane); re-run `dist` + `peer-selftest` after absorbing the blockers |
 | ✅ 2 | **MERGED as #52.** PR-2: DebriefProbe + edge counter + runbook + nightfall transcription (built, integration-verified) — fix `rig-run-1-0.md:180`'s `cm.end-combat-*` before merge | L4 | none (verified on the merged tree) | `make dist`; rebase on PR-1 (`ModEntry.cs` adjacency only — the trial merge showed no textual conflict) |
 | 3 | PR-3: docs (this PR) — this file's corrections + the review + L2's two docs carrying their owed fixes (`SalvageFinish` rename ×2, `TryToDestroyCombatSite`, the `:268` defeat-gate correction, m12d-plan stage D0) | — | none | doc-only |
-| — | R0 (deploy, mini reading **+ two-instance tail**) | — | — | numbers into the runbook; decides N and stage D's branch |
+| — | **R0** (deploy, mini reading **+ two-instance tail**) — 🧑 **HOLE: the user, at the rig.** ⚠️ Blocked behind the post-reboot GPU ladder (`gpu-wedge-forensics.md` §5); single-instance headless is confirmed so R0·1's stall reading no longer needs the desktop | — | — | numbers into the runbook; decides N and stage D's branch |
 | 4 | PR-4: M12c stage D — branch A (wire-neutral) or branch B (**its own wire window**, ordered against W2, never shared) | L1 | A: none — `make dist` proves the hash unmoved · B: protocol bump + re-record | branch per R0's tail |
 | 5 | **PR-5: M17 stage 2 — WINDOW W2** 🔴 **R1 MUST RUN FIRST** — this PR's `EndCombatWithOutcome` prefix closes the only route R1·10b (the q9 reading) can use, and the `bypassOnce` hatch that would re-open it ships in this same PR | L3 | wire **v10** + ModVersion **0.24.0** (UnitSnapshot + codec) | 🧑 user authorizes the build (plan §9; 3rd refutation already paid); `make record-wire-surface` **and `record-split-grouping`** same commit; `Closed`/`Faulted` predicate; `pbj.force-end` |
-| — | R1 (deploy, the comprehensive run) | — | — | closes §5's table (with its four dated corrections) |
+| — | **R1** (deploy, the comprehensive run) — 🧑 **HOLE: the user, at the rig.** ⚠️ Needs the PAIR question answered first (two headless compositors with games in them — unproven, see `gpu-wedge-forensics.md`). **R1·10b must precede PR-5.** | — | — | closes §5's table (with its four dated corrections) |
 | 6+ | M12d PRs — **gated on m12d-plan stage D0 + refutation** (§8 q9); then **WINDOW W3** (likely protocol v11) | L5 | per L2's plan | `make record-wire-surface` per wire PR |
 | last | **1.0**: `make package` (adds `check-game-hash peer-selftest check-no-drive-channel`, `Makefile:484`) — release ships the mod zip only, never the peer | — | — | 🧑 the user cuts the release |
 
