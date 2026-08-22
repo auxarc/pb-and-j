@@ -217,8 +217,12 @@ The plan is already refuted (six kills, recorded); do not re-derive it. It was w
       - `PbjProtocol.ModVersion` 0.22.0 → 0.23.0 + `mod/metadata.yaml`, then
         `make record-wire-surface`, same commit. If any new member lands in a split-family file,
         `make record-split-grouping` with the placement justified in the PR.
-      - Gate: `make dist` exit 0; `make peer-selftest` ALL PASS **unchanged** — that it is unchanged
-        is itself the evidence no protocol byte moved.
+      - Gate: `make dist` exit 0; `make peer-selftest` ALL PASS. 🔴 **CORRECTED 2026-08-22 (item
+        B10):** the old text here said "**unchanged** — that it is unchanged is itself the evidence
+        no protocol byte moved," which was never true (the verdict line could not name a version at
+        all) and is now doubly wrong: the line carries `protocol vN, mod X.Y.Z`, so a **mod** bump
+        moves it too. Expect `ALL PASS (11 scenarios, protocol v10, mod 0.24.0)` and read the two
+        versions; "unchanged" is not the evidence, the printed protocol number is.
 - [ ] **R0 happens here** (see §5) — its re-entry-edge answer decides stage D's shape, its stall
       number confirms N.
 - [ ] **PR-D — stage D, resume.** 🔴 **CORRECTED 2026-08-21** (old text said the host offers
@@ -326,7 +330,10 @@ already inside this very document family. **State the wiring, not the intent, an
       client-side counters the run will read (applied-wrecked count, tracker count) ship with it.
       ⚠️ `UnitSnapshot.cs`, `PbjMessage.cs`, `PbjMessageCodec.cs`, `Keyframes.cs` are 🔴 queue
       files — no splits in flight. Gate: `make dist` exit 0; `peer-selftest` ALL PASS (it WILL
-      change here — the protocol moved; that is expected and the PR says so).
+      change here — the protocol moved; that is expected and the PR says so). 🔴 **When this was
+      written it was false** — the verdict line named no version, so a v10 run printed exactly what
+      a v9 run printed. Item B10 made it true: the line is now
+      `ALL PASS (11 scenarios, protocol v10, mod 0.24.0)`.
 - [ ] 🧑 **Eyes-verification of the corpse behaviour rides R1** (counters are agent-readable;
       "looks dead and stays dead" is a human reading, as stage 1's was).
 

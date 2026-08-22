@@ -607,7 +607,7 @@ says so rather than treating it as a surprise.
 make record-wire-surface        # Makefile:326 — mandatory, the hash moves
 make record-split-grouping      # Makefile:270 — see below, and the roadmap omits it
 make dist                       # exit 0, and READ THE TAIL, not a grep for success words
-make peer-selftest              # ALL PASS (11 scenarios) -- see the note below
+make peer-selftest              # ALL PASS (11 scenarios, protocol v10, mod 0.24.0)
 ```
 
 ✅ **`make record-split-grouping` WAS RUN — closed 2026-08-22.** `split-grouping.lock` now records
@@ -624,6 +624,19 @@ wrong-directory or stale-build run prints the same confident PASS. The gate is g
 nothing about the wire version.** ⇒ **State which QUESTION a green gate answers, not just that it
 was green.** A one-line version banner in the selftest verdict would retire this for every future
 bump and is filed as its own item.
+
+✅ **CLOSED 2026-08-22 by item B10.** The verdict line now carries the build it was:
+`[selftest] ALL PASS (11 scenarios, protocol v10, mod 0.24.0)` — see `SelfTest.Run` and
+`SelfTest.TryResolveBuild` (cited by MEMBER; the old `SelfTest.cs:115` cite is stale). The two
+numbers are read off the **loaded** `PBAndJ.Core`'s metadata rather than written down, because both
+are `const` and a plain reference would inline the HARNESS's copy — which is the one value that
+cannot detect the stale-build case. If the loaded Core disagrees with what this peer was compiled
+against, the run **halts** before scenario one instead of printing a version it cannot stand behind.
+⚠️ Two consequences for the gate lines in this file and the roadmap: the verdict line now
+changes on a **mod** bump as well as a protocol one, so “`peer-selftest` unchanged” is no longer
+available as evidence that no wire byte moved; and grepping a run's output for `protocol v` proves
+nothing — the handshake log lines have always contained that string (11 of them in a pre-change
+run). Grep the **verdict line**: `^\[selftest\] ALL PASS \([0-9]+ scenarios, protocol v`.
 
 The superseded text, kept because the reasoning still holds for the *next* locked-family change:
 `split-grouping.lock` recorded 15 families / 145 part files / **1541 members** (`:11`) when this was
