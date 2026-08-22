@@ -42,7 +42,15 @@ namespace PBAndJ.Core.Tests.Net
             // same unit record. A v8 peer stops reading before both, and a v9
             // peer reading a v8 record takes the next unit's name length as a
             // part count, so there is no partial compatibility to preserve.
-            Assert.Equal(9, PbjProtocol.Version);
+            // v10 (M17 stage 2) appends three pilot facts to the same unit
+            // record -- a death bit with its cause string, a knocked-out bit and
+            // an ejected bit -- after M16's part-state list. A v9 peer stops
+            // reading before them, and a v10 peer reading a v9 record takes
+            // whatever follows as a bool. isWrecked did NOT move: it has ridden
+            // every unit record since M15 and stage 2 needed only an apply path
+            // for it, so the wrecked-unit cluster costs three new fields and not
+            // four.
+            Assert.Equal(10, PbjProtocol.Version);
         }
 
         [Fact]
@@ -277,7 +285,12 @@ namespace PBAndJ.Core.Tests.Net
             // for the shape of a message, and the honest reading is that two
             // peers across it interoperate byte for byte while the handshake
             // refuses them anyway, which is the safe direction.
-            Assert.Equal("0.23.0", PbjProtocol.ModVersion);
+            // 0.24.0 for M17 stage 2 -- the wrecked-unit cluster -- and this
+            // one moves WITH PbjProtocol.Version, which after three consecutive
+            // exceptions is worth saying out loud: the unit record grew three
+            // pilot fields, so the layout really did change and both numbers move
+            // together.
+            Assert.Equal("0.24.0", PbjProtocol.ModVersion);
         }
 
         [Fact]

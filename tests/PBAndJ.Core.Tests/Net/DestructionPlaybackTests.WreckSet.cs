@@ -95,6 +95,25 @@ namespace PBAndJ.Core.Tests.Net
             Assert.True(state.IsUnitWrecked("a"));
         }
 
+        // --- M17 stage 2: the ECS flag's lifetime, which is NOT this set's ---
+
+        [Fact]
+        public void ShouldHoldWreckFlagAcrossCombatEnd_IsTrue()
+        {
+            // 🔴 The decision, in Core so it can be pinned. Stage 2 writes
+            // persistent.isWrecked, and ClearDestruction must leave it alone.
+            //
+            // The horn that makes this asymmetric is the FAULT case, not the
+            // ordinary one: StopKeyframes -- hence ClearDestruction -- also
+            // fires on Bye and on Fault, and after either the human keeps
+            // playing that same fight single-player. They will set Simulating
+            // themselves and reach the all-hostiles-inactive count, which
+            // consults IsUnitActive, which consults isWrecked. Clearing the flag
+            // would resurrect every corpse into that count and make the fight
+            // unwinnable. Flipping this to false is the mutation.
+            Assert.True(DestructionState.ShouldHoldWreckFlagAcrossCombatEnd);
+        }
+
         [Fact]
         public void IsUnitWrecked_AfterClear_IsFalse()
         {

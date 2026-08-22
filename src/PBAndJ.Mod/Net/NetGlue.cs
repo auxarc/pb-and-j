@@ -80,6 +80,24 @@ namespace PBAndJ.Mod.Net
         /// </remarks>
         internal static bool IsHost => HasSession && runtime!.Session is HostSession;
 
+        /// <summary>
+        /// The live session, or null when there is none. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// Narrower on purpose than exposing <c>runtime</c> itself: the one thing
+        /// asking for this is <see cref="WreckingPatches"/>, which needs to know
+        /// whether a <c>ClientSession</c> is live and what state it is in, and a
+        /// glue-wide handle on the runtime would be a second way to reach the
+        /// pump and the transports.
+        /// <para>
+        /// Reads the runtime rather than a remembered flag, for the same reason
+        /// <see cref="IsHost"/> does: the connect screen and the console can each
+        /// start either kind of session, and a remembered answer would be a
+        /// second source of truth for something the runtime already knows.
+        /// </para>
+        /// </remarks>
+        internal static IPbjSession? Session => HasSession ? runtime!.Session : null;
+
 
         // --- the pump ---
 

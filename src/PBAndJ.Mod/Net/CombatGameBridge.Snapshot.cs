@@ -73,6 +73,17 @@ namespace PBAndJ.Mod.Net
                 // unit's wreck moment is derived from it below.
                 var wrecked = WreckedPartsOf(persistent);
 
+                // M17 stage 2. One pilot per unit, reached through the unit's own
+                // link, which is why these ride the unit record and no new
+                // message type is needed. An uncrewed unit and a unit whose pilot
+                // entity has gone both come out as "nothing has happened", which
+                // is the same answer IsUnitActive's own uncrewed early-out gives.
+                var pilot = PilotOf(persistent);
+                var pilotDead = pilot != null && pilot.hasDeathStatus;
+                var pilotDeathCause = pilotDead ? pilot!.deathStatus.cause : null;
+                var pilotKnockedOut = pilot != null && pilot.isKnockedOut;
+                var pilotEjected = pilot != null && pilot.isEjected;
+
                 units.Add(new UnitSnapshot(
                     persistent.nameInternal.s,
                     new Vec3(position.x, position.y, position.z),
@@ -110,7 +121,17 @@ namespace PBAndJ.Mod.Net
                     // seeds each part's integrity from the unit's pre-combat
                     // frame integrity, so "absent means pristine" would be wrong.
                     PartStatesOf(persistent),
-                    hasIntegrity));
+                    hasIntegrity,
+                    // M17 stage 2. The pilot's conclusions, never its stat
+                    // values: CombatPilotStatReactionSystem collects on
+                    // PilotStatValues and, on hp <= 0, locally invents a death
+                    // cause, concusses the entity, forces an ejection and raises
+                    // the same modal dialog M17 spends a patch suppressing. So
+                    // the inputs stay home and the answers travel.
+                    pilotDead,
+                    pilotDeathCause,
+                    pilotKnockedOut,
+                    pilotEjected));
 
                 if (units.Count == PbjMessageCodec.MaxUnitsPerSnapshot)
                 {
@@ -123,6 +144,32 @@ namespace PBAndJ.Mod.Net
                 }
             }
             return units;
+        }
+
+        /// <summary>
+        /// This unit's pilot, or null. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// Exactly the resolution <c>ScenarioUtility.IsUnitActive</c> performs
+        /// before asking any of its pilot questions, transcribed rather than
+        /// approximated: the death status, the knocked-out flag and the ejected
+        /// flag all live on the PILOT's persistent entity, not the unit's, and
+        /// reading them off the unit would return three permanent falses that
+        /// look exactly like a healthy pilot.
+        /// <para>
+        /// ⚠️ <b>Placement, decided rather than defaulted:</b> this is the one
+        /// M17 helper with a call site in <c>CombatGameBridge.Snapshot.Apply.cs</c>
+        /// as well as here, so the family's "90% of call sites" rule does not
+        /// settle it. It lives in this part because it is a pure ECS <i>read</i>,
+        /// which is exactly what this part holds — the apply side calls it to
+        /// find the entity it is about to write to, not to write anything.
+        /// </para>
+        /// </remarks>
+        private static PersistentEntity? PilotOf(PersistentEntity unit)
+        {
+            return unit.hasEntityLinkPilot
+                ? IDUtility.GetPersistentEntity(unit.entityLinkPilot.persistentID)
+                : null;
         }
 
         /// <summary>

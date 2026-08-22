@@ -198,8 +198,23 @@ namespace PBAndJ.Core.Net
         /// there is no partial compatibility to preserve. <see cref="ModVersion"/>
         /// moved to 0.21.0 in the same commit.
         /// </para>
+        /// <para>
+        /// <b>10 — M17 stage 2, and a tail move again.</b> Every unit's snapshot
+        /// record gained three pilot facts: a death bit with its cause string, a
+        /// knocked-out bit and an ejected bit, all appended after M16's part-state
+        /// list. They are what <c>ScenarioUtility.IsUnitActive</c> asks about a
+        /// pilot, and a client can derive none of them — the system that produces
+        /// them locally invents a death cause and raises a modal dialog, so the
+        /// pilot's stat values deliberately do not travel and the conclusions do.
+        /// A v9 peer stops reading before them; a v10 peer reading a v9 record
+        /// would take whatever follows as a bool, so there is no partial
+        /// compatibility to preserve.
+        /// <b><c>isWrecked</c> did NOT move</b>: it has crossed since M15 and
+        /// stage 2 needed only an apply path for it, not a second bit.
+        /// <see cref="ModVersion"/> moved to 0.24.0 in the same commit.
+        /// </para>
         /// </remarks>
-        public const int Version = 9;
+        public const int Version = 10;
 
         /// <summary>
         /// This build of the mod, as peers announce it to each other.
@@ -234,8 +249,15 @@ namespace PBAndJ.Core.Net
         /// side of it interoperate byte for byte, and the handshake refuses them
         /// anyway, which is the conservative direction.
         /// </para>
+        /// <para>
+        /// <b>0.24.0 moves it WITH <see cref="Version"/></b>, which is the
+        /// ordinary case and worth one line only because the three paragraphs
+        /// above are all exceptions to it: M17 stage 2 breaks the layout, so both
+        /// numbers move together and <c>wire-surface.lock</c> is re-recorded in
+        /// the same commit.
+        /// </para>
         /// </remarks>
-        public const string ModVersion = "0.23.0";
+        public const string ModVersion = "0.24.0";
 
         /// <summary>
         /// How long a departed peer's units stay reserved for its return.

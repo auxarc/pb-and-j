@@ -17,6 +17,40 @@ namespace PBAndJ.Core.Tests.Net
     {
         // --- combat lifecycle from the host ---
 
+        // --- M17 stage 2: which states own the combat outcome ---
+
+        [Theory]
+        [InlineData(ClientSessionState.Handshaking, true)]
+        [InlineData(ClientSessionState.Lobby, true)]
+        [InlineData(ClientSessionState.Planning, true)]
+        [InlineData(ClientSessionState.Watching, true)]
+        [InlineData(ClientSessionState.Closed, false)]
+        [InlineData(ClientSessionState.Faulted, false)]
+        public void ClientOwnsCombatOutcome_IsFalseOnceTheSessionIsOver(
+            ClientSessionState state, bool owns)
+        {
+            // 🔴 The predicate M17 stage 2's EndCombatWithOutcome prefix is armed
+            // by, and the two false rows are the correctness requirement rather
+            // than tidiness. Fault's own comment says a lost host must never
+            // leave the local execute button disabled -- the player continues
+            // single-player from there, simulates locally, and reaches
+            // CombatExecutionEndSystem normally. A prefix still armed in Closed
+            // or Faulted would eat that outcome and make the fight unwinnable
+            // AND unlosable for ever. Adding Faulted to the owning set is the
+            // mutation this pins.
+            Assert.Equal(owns, ClientSession.ClientOwnsCombatOutcome(state));
+        }
+
+        [Fact]
+        public void ClientOwnsCombatOutcome_CoversEveryDeclaredState()
+        {
+            // The theory above is a hand-maintained list, which is a claim about
+            // the world that nothing checks. This is what checks it: a seventh
+            // state added to the enum fails here rather than silently arriving
+            // untested.
+            Assert.Equal(6, Enum.GetValues(typeof(ClientSessionState)).Length);
+        }
+
         [Fact]
         public void CombatStart_MovesToPlanningAtTheHostsTurnAndUnlocks()
         {

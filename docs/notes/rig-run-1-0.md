@@ -56,7 +56,9 @@ Two habits that go with it, both paid for here already:
 |---|---|---|
 | `pbj.checkpoint-stat` | **L1**, inside `CheckpointGlue.cs` | attempts / refusals-by-reason / writes / last-ms / last-turn. This runbook references it; it does **not** ship it. |
 | `pbj checkpoint: turn=N ms=X writes=K` log line | **L1** | the per-turn stall line. |
-| client applied-wrecked / tracker counters | **L3** | reading 6's numbers. |
+| `pbj.wreck-patches` | **L3**, `DestructProbeGlue.cs` | reading 6a. Whether the three stage-2 Harmony patches resolved and applied — the only instrument for a failure mode `make dist` cannot see. |
+| `pbj.destruct-probe` `cascade:` / `wreckFlags:` columns | **L3** | readings 6b and 6c. |
+| `pbj.force-end <victory\|defeat>` | **L3**, `DestructProbeGlue.cs` | reading 6f. The deliberate exit the `EndCombatWithOutcome` prefix leaves open; prints which branch it took. |
 
 ---
 
@@ -246,14 +248,59 @@ tools/drive.sh 2 "pbj.checkpoint-stat"   # after several executed turns
 refusal — record which one.
 
 **R1·6 — wrecked units on the client** *(M17 stage 2 acceptance)*
+
+⚠️ **CORRECTED 2026-08-21 (M17 stage 2 build).** This block used to be one reading and it carried
+two claims stage 2 makes false. It said *"a client's own ECS reads zero for `wrecked` by design"* —
+**stage 2's whole point is that it no longer does**, so the ECS column is now the reading rather
+than a known-zero to look past. And the roadmap's row named "corpse not orderable/targetable" as an
+acceptance property: **a client's corpse stays clickable**, because selection is a physics raycast
+filtered by `InputCombatUnitSelectionUtility.IsSelectable`, which consults neither `IsUnitActive`
+nor `isWrecked`. Do not record that as a defect.
+
+**R1·6a — did the patches even apply?** *(take this FIRST; no fight needed)*
 ```
-tools/drive.sh 2 "pbj.destruct-probe"    # host wrecks
-tools/drive.sh 3 "pbj.destruct-probe"    # client applied + tracker counts (L3's counters)
-tools/drive.sh 3 "pbj.drive-state"
+tools/drive.sh 3 "pbj.wreck-patches"
 ```
-`ZERO:` `applied=0` with host `wrecked>0` = the apply path is dead. The two counts print side by
-side; a client's own ECS reads zero for `wrecked` by design, so read L3's *applied* counter, not the
-ECS column.
+`ZERO:` `resolved=False` = the string-name attribute is wrong or the game moved the member.
+`resolved=True owners=0` = the target is fine and **our patch class never applied**. 🔴 `PBAndJ.Mod`
+is outside the 100% gate, so a dead Harmony patch builds green, deploys green and simply never
+fires — this command is the only thing in the project that can tell you.
+
+**R1·6b/6c — the cascade and the flag** *(after the host's kill lands)*
+```
+tools/drive.sh 2 "pbj.destruct-probe"    # host: wrecked=N
+tools/drive.sh 3 "pbj.destruct-probe"    # client: cascade=..., wreckFlags=..., wrecked=N
+```
+`ZERO (6b):` `cascade: filtered=0 passed=0` = the `Filter` was never called at all — the patch is
+dead, or nothing was wrecked. `filtered=0 passed>0` = the patch applied and the predicate was
+false; read `suppressing=` on the same line before concluding anything.
+`ZERO (6c):` `wreckFlags: set=0` with host `wrecked>0` = the apply path is dead. `refused>0` names
+an exception in the log — quote it.
+⚠️ `wrecksPlayed`, `pose: frozen` and `wreckFlags: set` are **three different questions**. A
+wreck-visual counter moving is not evidence stage 2 ran; stage 1 already paid for that confusion.
+⚠️ Do **not** take 6b or 6c during a `pbj.fx-hold` — the hold clamps the cursor so the window never
+finishes, and these counters will legitimately stand still.
+
+**R1·6d — 🧑 the enemy tracker corrects**
+**Human reading, agent cannot take it.** *Exactly what to do:* on instance 3, after the host's kill
+lands, look at the unit-tab row. *Expected:* the wrecked enemies are gone from it, and the count
+matches the host's. *The ambiguity to watch for:* `set=N` says the ECS moved, not that the UI
+redrew — this is the reading that tests the explicit `RedrawUnitTabs`, and it is the exact artefact
+M16 photographed (host at VICTORY while the client still counted six live enemies).
+
+**R1·6e — no modal dialog, no frozen debris**
+Read the client `Player.log` for exceptions during combat, and look at a corpse's core for stuck
+fragments. `ZERO:` a clean log is **not** evidence the cascade was suppressed — only that it did
+not throw. 6b is that evidence. Read them together.
+
+**R1·6f — the escape hatch**
+```
+tools/drive.sh 3 "pbj.force-end victory"
+```
+`ZERO:` there is none — the command names its branch: `BYPASSED`, `prefix was NOT ARMED (no live
+client session)`, `NOT IN COMBAT`, `BAD ARGUMENT` or `THREW`. A silent return is impossible by
+construction, which is the point. ⚠️ Take R1·10b **before** this PR merges; the prefix closes the
+route that reading uses.
 
 **R1·7 — 🧑 client corpse stays collapsed through planning**
 **Human reading, agent cannot take it.** *Exactly what to do:* on instance 3, after the host's kill
@@ -261,7 +308,7 @@ lands, watch the wrecked unit through the whole of the next planning phase and t
 it. *Expected:* it collapses and stays collapsed. *The ambiguity to watch for:* stage 1's defect was
 that the wreck **stood back up** a moment later, so a glance at the instant of death is not the
 reading — the reading is the seconds after it. Record "stayed down" / "stood up at approximately
-T+Ns", with the counters from R1·6 quoted beside it.
+T+Ns", with the counters from R1·6c quoted beside it.
 
 **R1·8 — `presimulated`** *(advanced-particle-blocks decision — see §5, this does NOT close in one run)*
 ```
@@ -535,7 +582,12 @@ verified byte-identical.
 | R1·3 concurrent edits + entry watch | | | |
 | R1·4 checkpoint cadence under load | | | |
 | R1·5 digest lines vs turn count | | | |
-| R1·6 client applied-wrecked / tracker | | | |
+| R1·6a `pbj.wreck-patches` resolved/owners | | | |
+| R1·6b cascade filtered/passed | | | |
+| R1·6c wreckFlags set/cleared/refused | | | |
+| R1·6d 🧑 enemy tracker corrects | | | |
+| R1·6e clean log, no frozen debris | | | |
+| R1·6f `pbj.force-end` branch taken | | | |
 | R1·7 🧑 corpse stays collapsed | | | |
 | R1·8 `presimulated` (fight 1 of ≥3) | | | |
 | R1·9 debriefing fingerprints, before/after | | | |

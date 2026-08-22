@@ -269,6 +269,25 @@ namespace PBAndJ.Core.Net
         /// </remarks>
         public const int MaxAssetKeyLength = 128;
 
+        /// <summary>
+        /// Longest pilot death cause a unit snapshot may carry, in characters.
+        /// M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// Two orders of magnitude smaller than the other string caps here
+        /// because the field is not free-form: it is a content key the game
+        /// writes itself, and the longest one shipped is a short word.
+        /// <para>
+        /// 🔴 <b>Unlike <see cref="MaxAssetKeyLength"/>, this cap is enforced on
+        /// BOTH sides and it refuses rather than truncating.</b> Truncating
+        /// would put a cause on the wire the host never wrote, and neither peer
+        /// could tell. The encode check catches this machine's own bug loudly;
+        /// the decode check is the one that matters against a peer, which is not
+        /// this process and can send anything.
+        /// </para>
+        /// </remarks>
+        public const int MaxPilotDeathCauseLength = 32;
+
         public static byte[] Encode(PbjMessage message)
         {
             if (message == null)
@@ -841,13 +860,64 @@ namespace PBAndJ.Core.Net
                 writer.WriteSingle(stated[i].Integrity);
                 writer.WriteSingle(stated[i].Barrier);
             }
+
+            // M17 stage 2, and now the tail for the same reason M16's pair was:
+            // the newest fields go last, so a peer one version behind stops
+            // reading rather than misreading everything after them.
+            //
+            // isWrecked is NOT here. It has crossed since M15 -- see the
+            // WriteBool(unit.IsWrecked) above -- and stage 2 adds no second bit
+            // for it, only an apply path. A duplicate would read as the flag
+            // surviving one accessor and not the other.
+            writer.WriteBool(unit.PilotDead);
+            WritePilotDeathCause(writer, unit.PilotDeathCause);
+            writer.WriteBool(unit.PilotKnockedOut);
+            writer.WriteBool(unit.PilotEjected);
+        }
+
+        /// <summary>
+        /// Writes the death cause, refusing an over-long one outright.
+        /// </summary>
+        /// <remarks>
+        /// Refusal rather than truncation, and a fault rather than a clamp,
+        /// because the two failure modes are not comparable: a snapshot clamped
+        /// at <see cref="MaxUnitsPerSnapshot"/> loses units it could not have
+        /// carried anyway, while a shortened cause is a <i>wrong value</i> that
+        /// arrives looking correct. There is no legitimate input over the cap.
+        /// </remarks>
+        private static void WritePilotDeathCause(PbjWriter writer, string? cause)
+        {
+            if (cause != null && cause.Length > MaxPilotDeathCauseLength)
+            {
+                throw new PbjProtocolException(
+                    "Pilot death cause of " + cause.Length
+                        + " characters exceeds the maximum of " + MaxPilotDeathCauseLength + ".");
+            }
+            writer.WriteString(cause);
+        }
+
+        /// <summary>Reads the death cause, refusing an over-long one.</summary>
+        /// <remarks>
+        /// The peer is not this process. <see cref="WritePilotDeathCause"/>
+        /// speaks only for what we send.
+        /// </remarks>
+        private static string? ReadPilotDeathCause(PbjReader reader)
+        {
+            var cause = reader.ReadString();
+            if (cause != null && cause.Length > MaxPilotDeathCauseLength)
+            {
+                throw new PbjProtocolException(
+                    "Pilot death cause of " + cause.Length
+                        + " characters exceeds the maximum of " + MaxPilotDeathCauseLength + ".");
+            }
+            return cause;
         }
 
         // Every field is read into its own local rather than into the argument
         // list. C# does evaluate arguments left to right, so the older nested
         // form was correct — but "correct because of an evaluation-order rule"
         // is not what a wire decoder should rest on, and this record now has
-        // thirteen fields rather than seven.
+        // seventeen fields rather than seven.
         private static UnitSnapshot ReadUnitSnapshot(PbjReader reader)
         {
             var name = reader.ReadString();
@@ -882,10 +952,16 @@ namespace PBAndJ.Core.Net
                 stated[i] = new PartState(socket, reader.ReadSingle(), reader.ReadSingle());
             }
 
+            var pilotDead = reader.ReadBool();
+            var pilotDeathCause = ReadPilotDeathCause(reader);
+            var pilotKnockedOut = reader.ReadBool();
+            var pilotEjected = reader.ReadBool();
+
             return new UnitSnapshot(
                 name, position, rotation, facing, integrity,
                 isHidden, isHiddenDetectable, isDeployed, hasArrivalTime, arrivalTime,
-                isWrecked, wreckedAt, parts, stated, hasFrameIntegrity);
+                isWrecked, wreckedAt, parts, stated, hasFrameIntegrity,
+                pilotDead, pilotDeathCause, pilotKnockedOut, pilotEjected);
         }
 
         /// <summary>

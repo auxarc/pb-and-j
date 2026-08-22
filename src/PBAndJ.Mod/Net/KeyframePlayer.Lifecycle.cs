@@ -352,6 +352,12 @@ namespace PBAndJ.Mod.Net
                 ApplyDestruction(target);
             }
 
+            // M17 stage 2, and OUTSIDE the loop on purpose: the two calls a flag
+            // write owes are a full unit-tab rebuild and a scenario-state poke,
+            // and paying them per unit would be a rebuild per corpse per frame.
+            // Inert unless a flag actually changed this frame.
+            FlushWreckFlagBatch();
+
             // After the transform and pose writes, so a unit revealed this frame
             // is shown where the window says it is rather than where it was left
             // standing a frame earlier.

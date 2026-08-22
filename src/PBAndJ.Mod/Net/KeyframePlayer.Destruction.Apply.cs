@@ -4,6 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using PBAndJ.Core.Net;
 using PhantomBrigade;
 using PhantomBrigade.Combat;
+using PhantomBrigade.Combat.Components;
 using PhantomBrigade.Combat.View;
 using PhantomBrigade.Data;
 using UnityEngine;
@@ -70,6 +71,175 @@ namespace PBAndJ.Mod.Net
         }
 
         /// <summary>
+        /// Whether a flag write has landed since the last batch refresh.
+        /// </summary>
+        /// <remarks>
+        /// The batch is what makes <see cref="DriveWreckFlag"/> affordable inside
+        /// a per-frame loop: the two calls it defers are a full unit-tab rebuild
+        /// and a scenario-state poke, and doing either per unit would spend a
+        /// rebuild per corpse per frame.
+        /// </remarks>
+        private static bool wreckFlagsPending;
+
+        /// <summary>
+        /// Plants the host's <c>isWrecked</c> on this client's ECS. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 <b>This is the milestone.</b> M15 drew the wreck and deliberately
+        /// left the component alone; stage 2 sets it, and is only safe to do so
+        /// because <see cref="WreckingPatches"/> has taken the two damaging
+        /// cascades off first. <b>The patches and this call ship together</b> —
+        /// this without them is the modal-dialog, frozen-debris,
+        /// serialized-frame-defect cascade M15's own header spends a paragraph
+        /// refusing.
+        /// <para>
+        /// <b>What it buys</b> is chiefly the enemy tracker:
+        /// <c>CIViewCombatMode.RedrawUnitTabs</c> filters on <c>item.isWrecked</c>
+        /// <i>directly</i>, not through <c>IsUnitActive</c>, and that is the
+        /// artefact M16 photographed — a host at VICTORY while the client still
+        /// counted six live enemies. In-world markers, the crash overlay, the
+        /// execute-readiness warning and the ~20 <c>IsUnitActive</c> sites follow.
+        /// </para>
+        /// <para>
+        /// ⚠️ <b>What it does NOT buy, said before a playtest "finds" it.</b> A
+        /// client's corpse stays <b>clickable</b>: selection is a physics raycast
+        /// filtered by <c>InputCombatUnitSelectionUtility.IsSelectable</c>, which
+        /// tests <c>isHidden</c>, <c>isDestroyed</c>, <c>hasPosition</c> and
+        /// <c>flag_untargetable</c> and consults neither <c>IsUnitActive</c> nor
+        /// <c>isWrecked</c>. Roster divergence at combat end is also untouched —
+        /// <c>FreeOrDestroyCombatParticipants</c> destroys enemy participants
+        /// unconditionally, never consulting this flag.
+        /// </para>
+        /// <para>
+        /// 🔴 <b>THE TRAP THIS OPENS, and the first place to look if a client's
+        /// corpse ever starts ragdolling under its own physics.</b>
+        /// <c>ActionUtility.CrashEntity</c> routes a unit with this flag straight
+        /// into <c>UnitUtilities.OnUnitNonfunctional</c>, which sets
+        /// <c>mode = Active</c> / <c>state = Dead</c> — precisely the pair
+        /// <c>PuppetMaster.OnEnable</c> answers by re-activating the ragdoll, and
+        /// the trap M17 stage 1 spent a build learning to avoid. Today it is
+        /// unreachable because <c>isWrecked</c> is false on a client; <b>this
+        /// method makes it reachable.</b> Every reachable caller was checked:
+        /// <c>ActionPlaybackSystem</c> opens on <c>combat.Simulating</c>,
+        /// <c>CombatCrashingSystem</c> is self-closing, and the damage and trigger
+        /// paths are not driven by a non-simulating client. Level destruction was
+        /// the open one and is now closed from the other end —
+        /// <c>OverlapUtility.OnAreaOfEffectAgainstUnits</c> admits a unit to its
+        /// hit list only when <c>!linkedPersistentEntity.isWrecked</c>, so the
+        /// flag closes that route rather than opening it. What is left is
+        /// <c>OverlapUtility.CheckUnitsOnDestroyedPoint</c>, whose non-turret arm
+        /// does <b>not</b> re-check the flag — reachable only if this client's own
+        /// <c>AreaManager</c> destroys a point, which needs scenario content or
+        /// the debug console, and is the same content contingency the
+        /// <c>EndCombatWithOutcome</c> prefix is priced for.
+        /// </para>
+        /// </remarks>
+        private static void DriveWreckFlag(PersistentEntity persistent, CombatEntity? unit, bool wrecked)
+        {
+            if (persistent.isWrecked == wrecked)
+            {
+                // The setter early-returns on an unchanged value anyway; this is
+                // here so the counters and the batch refresh describe CHANGES
+                // rather than calls. A redraw per playback frame per corpse is
+                // the cost of getting this wrong.
+                return;
+            }
+
+            try
+            {
+                persistent.isWrecked = wrecked;
+
+                // Vanilla writes both, one line apart, and un-writes both
+                // together (CombatActionEvent then ScenarioUtility's revive).
+                // Free correctness: Functional has no collector anywhere — its
+                // matcher property exists with zero references — and it is read
+                // at ninety-odd sites.
+                persistent.isFunctional = !wrecked;
+
+                if (wrecked && unit != null)
+                {
+                    // ⚠️ BEST-EFFORT, and explicitly not an invariant — never
+                    // assert a collider state on the back of it. It self-guards
+                    // on isWrecked, so it is inert before the write above and the
+                    // order is load-bearing. Its tail PERMANENTLY removes the
+                    // trigger collider from combatView.colliders, which nothing
+                    // restores — CombatUnitRevive does not, and revival is a real
+                    // wire path here — while our own CombatView.OnVisibility(true)
+                    // re-enables every collider still in the list on the next
+                    // reveal. So half of it is undone and half of it is forever.
+                    // Its honest value is one frame of parity with vanilla.
+                    UnitUtilities.OnHandleInactiveUnitCollision(unit);
+                }
+
+                if (wrecked)
+                {
+                    WreckFlagsSet++;
+                }
+                else
+                {
+                    WreckFlagsCleared++;
+                }
+                wreckFlagsPending = true;
+            }
+            catch (Exception e)
+            {
+                WreckFlagsRefused++;
+                Debug.LogWarning(
+                    "[pb-and-j] wreck flag for '"
+                        + (persistent.hasNameInternal ? persistent.nameInternal.s : "?")
+                        + "' was refused: " + e.Message);
+            }
+        }
+
+        /// <summary>
+        /// The two once-per-batch calls a flag write owes. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// <b>The redraw is the headline mechanism, not decoration.</b>
+        /// <c>CIViewCombatMode.RedrawUnitTabs</c> tests <c>item.isWrecked</c>
+        /// directly and <b>nothing in the reactive cascade calls it</b> — vanilla
+        /// pairs the flag write with an explicit call one line later. There is a
+        /// self-healing path (<c>CombatUILinkTimeline</c> redraws on any action
+        /// change while not simulating) but it fires on the next action change,
+        /// not now. The view defers safely when it is not entered, setting its own
+        /// <c>unitRedrawScheduled</c>, so calling it outside unit-selection mode
+        /// is free.
+        /// <para>
+        /// 🔴 <b>The scenario poke is the line suppressing
+        /// <c>CombatUnitWreckingSystem</c> drops</b>, and repaying it is what
+        /// makes kill-target objectives refresh on a client at all. It is NOT
+        /// free: contexts accumulate by bitwise OR until consumed, so
+        /// <c>OnUnitDisabled | OnExecutionEnd</c> inside one window is what lets a
+        /// client run the victory count. <b>This line and the
+        /// <c>EndCombatWithOutcome</c> prefix ship together or not at all.</b>
+        /// </para>
+        /// </remarks>
+        private static void FlushWreckFlagBatch()
+        {
+            if (!wreckFlagsPending)
+            {
+                return;
+            }
+            wreckFlagsPending = false;
+
+            try
+            {
+                if (CIViewCombatMode.ins != null)
+                {
+                    CIViewCombatMode.ins.RedrawUnitTabs();
+                }
+                CombatUtilities.AddScenarioStateRefreshContext(
+                    ScenarioStateRefreshContext.OnUnitDisabled);
+            }
+            catch (Exception e)
+            {
+                WreckFlagsRefused++;
+                Debug.LogWarning(
+                    "[pb-and-j] the wreck-flag batch refresh was refused: " + e.Message);
+            }
+        }
+
+        /// <summary>
         /// Forgets every part, for a combat or a session that has ended. M15.
         /// </summary>
         /// <remarks>
@@ -88,6 +258,22 @@ namespace PBAndJ.Mod.Net
             // combat and destroyed with the scene, so the handles die with them.
             frozen.Clear();
             Unfrozen = 0;
+
+            // 🔴 M17 stage 2, and the sentence the next reader needs BEFORE they
+            // tidy up: this method deliberately does NOT clear the ECS
+            // isWrecked flag it planted. See
+            // DestructionState.ShouldHoldWreckFlagAcrossCombatEnd for why, and
+            // the short version is that StopKeyframes also fires on Bye and on
+            // Fault, after which the human keeps playing THAT SAME FIGHT
+            // single-player -- clearing the flag would resurrect every corpse
+            // into the victory count and make the fight unwinnable. What
+            // reclaims the flag is TeardownCampaignSystem destroying every
+            // persistent entity on the way out of the campaign, not us.
+            WreckFlagsSet = 0;
+            WreckFlagsCleared = 0;
+            WreckFlagsRefused = 0;
+            wreckFlagsPending = false;
+            WreckingPatches.ResetCounters();
 
             destruction.Clear();
             DestructionsPlayed = 0;
@@ -128,6 +314,12 @@ namespace PBAndJ.Mod.Net
 
             var byName = new Dictionary<string, IUnitVisualManager>();
             var hiddenByName = new Dictionary<string, bool>();
+            // M17 stage 2. The entities themselves, because the flag write needs
+            // the persistent entity and OnHandleInactiveUnitCollision needs the
+            // combat one. Built in the same walk rather than re-resolved per
+            // wreck: the walk is already paying for the link lookup.
+            var unitByName = new Dictionary<string, CombatEntity>();
+            var persistentByName = new Dictionary<string, PersistentEntity>();
             foreach (var unit in Contexts.sharedInstance.combat.GetGroup(CombatMatcher.UnitTag).GetEntities())
             {
                 if (!unit.hasCombatView || unit.combatView.view == null
@@ -142,6 +334,8 @@ namespace PBAndJ.Mod.Net
                 }
                 byName[persistent.nameInternal.s] = unit.combatView.view.visualManager;
                 hiddenByName[persistent.nameInternal.s] = unit.isHidden;
+                unitByName[persistent.nameInternal.s] = unit;
+                persistentByName[persistent.nameInternal.s] = persistent;
             }
 
             // M15 section 3.1, and BEFORE the parts below. A unit settling into
@@ -163,6 +357,16 @@ namespace PBAndJ.Mod.Net
                 {
                     hiddenByName.TryGetValue(wreck.Unit!, out var hidden);
                     DriveWreck(unitVisuals, hidden, wreck.Wrecked);
+
+                    // M17 stage 2, and this is the ONLY path that can carry
+                    // false: ApplyDestruction always drives a wreck, so an
+                    // un-wreck can only ever arrive as a settled one.
+                    if (persistentByName.TryGetValue(wreck.Unit!, out var persistent))
+                    {
+                        unitByName.TryGetValue(wreck.Unit!, out var unitEntity);
+                        DriveWreckFlag(persistent, unitEntity, wreck.Wrecked);
+                    }
+
                     if (!wreck.Wrecked)
                     {
                         // M17 stage 1, and only on this path: ApplyDestruction's
@@ -181,6 +385,10 @@ namespace PBAndJ.Mod.Net
                             + e.Message);
                 }
             }
+
+            // Once for the whole settle, never per unit: the redraw is a full
+            // unit-tab rebuild.
+            FlushWreckFlagBatch();
 
             var drives = update.Parts;
             for (var i = 0; i < drives.Count; i++)
@@ -284,6 +492,19 @@ namespace PBAndJ.Mod.Net
                     // through the very window we are playing.
                     var hidden = target.Unit != null && target.Unit.isHidden;
                     DriveWreck(target.Visuals, hidden, true);
+
+                    // M17 stage 2. The batch refresh this owes is flushed by
+                    // Advance, once after the whole target loop -- see
+                    // FlushWreckFlagBatch. Per unit it would be a unit-tab
+                    // rebuild per corpse per frame of the window.
+                    var persistent = target.Unit != null
+                        ? IDUtility.GetLinkedPersistentEntity(target.Unit)
+                        : null;
+                    if (persistent != null)
+                    {
+                        DriveWreckFlag(persistent, target.Unit, true);
+                    }
+
                     WrecksPlayed++;
                 }
                 catch (Exception e)

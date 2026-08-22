@@ -86,12 +86,18 @@ namespace PBAndJ.Mod.Net
                     state.Rotation.X, state.Rotation.Y, state.Rotation.Z, state.Rotation.W));
                 unit.ReplaceFacing(new Vector3(state.Facing.X, state.Facing.Y, state.Facing.Z));
 
+                // M17 stage 2. The pilot's three facts, which IsUnitActive asks
+                // of a DIFFERENT entity from the one this loop is holding.
+                ApplyPilot(persistent, state);
+
                 // M16 moved unitFrameIntegrity out of this loop. It is no longer
                 // a value to write but a presence to mirror, and the removal case
                 // reaches units this loop cannot — so the whole field is owned by
                 // ReceivePartIntegrity below, in one place.
                 byName.Remove(persistent.nameInternal.s);
             }
+
+            FlushPilotState();
 
             // M15. After the per-unit writes, and outside the loop, because the
             // set it settles spans units the loop above may never have reached —
@@ -117,6 +123,125 @@ namespace PBAndJ.Mod.Net
             if (revealed > 0 || hidden > 0)
             {
                 Debug.Log(NetLog.VisibilityCorrected(revealed, hidden));
+            }
+        }
+
+        /// <summary>
+        /// Whether any pilot state moved this snapshot, for the one redraw it owes.
+        /// </summary>
+        private static bool pilotStatePending;
+
+        /// <summary>
+        /// Mirrors the host's three pilot facts onto the pilot entity. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// 🔑 <b>The components directly, never the helpers.</b>
+        /// <c>PilotUtility.DeclareDeath</c> would additionally fire
+        /// <c>OnPilotEvent</c>, zero two pilot stats and run combat-state focus
+        /// events — the same class of cascade M17 stage 2 exists to avoid — and
+        /// <c>CombatUtilities.ForceEjection</c> is worse. These are three
+        /// component writes and nothing else.
+        /// <para>
+        /// <b>Both directions, because the wire carries state and not events.</b>
+        /// A pilot who stops being dead on the host stops being dead here. That
+        /// removal does wake one collector — <c>OverworldPilotUILinkSystem</c>
+        /// takes <c>DeathStatus</c> in an <c>AnyOf(...).AddedOrRemoved()</c>, and
+        /// it is <i>not</i> dormant during combat because
+        /// <c>OverworldSystemsPermanent</c> is registered
+        /// <c>SetAlwaysActiveAfterStack</c>. It is harmless only because its
+        /// whole <c>Execute</c> is four <c>IsEntered()</c>-guarded base-view
+        /// refreshes, none of which is entered during a fight. ⚠️ <b>That
+        /// inertness ends the day any milestone shows a base view over combat.</b>
+        /// </para>
+        /// <para>
+        /// ⚠️ <b>The death TIME is deliberately not carried, and is written as
+        /// zero.</b> It is the host's number on the host's clock, it is
+        /// <b>serialized</b> (<c>DataHelperSaveSerialization</c>), and a client
+        /// that invented one would write a different number into its own
+        /// checkpoint. Nothing reads it during a fight — the two views that do
+        /// are the extended pilot info and the overworld debriefing. Same
+        /// decision, and the same reasoning, as <c>unitFrameDefects</c>.
+        /// </para>
+        /// </remarks>
+        private static void ApplyPilot(PersistentEntity unit, UnitSnapshot state)
+        {
+            var pilot = PilotOf(unit);
+            if (pilot == null)
+            {
+                // Ordinary, not an error: an uncrewed unit has no pilot link at
+                // all, and IsUnitActive's own uncrewed early-out returns true
+                // before it asks any of these questions.
+                return;
+            }
+
+            if (state.PilotDead)
+            {
+                if (!pilot.hasDeathStatus)
+                {
+                    pilot.AddDeathStatus(0f, state.PilotDeathCause);
+                    pilotStatePending = true;
+                }
+                else if (!string.Equals(
+                    pilot.deathStatus.cause, state.PilotDeathCause, StringComparison.Ordinal))
+                {
+                    pilot.ReplaceDeathStatus(0f, state.PilotDeathCause);
+                }
+            }
+            else if (pilot.hasDeathStatus)
+            {
+                pilot.RemoveDeathStatus();
+                pilotStatePending = true;
+            }
+
+            // Flag setters early-return on an unchanged value, so the steady
+            // state is two comparisons per unit per snapshot and no collector
+            // can re-fire on a no-op.
+            if (pilot.isKnockedOut != state.PilotKnockedOut)
+            {
+                pilot.isKnockedOut = state.PilotKnockedOut;
+                pilotStatePending = true;
+            }
+            if (pilot.isEjected != state.PilotEjected)
+            {
+                pilot.isEjected = state.PilotEjected;
+                pilotStatePending = true;
+            }
+        }
+
+        /// <summary>
+        /// The one redraw a pilot change owes, once per snapshot. M17 stage 2.
+        /// </summary>
+        /// <remarks>
+        /// Same reasoning as <c>KeyframePlayer.FlushWreckFlagBatch</c>: the unit
+        /// tab list is rebuilt from <c>IsUnitActive</c>, which consults all three
+        /// of these, and nothing in the reactive cascade redraws it. The view
+        /// defers safely when it is not entered.
+        /// <para>
+        /// No scenario-state poke here, and that asymmetry is deliberate: the
+        /// wreck path repays a poke <c>CombatUnitWreckingSystem</c> would have
+        /// made and this path suppresses nothing, so adding one would be handing
+        /// a client an accumulator bit the game never gave it.
+        /// </para>
+        /// </remarks>
+        private static void FlushPilotState()
+        {
+            if (!pilotStatePending)
+            {
+                return;
+            }
+            pilotStatePending = false;
+
+            try
+            {
+                if (CIViewCombatMode.ins != null)
+                {
+                    CIViewCombatMode.ins.RedrawUnitTabs();
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning(
+                    "[pb-and-j] the pilot-state redraw was refused: " + e.Message);
             }
         }
 

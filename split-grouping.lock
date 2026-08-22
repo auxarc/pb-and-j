@@ -8,8 +8,9 @@
 # Re-record only when you have DECIDED the placement is the one you
 # want:  make record-split-grouping
 #
-# families: 15   part files: 145   members: 1556
+# families: 15   part files: 145   members: 1577
 
+src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.ClientOwnsCombatOutcome	1
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.ClientSession	2
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.ConnectedPeerIds	1
 src/PBAndJ.Core/Net	ClientSession	ClientSession.cs	ClientSession.Describe	1
@@ -349,14 +350,18 @@ src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Scenario.cs	CombatGameBridg
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Scenario.cs	CombatGameBridge.SaveFolder	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Scenario.cs	CombatGameBridge.WriteScenario	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.Apply.cs	CombatGameBridge.ApplyArrivalTime	1
+src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.Apply.cs	CombatGameBridge.ApplyPilot	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.Apply.cs	CombatGameBridge.ApplySnapshot	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.Apply.cs	CombatGameBridge.ApplyVisibility	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.Apply.cs	CombatGameBridge.DropLandingData	1
+src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.Apply.cs	CombatGameBridge.FlushPilotState	1
+src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.Apply.cs	CombatGameBridge.pilotStatePending	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.cs	CombatGameBridge.CaptureSnapshot	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.cs	CombatGameBridge.ComputeStateDigest	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.cs	CombatGameBridge.NoPartStates	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.cs	CombatGameBridge.NoWreckedParts	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.cs	CombatGameBridge.PartStatesOf	1
+src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.cs	CombatGameBridge.PilotOf	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.cs	CombatGameBridge.WreckMomentOf	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Snapshot.cs	CombatGameBridge.WreckedPartsOf	1
 src/PBAndJ.Mod/Net	CombatGameBridge	CombatGameBridge.Turn.cs	CombatGameBridge.ApplyOrder	1
@@ -410,6 +415,9 @@ src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.Apply.cs	KeyframePl
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.Apply.cs	KeyframePlayer.ApplySettled	1
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.Apply.cs	KeyframePlayer.ClearDestruction	1
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.Apply.cs	KeyframePlayer.DriveWreck	1
+src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.Apply.cs	KeyframePlayer.DriveWreckFlag	1
+src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.Apply.cs	KeyframePlayer.FlushWreckFlagBatch	1
+src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.Apply.cs	KeyframePlayer.wreckFlagsPending	1
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.ApplyPartIntegrity	1
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.ClearPartIntegrity	1
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.DestructionsPlayed	1
@@ -428,6 +436,9 @@ src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.R
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.ReceivePartIntegrity	1
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.SettlePartIntegrity	1
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.Unfrozen	1
+src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.WreckFlagsCleared	1
+src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.WreckFlagsRefused	1
+src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.WreckFlagsSet	1
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.WrecksPlayed	1
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.WrecksRefused	1
 src/PBAndJ.Mod/Net	KeyframePlayer	KeyframePlayer.Destruction.cs	KeyframePlayer.WrecksSettled	1
@@ -486,6 +497,7 @@ src/PBAndJ.Mod/Net	NetGlue	NetGlue.cs	NetGlue.IsHost	1
 src/PBAndJ.Mod/Net	NetGlue	NetGlue.cs	NetGlue.MailboxCapacity	1
 src/PBAndJ.Mod/Net	NetGlue	NetGlue.cs	NetGlue.MaxPeers	1
 src/PBAndJ.Mod/Net	NetGlue	NetGlue.cs	NetGlue.Pump	1
+src/PBAndJ.Mod/Net	NetGlue	NetGlue.cs	NetGlue.Session	1
 src/PBAndJ.Mod/Net	NetGlue	NetGlue.cs	NetGlue.Shutdown	1
 src/PBAndJ.Mod/Net	NetGlue	NetGlue.cs	NetGlue.UnityLog	1
 src/PBAndJ.Mod/Net	NetGlue	NetGlue.cs	NetGlue.bridge	1
@@ -556,6 +568,8 @@ tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Assignments.cs
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.BaseMirror.cs	ClientSessionTests.BasePosition_BecomesAMirrorEffect	1
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.BaseMirror.cs	ClientSessionTests.BasePosition_BeforeTheHandshake_IsAProtocolViolationLikeAnythingElse	1
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.BaseMirror.cs	ClientSessionTests.BasePosition_IsMirroredWhateverTheSessionState	1
+tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Combat.cs	ClientSessionTests.ClientOwnsCombatOutcome_CoversEveryDeclaredState	1
+tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Combat.cs	ClientSessionTests.ClientOwnsCombatOutcome_IsFalseOnceTheSessionIsOver	1
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Combat.cs	ClientSessionTests.CombatEnd_ReturnsToLobbyDropsOwnedUnitsAndHoldsExecute	1
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Combat.cs	ClientSessionTests.CombatEnd_ThenCombatStart_HandsExecuteBack	1
 tests/PBAndJ.Core.Tests/Net	ClientSessionTests	ClientSessionTests.Combat.cs	ClientSessionTests.CombatEnd_WhileWatchingAlsoHoldsExecute	1
@@ -747,6 +761,7 @@ tests/PBAndJ.Core.Tests/Net	DestructionPlaybackTests	DestructionPlaybackTests.Wr
 tests/PBAndJ.Core.Tests/Net	DestructionPlaybackTests	DestructionPlaybackTests.WreckSet.cs	DestructionStateTests.IsUnitWrecked_OfAUnitNeverHeardOf_IsFalse	1
 tests/PBAndJ.Core.Tests/Net	DestructionPlaybackTests	DestructionPlaybackTests.WreckSet.cs	DestructionStateTests.IsUnitWrecked_OfAWreckedUnit_IsTrue	1
 tests/PBAndJ.Core.Tests/Net	DestructionPlaybackTests	DestructionPlaybackTests.WreckSet.cs	DestructionStateTests.IsUnitWrecked_SurvivesSettlingTheWindow	1
+tests/PBAndJ.Core.Tests/Net	DestructionPlaybackTests	DestructionPlaybackTests.WreckSet.cs	DestructionStateTests.ShouldHoldWreckFlagAcrossCombatEnd_IsTrue	1
 tests/PBAndJ.Core.Tests/Net	DestructionPlaybackTests	DestructionPlaybackTests.Wrecks.cs	DestructionStateTests.Receive_AfterARevival_ShowsASecondWreck	1
 tests/PBAndJ.Core.Tests/Net	DestructionPlaybackTests	DestructionPlaybackTests.Wrecks.cs	DestructionStateTests.Receive_AsksNothingMore_OnceTheWreckHasBeenShown	1
 tests/PBAndJ.Core.Tests/Net	DestructionPlaybackTests	DestructionPlaybackTests.Wrecks.cs	DestructionStateTests.Receive_OfANewlyWreckedUnit_HoldsItForTheWindow	1
@@ -1314,16 +1329,22 @@ tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.ScenarioTr
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.ScenarioTransfer.cs	PbjMessageCodecTests.RoundTrip_Scenario_PreservesAnEmptyFile	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.ScenarioTransfer.cs	PbjMessageCodecTests.RoundTrip_Scenario_PreservesEveryFileByteForByte	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.ScenarioTransfer.cs	PbjMessageCodecTests.RoundTrip_Welcome_PreservesTheResumeToken	1
+tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.Decode_SnapshotWithAnOverlongDeathCause_Throws	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.Decode_SnapshotWithTooManyUnits_Throws	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.Encode_SnapshotAtTheCap_StaysWellUnderTheFrameLimit	1
+tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.Encode_SnapshotWithAnOverlongDeathCause_Throws	1
+tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.MaxPilotDeathCauseLength_IsThirtyTwo	1
+tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_SnapshotWithADeathCauseAtTheCap_Survives	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_PreservesArrivalTimePresenceAndValue	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_PreservesEveryFieldOfEveryUnit	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_PreservesFrameIntegrityPresenceAndValue	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_PreservesNonFiniteFloatsExactly	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_PreservesPartStatePerUnit	1
+tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_PreservesThePilotPerUnit	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_PreservesTheUnitWreckIndependentlyOfItsParts	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_PreservesVisibilityPerUnit	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_PreservesWreckedPartsPerUnit	1
+tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_StillCarriesTheUnitWreckExactlyOnce	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_TruncatesAnOversizePartStateList	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_TruncatesAnOversizeWreckedPartList	1
 tests/PBAndJ.Core.Tests/Net	PbjMessageCodecTests	PbjMessageCodecTests.Snapshots.cs	PbjMessageCodecTests.RoundTrip_Snapshot_WithNoUnits_PreservesEmpty	1
