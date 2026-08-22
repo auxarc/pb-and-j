@@ -475,6 +475,10 @@ than recalled:
    exit condition asks for. ⇒ **Owed: transcribe the nightfall chain into this file**, from
    `SkyPatches.cs` and from `OverworldProbeGlue`'s header, by someone who can vouch for the
    numbers.
+   ✅ **DISCHARGED 2026-08-21** — see "The nightfall chain, transcribed" at the end of this
+   file. The chain is written out with both of its branches, the 2026-08-15 numbers are transcribed
+   and explicitly marked as not re-measured, and the one field nobody ever recorded
+   (`shadows.enabled`, per machine) is named as still open rather than left to look answered.
 2. **This file's own "⏳ Still unrun" section leaves three measurements to the two-instance rig,
    and this probe is their instrument.** Measurement 2 (divergence between two machines, via
    `pbj.ow-probe` / `pbj.ow-sample` on both), measurement 5 (what a loadout *change* writes — the
@@ -493,3 +497,127 @@ as a deletion instruction.**
 
 ⇒ **Verdict: KEEP.** Re-sweep when the nightfall transcription lands *and* the rig has run
 measurements 2, 5 and 6 — not on either alone.
+**Status 2026-08-21: one of the two is done.** The transcription has landed (below); measurements 2,
+5 and 6 have not been taken, and this file is still their instrument. Their commands, expected
+output and zero-meanings are laid out in `docs/notes/rig-run-1-0.md` §4.2–4.3 as readings R1·1,
+R1·2 and R1·3. **The test for the remaining half is whether §9 of that file carries their numbers**
+— not whether any word appears anywhere.
+
+---
+
+## The nightfall chain, transcribed — 2026-08-21
+
+Written to discharge half of the sweep condition above. Everything in §A and §C was read out of the
+code today, file and line quoted; §B was **not re-measured** and says so.
+
+⚠️ **The condition this discharges is stated as a TEST, not as an observation.** The old wording —
+"`grep -i 'nightfall|shadow'` over this file returns nothing" — became false the moment it was
+written down, and now matches only the paragraphs saying it does not match. The question that
+replaces it: **are the chain and its numbers written here?** That has the same answer whatever any
+grep does.
+
+### A. The chain, verified in the decompile
+
+Everything below starts from one field, `overworld.timeOfDay.f`, and **forks into two branches that
+end in two different visual effects.** The fork is the thing the old prose never said out loud.
+
+**The shared root — `OverworldSkySystem`** (`decompiled/PhantomBrigade.Overworld.Systems/OverworldSkySystem.cs`),
+a `ReactiveSystem<OverworldEntity>` collecting on `OverworldMatcher.TimeOfDay` (`:22`), filtered on
+`hasTimeOfDay` (`:27`):
+
+```
+:37   float f = overworld.timeOfDay.f;
+:38   instance.Cycle.Hour = f;                       <- BRANCH 1 starts here
+:39   float sunriseTime = instance.SunriseTime;
+:40   float sunsetTime  = instance.SunsetTime;
+:41   bool flag = f < sunriseTime || f > sunsetTime;
+:42   if (flag != overworld.isTimeOfDayNight)
+:44       overworld.isTimeOfDayNight = flag;         <- BRANCH 2 starts here
+```
+
+It also drives the time-of-day music sync (`:69-73`) and refreshes ambient and reflection, either
+immediately on the first render (`:74-79`) or one frame later past
+`skyRenderTimeThreshold` (`:81-86`). That is why the fix is a postfix and not a prefix: none of that
+deserves to be cancelled to move one field.
+
+**Branch 1 — the sun.** `TOD_Sky.Cycle.Hour` positions the directional light. Combat writes the same
+field from its own clock: `TimeSyncSystem` (`decompiled/PhantomBrigade.Combat.Systems/TimeSyncSystem.cs`)
+collects on `CombatMatcher.TimeOfDay` (`:19`), filters on `hasTimeOfDay` (`:22-25`), and does
+
+```
+:31   TOD_Sky.Instance.Cycle.Hour = combat.timeOfDay.f;
+:32   Co.DelayFrames(2, delegate { TOD_Sky.Instance.UpdateAmbient(); });
+```
+
+**Two systems write one field and the last one wins.** On a host the combat write is last, because a
+host reaches combat from the overworld and nothing touches the overworld clock afterwards. **A client
+reaches combat by loading a save**, and that load writes the overworld clock again — after the combat
+environment is already up — so `OverworldSkySystem` fires last and drags the sun back to the
+campaign's hour.
+
+**Branch 2 — the overworld camera's shadows.** `OverworldViewNightfallSystem`
+(`decompiled/PhantomBrigade.Overworld.Systems/OverworldViewNightfallSystem.cs`) collects on
+`OverworldMatcher.TimeOfDayNight.AddedOrRemoved()` (`:21`) — i.e. it fires on the flag **changing**,
+not on the clock moving — and at `:37` calls `UtilityCameraLinker.OnNightfall(isTimeOfDayNight)`.
+That method (`decompiled/UtilityCameraLinker.cs:40`) logs and returns if the linker instance is
+missing (`:44`) or if `shadows` is missing (`:53`), and otherwise does
+
+```
+:57   ins.shadows.enabled = !nightfall;
+```
+
+where `shadows` is `public NGSS_FrustumShadows shadows;` (`:11`), the same component the linker's own
+setup enables at `:26`.
+
+### B. The two-machine numbers — recorded 2026-08-15, **not re-measured today**
+
+These come from the doc comment on `src/PBAndJ.Mod/Net/SkyPatches.cs`, which records a reading taken
+on two real games on 2026-08-15. **I have verified that the code says them; I have not re-run the
+measurement and cannot vouch for it independently.** Anyone re-taking it should use
+`pbj.ow-probe`'s "nightfall and shadows" section, which prints every one of these fields.
+
+| field | host | client |
+|---|---|---|
+| `overworld.timeOfDay` | 20.906 | 20.906 (agreed) |
+| `combat.timeOfDay` | 18.800 | 18.800 (agreed) |
+| `TOD_Sky.SunsetTime` | 20.386 | 20.386 |
+| **`TOD_Sky.cycleHour`** | **18.800** | **20.906** |
+| `RenderSettings.ambientIntensity` | 1.06 | 1.72 |
+
+Graphics settings, area and biome were identical. The client is past sunset, so it has no directional
+light at all, and its ambient is correspondingly boosted to night levels. The user's description —
+the client "loads with the shadows for a split second before it all gets blown away flat" — matches
+the ordering exactly.
+
+🔴 **The one field this table does not contain is `shadows.enabled`.** `ProbeNightfall` prints it and
+labels it `"<- FALSE here is the whole bug"`, but no recorded run quotes its value on either machine.
+So **branch 2 is not attributed**: the recorded evidence establishes branch 1 (`cycleHour` diverged,
+ambient followed it) and is silent on whether the overworld camera's shadow component was ever
+toggled. Since `isTimeOfDayNight` is computed from a value both machines agreed on (20.906, past a
+sunset of 20.386), the flag should have read the same on both and its `AddedOrRemoved` collector
+should never have fired — which is a reason to think branch 2 was *not* involved, not a measurement
+saying so. **If anyone re-runs this, record `shadows component: … enabled: …` from both machines and
+close it.**
+
+### C. What the shipped fix covers, verified in our own source
+
+`src/PBAndJ.Mod/Net/SkyPatches.cs` is a `[HarmonyPostfix]` on
+`OverworldSkySystem.Execute(List<OverworldEntity>)`. It returns immediately unless
+`IDUtility.IsGameState("combat")`, then sets `sky.Cycle.Hour = combat.timeOfDay.f` and, two frames
+later, calls `UpdateAmbient()` **and** `UpdateReflection()`.
+
+- ✅ It closes **branch 1** — the field it writes is exactly the one the two machines disagreed on.
+- ❌ It does **not** touch `overworld.isTimeOfDayNight`, and it never calls
+  `UtilityCameraLinker.OnNightfall`. **Branch 2 is untouched by the fix.** Given §B that is probably
+  correct and certainly unproven.
+- ⚠️ Its comment says the two-frame defer is "exactly as `TimeSyncSystem` does it". The defer count
+  matches; the payload does not — `TimeSyncSystem:32-35` calls `UpdateAmbient()` only, where this
+  calls `UpdateReflection()` as well. A deliberate superset, not a copy. Noted so that the next
+  reader of that comment does not take it as a specification.
+
+It is not client-specific by design: it reads game state and the combat clock and never the session,
+so it is equally correct on a host whose overworld clock moves mid-fight.
+
+⇒ **Sweep effect: reason 1 of the sweep section above is DISCHARGED.** Reason 2 — measurements 2, 5
+and 6 still owed to the two-instance rig — stands, and `OverworldProbeGlue` is still their
+instrument. The commands and their zero-meanings are in `docs/notes/rig-run-1-0.md`.
