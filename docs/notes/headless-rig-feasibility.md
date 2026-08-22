@@ -21,13 +21,16 @@ colours; a black frame was excluded by measurement, not by the exit code.
 ⭐ **No focus trap.** `splash=True | menu=False` at t+20s became `splash=False | menu=True` at t+40s
 with nothing driving it. CoQ's trap does not reproduce here.
 
-🔴 **THE PAIR IS UNANSWERED, AND EVERY TEST THAT SAID OTHERWISE WAS CONTAMINATED.** The second
-instance failed with `vkCreateDevice failed (VkResult: -3)`. That looked like a two-compositor limit
-and **it was not** — see §14.2. §Verdict's "two headless gamescopes run concurrently" line remains
+🔴 **THE PAIR IS UNANSWERED — the GPU faulted mid-test.** The second instance failed with
+`vkCreateDevice failed (VkResult: -3)` because the GPU took an `Xid 51 BAD_TSG` fault at that exact
+second and entered `Reset required`. ⚠️ **§14.2's orphaned-compositor explanation is REFUTED** — it
+was the fourth wrong diagnosis in a row, and SIGKILL is exonerated by ordering. See §14.2 and
+`gpu-wedge-forensics.md`. §Verdict's "two headless gamescopes run concurrently" line remains
 MEASURED and uncontradicted (it was taken with trivial clients on a clean machine); whether two can
 coexist **with games in them** is now genuinely open.
 
-🔴 **The machine was left with Vulkan device creation broken**, GPU-wide, until reboot. §14.3.
+🔴 **The machine was left with Vulkan device creation broken**, GPU-wide, until a reboot performs the
+PF FLR the driver is asking for. §14.3, and `gpu-wedge-forensics.md`.
 
 ---
 
@@ -325,7 +328,43 @@ If confirmed, the durable form is a ~10-line launch wrapper (env flag or
 | 4. **the render hop** | `gamescopectl screenshot` → 2.0 MB PNG, 1280×720, **194,506 distinct colours**; read by eye: full main menu with `PB and J 0.23.0` in the corner |
 | 5. the pair | ❌ `vkCreateDevice failed (VkResult: -3)`, no second socket |
 
-### 14.2 🔴 Why the pair result is worth nothing, and the shape it belongs to
+### 14.2 🔴🔴 REFUTED 2026-08-22 BY FORENSICS — THE ORPHAN WAS NOT THE CAUSE
+
+**Everything in this section's diagnosis is wrong, and it was the FOURTH consecutive wrong
+diagnosis of this incident.** It is kept in full because the sequence is the lesson.
+
+The GPU took a **driver/GSP scheduler fault**, not a leak. `journalctl -k` at **00:01:44** — the
+second the second compositor called `vkCreateDevice`:
+
+```
+NVRM: Xid (PCI:0000:0d:00): 51, BAD_TSG encountered on runlist: 0 with error code: 4
+NVRM: Xid (PCI:0000:0d:00): 154, GPU recovery action changed from 0x0 (None) to 0x1 (PF FLR)
+NVRM: GPU0 nvAssertOkFailedNoLog: Assertion failed: Reset required [NV_ERR_RESET_REQUIRED]
+```
+
+`nvidia-smi -q` still reports `GPU Recovery Action : Reset`. Since that instant the driver refuses
+**every** new Vulkan device. Nothing leaked; nothing was holding anything.
+
+⭐ **SIGKILL is EXONERATED, by ordering.** The first compositor was alive and logging until
+**00:07:31**; every SIGKILL came **five or more minutes after** the Xid. The teardown could not have
+caused a fault that preceded it.
+
+⭐ **And there was no orphan at wedge time.** The first instance was up *by design* — that is what
+`--pair` means. The orphan was a real teardown bug, worth the fix, and **causally irrelevant to the
+wedge**.
+
+⚠️ `nvidia used_by=783` was read as evidence of a leak. It is **785 right now with only the desktop
+running** — a baseline misread as a symptom.
+
+⭐⭐ **The lesson is not any one of the four wrong causes. It is that four confident diagnoses were
+produced before anyone read the kernel log** — and that the obvious way to read it, `dmesg`, is
+**permission-denied for this user** and returns nothing. A zero there reads exactly like "no
+messages". `journalctl -k` works (98 lines on the control), and the Xid was sitting in it the whole
+time. **The first question about a GPU fault is what the kernel said, and it costs one command.**
+
+Full analysis, prevention design, and the post-reboot test ladder: `docs/notes/gpu-wedge-forensics.md`.
+
+### 14.2.1 🕰️ The refuted diagnosis, kept for its shape
 
 The second-instance failure was investigated for three rounds and blamed, in order, on a
 two-compositor Vulkan limit, then on `setsid` detaching from the logind session, then on the driver.
